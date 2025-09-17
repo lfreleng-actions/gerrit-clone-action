@@ -62,6 +62,13 @@ repos:
     rev: 30f435a17e4833cfc546d0c2bff4ec75d815f739  # frozen: v1.18.1
     hooks:
       - id: mypy
+        additional_dependencies:
+          - types-PyYAML
+          - types-Pygments
+          - types-colorama
+          - types-pexpect
+          - rich>=13.9.4
+          - typer>=0.15.1
 
   - repo: https://github.com/btford/write-good
     rev: ab66ce10136dfad5146e69e70f82a3efac8842c1 # frozen: v1.0.8
