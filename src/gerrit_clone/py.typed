@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2025 The Linux Foundation
+
+# Marker file for PEP 561
+# This file indicates that the gerrit_clone package includes type information

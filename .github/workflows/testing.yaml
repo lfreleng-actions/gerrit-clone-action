@@ -10,60 +10,178 @@ on:
   workflow_dispatch:
   push:
     branches: ["main"]
-  pull_request:
-    branches: ["main"]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: "${{ github.workflow }}-${{ github.ref }}"
   cancel-in-progress: true
 
 permissions: {}
 
 jobs:
-  ### Test the GitHub Action in this Repository ###
+  ### Test the GitHub Action with O-RAN Gerrit ###
   tests:
-    name: "Test local GitHub Action"
-    runs-on: ubuntu-24.04
+    name: "Test Gerrit Clone"
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 10 # Increase this timeout value as needed
+    timeout-minutes: 30 # Increase this timeout value as needed
     steps:
+      - name: "Check for pull request context"
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "Secrets not available on pull request; skipping tests ❌"
+            echo "Secrets not available on pull request; skipping tests ❌" \
+          else
+            echo "Running in trusted context (${{ github.event_name }}) ✅"
+          fi
+
+      # Harden the runner used by this workflow
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+        with:
+          egress-policy: 'audit'
+
       - name: "Checkout repository"
+        # yamllint disable-line rule:line-length
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
-      # Perform setup prior to running test(s)
-      - name: "Testing setup step"
+      - name: "Set up Python"
+        # yamllint disable-line rule:line-length
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.11'
+
+      - name: "Install gerrit-clone CLI"
         shell: bash
         run: |
-          # Testing setup step
-          echo "Testing setup step"
-          echo "Testing setup step/summary output" >> "$GITHUB_STEP_SUMMARY"
+          python -m pip install --upgrade pip
+          python -m pip install -e .
 
-      - name: "Running local action: ${{ github.repository }}"
+      - name: "Test GitHub Action: gerrit.o-ran-sc.org [SSH]"
         uses: ./
         with:
-          input: "test input 💬"
+          host: "gerrit.o-ran-sc.org"
+          ssh-user: "${{ vars.GERRIT_SSH_USER }}"
+          ssh-private-key: "${{ secrets.GERRIT_SSH_PRIVATE_KEY }}"
+          path-prefix: "gerrit.o-ran-sc.org-action"
+          depth: "1"
+          strict-host: "false"
 
-      - name: "Validated local action: ${{ github.repository }}"
+      - name: "Validate GitHub Action Results [SSH]"
         shell: bash
         run: |
-          # Local action validation
-          echo "Validated local action: ${{ github.repository }}"
-          echo "Validation step summary output" >> "$GITHUB_STEP_SUMMARY"
+          # Validate GitHub Action Results
+          if [ -d "gerrit.o-ran-sc.org-action" ]; then
+            SIZE=$(du -sh gerrit.o-ran-sc.org-action | awk '{print $1}')
+            {
+              echo "🧪 **O-RAN-SC GitHub Action Clone Results:**"
+              echo "- Size: $SIZE"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ Test failed: gerrit.o-ran-sc.org-action/ not found"
+            {
+              echo "❌ Test failed: gerrit.o-ran-sc.org-action/ not found"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
-      # yamllint disable-line rule:line-length
-      - name: "Running local action: ${{ github.repository }} [Override Failure]"
+      - name: "Test CLI Tool: gerrit.o-ran-sc.org [SSH]"
+        shell: bash
+        run: |
+          # Set up SSH agent with private key (never touches disk)
+          SSH_AUTH_SOCK="/tmp/ssh_agent_cli_${{ github.run_id }}.sock"
+
+          # Start SSH agent
+          ssh-agent -a "$SSH_AUTH_SOCK" > /dev/null
+
+          # Add private key to SSH agent
+          echo "${{ secrets.GERRIT_SSH_PRIVATE_KEY }}" | \
+            SSH_AUTH_SOCK="$SSH_AUTH_SOCK" ssh-add -
+
+          # Run CLI tool with SSH agent
+          SSH_AUTH_SOCK="$SSH_AUTH_SOCK" gerrit-clone clone \
+            --host "gerrit.o-ran-sc.org" \
+            --ssh-user "${{ vars.GERRIT_SSH_USER }}" \
+            --path-prefix "gerrit.o-ran-sc.org-cli" \
+            --threads "2" \
+            --depth "1" \
+            --ssh \
+            --accept-unknown-host \
+            --skip-archived
+
+          # Clean up SSH agent
+          SSH_AUTH_SOCK="$SSH_AUTH_SOCK" ssh-agent -k > /dev/null 2>&1 || true
+
+      - name: "Validate CLI Tool Results [SSH]"
+        shell: bash
+        run: |
+          # Validate CLI Tool Results
+          if [ -d "gerrit.o-ran-sc.org-cli" ]; then
+            SIZE=$(du -sh gerrit.o-ran-sc.org-action | awk '{print $1}')
+            {
+              echo "🧪 **O-RAN-SC CLI Test Clone Results:**"
+              echo "- Size: $SIZE"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ Test failed: gerrit.o-ran-sc.org-cli/ not found"
+            {
+              echo "❌ Test failed: gerrit.o-ran-sc.org-cli/ not found"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: "Test GitHub Action: gerrit.o-ran-sc.org [HTTPS]"
         uses: ./
-        id: failure
-        continue-on-error: true
         with:
-          invalid_input: "Some garbage"
+          host: "gerrit.o-ran-sc.org"
+          path-prefix: "gerrit.o-ran-sc.org-action-https"
+          depth: "1"
+          use-https: "true"
 
-      # Failure testing is also important
-      - name: "Error if step above did NOT fail"
-        if: steps.failure.outcome == 'success'
+      - name: "Validate GitHub Action Results [HTTPS]"
         shell: bash
         run: |
-          # Error if step above did NOT fail
-          echo "Error: previous test step did NOT fail ❌"
-          exit 1
+          # Validate GitHub Action HTTPS Results
+          if [ -d "gerrit.o-ran-sc.org-action-https" ]; then
+            SIZE=$(du -sh gerrit.o-ran-sc.org-action-https | awk '{print $1}')
+            {
+              echo "🧪 **O-RAN-SC GitHub Action HTTPS Clone Results:**"
+              echo "- Size: $SIZE"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ Test failed: gerrit.o-ran-sc.org-action-https/ not found"
+            {
+              echo "❌ Test failed: gerrit.o-ran-sc.org-action-https/ not found"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: "Test CLI Tool: gerrit.o-ran-sc.org [HTTPS]"
+        shell: bash
+        run: |
+          gerrit-clone clone \
+            --host "gerrit.o-ran-sc.org" \
+            --path-prefix "gerrit.o-ran-sc.org-cli-https" \
+            --threads "2" \
+            --depth "1" \
+            --https \
+            --skip-archived
+
+      - name: "Validate CLI Tool Results [HTTPS]"
+        shell: bash
+        run: |
+          # Validate CLI Tool HTTPS Results
+          if [ -d "gerrit.o-ran-sc.org-cli-https" ]; then
+            SIZE=$(du -sh gerrit.o-ran-sc.org-cli-https | awk '{print $1}')
+            {
+              echo "🧪 **O-RAN-SC CLI HTTPS Test Clone Results:**"
+              echo "- Size: $SIZE"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ Test failed: gerrit.o-ran-sc.org-cli-https/ not found"
+            {
+              echo "❌ Test failed: gerrit.o-ran-sc.org-cli-https/ not found"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
