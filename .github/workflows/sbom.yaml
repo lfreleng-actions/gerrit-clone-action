@@ -1,0 +1,230 @@
+---
+# yamllint disable rule:line-length
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2025 The Linux Foundation
+#
+# Software Bill of Materials (SBOM) generation workflow.
+# Generates CycloneDX (JSON + XML) SBOMs for the resolved (locked) runtime
+# dependency graph. Artifacts are uploaded for every run and, when the
+# workflow is triggered by a tag push, they may also be attached to the
+# corresponding GitHub Release (optional step is provided but disabled
+# by default).
+#
+# Wave 2 Modernization Item:
+#  - Introduce SBOM + audit workflow (now implemented here).
+#
+# Notes:
+#  - Uses the existing uv.lock to ensure SBOM matches the exact, reproducible
+#    dependency set (runtime only; dev/test extras intentionally excluded).
+#  - If uv.lock changes, re-run this workflow (it will on push).
+#  - You can extend this with additional formats (SPDX) or integrate
+#    with external compliance systems later.
+#
+# Future Enhancements (non-blocking):
+#  - Add dependency diff against last successful run.
+#  - Add license policy checks.
+#  - Add vulnerability gating (currently handled in audit workflows).
+#  - Attach artifacts automatically to releases (uncomment final step).
+
+name: "SBOM (CycloneDX)"
+
+"on":
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/sbom.yaml"
+  schedule:
+    # Weekly (Monday 04:15 UTC) – adjust as desired
+    - cron: "15 4 * * 1"
+
+permissions:
+  contents: read
+  actions: read  # For downloading previous SBOM artifacts
+
+jobs:
+  sbom:
+    name: "Generate CycloneDX SBOM"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      UV_NO_SYNC_PROGRESS: "1"
+    steps:
+      - name: "Harden Runner"
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+        with:
+          egress-policy: audit
+
+      - name: "Checkout"
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: "Install uv"
+        shell: bash
+        run: |
+            set -euo pipefail
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+            uv --version
+
+      - name: "Sync (runtime dependencies only)"
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Use the lockfile; exclude dev/test extras for a pure runtime SBOM
+          uv sync --locked --no-dev
+
+      - name: "Install cyclonedx-bom tool"
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Installed into the uv-managed virtual environment
+          uv pip install --no-cache-dir cyclonedx-bom
+
+      - name: "Generate SBOM (CycloneDX JSON)"
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run cyclonedx-py environment \
+            --of JSON \
+            -o sbom-cyclonedx.json \
+            --sv 1.5
+
+      - name: "Generate SBOM (CycloneDX XML)"
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run cyclonedx-py environment \
+            --of XML \
+            -o sbom-cyclonedx.xml \
+            --sv 1.5
+
+      - name: "Summarize"
+        shell: bash
+        run: |
+          {
+            echo "Generated CycloneDX SBOM artifacts:"
+            echo ""
+            echo "* sbom-cyclonedx.json"
+            echo "* sbom-cyclonedx.xml"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Download Previous SBOM (for diff)"
+        if: github.event_name != 'workflow_dispatch'
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: sbom-cyclonedx-previous
+          path: previous-sbom/
+        continue-on-error: true
+
+      - name: "Generate SBOM Diff Report"
+        if: github.event_name != 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -f "previous-sbom/sbom-cyclonedx.json" ]]; then
+            {
+              echo "## SBOM Dependency Changes"
+              echo ""
+            } >> sbom-diff-report.md
+
+            # Simple JSON diff for dependency changes (basic implementation)
+            if command -v jq >/dev/null 2>&1; then
+              # Extract component names and versions from both SBOMs
+              jq -r '.components[]? | "\(.name)@\(.version)"' \
+                sbom-cyclonedx.json | sort > current-deps.txt
+              jq -r '.components[]? | "\(.name)@\(.version)"' \
+                previous-sbom/sbom-cyclonedx.json | sort > previous-deps.txt
+
+              # Find added dependencies
+              if added_deps=$(comm -13 previous-deps.txt current-deps.txt); then
+                if [[ -n "$added_deps" ]]; then
+                  {
+                    echo "### ➕ Added Dependencies"
+                    echo '```'
+                    echo "$added_deps"
+                    echo '```'
+                    echo ""
+                  } >> sbom-diff-report.md
+                fi
+              fi
+
+              # Find removed dependencies
+              if removed_deps=$(comm -23 previous-deps.txt current-deps.txt); then
+                if [[ -n "$removed_deps" ]]; then
+                  {
+                    echo "### ➖ Removed Dependencies"
+                    echo '```'
+                    echo "$removed_deps"
+                    echo '```'
+                    echo ""
+                  } >> sbom-diff-report.md
+                fi
+              fi
+
+              # Count total components
+              current_count=$(jq '.components | length' \
+                sbom-cyclonedx.json 2>/dev/null || echo "0")
+              previous_count=$(jq '.components | length' \
+                previous-sbom/sbom-cyclonedx.json 2>/dev/null || echo "0")
+
+              {
+                echo "### 📊 Summary"
+                echo "- **Previous SBOM**: $previous_count components"
+                echo "- **Current SBOM**: $current_count components"
+                echo "- **Net Change**: $((current_count - previous_count)) components"
+              } >> sbom-diff-report.md
+
+              # Clean up temporary files
+              rm -f current-deps.txt previous-deps.txt
+            else
+              echo "⚠️ jq not available for detailed diff analysis" \
+                >> sbom-diff-report.md
+            fi
+          else
+            {
+              echo "## SBOM Diff Report"
+              echo ""
+              echo "No previous SBOM found for comparison. This may be the first run or artifacts may have expired."
+            } >> sbom-diff-report.md
+          fi
+
+          # Add diff report to step summary
+          if [[ -f sbom-diff-report.md ]]; then
+            cat sbom-diff-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: "Upload SBOM Artifacts"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-cyclonedx
+          path: |
+            sbom-cyclonedx.json
+            sbom-cyclonedx.xml
+            sbom-diff-report.md
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: "Upload Previous SBOM (for next run)"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-cyclonedx-previous
+          path: |
+            sbom-cyclonedx.json
+            sbom-cyclonedx.xml
+          if-no-files-found: error
+          retention-days: 30
+
+        # OPTIONAL: Attach to a release when triggered by a tag.
+        # Uncomment to enable.
+        # - name: "Attach SBOM to Release"
+        #   if: startsWith(github.ref, 'refs/tags/')
+        #   uses: alexellis/upload-assets@13926a61cdb2cb35f5fdef1c06b8b591523236d3 # 0.4.1
+        #   env:
+        #     GITHUB_TOKEN: "${{ github.token }}"
+        #   with:
+        #     asset_paths: '["sbom-cyclonedx.json","sbom-cyclonedx.xml"]'

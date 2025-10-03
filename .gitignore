@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2025 The Linux Foundation
 
 # Temporary and binary files
+gerrit-clone.log
 *~
 *.py[cod]
 *.so

@@ -1,37 +1,473 @@
 ---
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: 2025 The Linux Foundation
+# SPDX-FileCopyrightText: 2025 Matthew Watkins <mwatkins@linuxfoundation.org>
 
-# actions-template
-name: "🛠️ Actions Template"
-description: "Description of action"
-# Any relevant notes/observations can go here
+name: "🔄 Gerrit Clone Action"
+description: >
+  Bulk clone repositories from Gerrit servers with multi-threading and
+  retry logic
+author: "Matthew Watkins <mwatkins@linuxfoundation.org>"
 
 inputs:
-  input:
-    description: "Description of input"
+  host:
+    description: "Gerrit server hostname"
     required: true
+  port:
+    description: "Gerrit SSH port"
+    required: false
+    default: "29418"
+  ssh-user:
+    description: "SSH username for clone operations"
+    required: false
+  ssh-private-key:
+    description: "SSH private key content for authentication"
+    required: false
+  base-url:
+    description: "Base URL for Gerrit API (defaults to https://HOST)"
+    required: false
+  path-prefix:
+    description: "Base directory for clone hierarchy"
+    required: false
+    default: "."
+  skip-archived:
+    description: "Skip archived/read-only repositories"
+    required: false
+    default: "true"
+  include-project:
+    description: >-
+      Restrict cloning to specific project(s). Use comma-separated list for
+      multiple projects.
+    required: false
+  ssh-debug:
+    description: >-
+      Enable verbose SSH (-vvv) for troubleshooting authentication
+    required: false
+    default: "false"
+  allow-nested-git:
+    description: >-
+      Allow nested git working trees when cloning both parent and child
+      repositories
+    required: false
+    default: "true"
+  nested-protection:
+    description: >-
+      Auto-add nested child repo paths to parent .git/info/exclude
+    required: false
+    default: "true"
+  move-conflicting:
+    description: >-
+      Move conflicting files/directories in parent repos to allow nested cloning
+    required: false
+    default: "true"
+  exit-on-error:
+    description: >-
+      Exit cloning immediately when the first error occurs (for debugging)
+    required: false
+    default: "false"
+  stop-on-first-error:
+    description: >-
+      Exit cloning immediately when the first error occurs (for debugging) -
+      DEPRECATED: use exit-on-error
+    required: false
+    default: "false"
+
+  threads:
+    description: "Number of concurrent clone threads"
+    required: false
+  depth:
+    description: "Create shallow clone with given depth"
+    required: false
+  branch:
+    description: "Clone specific branch instead of default"
+    required: false
+  use-https:
+    description: "Use HTTPS for cloning instead of SSH"
+    required: false
+    default: "false"
+  keep-remote-protocol:
+    description: "Preserve original protocol for remote (default: SSH)"
+    required: false
+    default: "false"
+  strict-host:
+    description: "SSH strict host key checking"
+    required: false
+    default: "true"
+  clone-timeout:
+    description: "Timeout per clone operation in seconds"
+    required: false
+    default: "600"
+  retry-attempts:
+    description: "Maximum retry attempts per repository"
+    required: false
+    default: "3"
+  retry-base-delay:
+    description: "Base delay for retry backoff in seconds"
+    required: false
+    default: "2.0"
+  retry-factor:
+    description: "Exponential backoff factor for retries"
+    required: false
+    default: "2.0"
+  retry-max-delay:
+    description: "Maximum retry delay in seconds"
+    required: false
+    default: "30.0"
+  manifest-filename:
+    description: "Output manifest filename"
+    required: false
+    default: "clone-manifest.json"
+  config-file:
+    description: "Configuration file path (YAML or JSON)"
+    required: false
+  verbose:
+    description: "Enable verbose/debug output"
+    required: false
+    default: "false"
+  quiet:
+    description: "Suppress all output except errors"
+    required: false
+    default: "false"
+  log-file:
+    description: >-
+      Custom log file path (default: gerrit-clone.log in current directory)
+    required: false
+  disable-log-file:
+    description: "Disable creation of log file"
+    required: false
+    default: "false"
+  log-level:
+    description: "File logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)"
+    required: false
+    default: "DEBUG"
 
 outputs:
-  output:
-    description: "Description of output"
-    value: ${{ steps.code.outputs.output }}
+  manifest-path:
+    description: "Path to the generated clone manifest file"
+    value: ${{ steps.clone.outputs.manifest-path }}
+  success-count:
+    description: "Number of successfully cloned repositories"
+    value: ${{ steps.clone.outputs.success-count }}
+  failure-count:
+    description: "Number of failed clone attempts"
+    value: ${{ steps.clone.outputs.failure-count }}
+  total-count:
+    description: "Total number of repositories processed"
+    value: ${{ steps.clone.outputs.total-count }}
 
 runs:
   using: "composite"
   steps:
-    - name: "Friendly Name"
-      id: code
+    - name: "Validate inputs"
       shell: bash
       run: |
-        # Friendly Name
-        input="${{ inputs.input }}"
-        if [ -z "$input" ]; then
-          echo "Error: mandatory input was not set/configured ❌"
+        if [ -z "${{ inputs.host }}" ]; then
+          echo "::error::host input is required"
           exit 1
         fi
 
-        echo "output=$input" >> "$GITHUB_ENV"
-        echo "output=$input" >> "$GITHUB_OUTPUT"
-        echo "Action received: $input ✅"
-        echo "Action received: $input ✅" >> "$GITHUB_STEP_SUMMARY"
+        # Validate mutually exclusive options
+        if [ "${{ inputs.verbose }}" = "true" ] && \
+          [ "${{ inputs.quiet }}" = "true" ]; then
+          echo "::error::verbose and quiet options cannot be used together"
+          exit 1
+        fi
+
+        echo "Gerrit host: ${{ inputs.host }}"
+        echo "DEBUG: use-https input value: '${{ inputs.use-https }}'"
+
+    - name: "Setup SSH authentication"
+      if: ${{ inputs.use-https != 'true' }}
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.ssh-private-key }}" ]; then
+          echo "Setting up SSH agent with private key"
+
+          # Start SSH agent and add key (never touches disk)
+          echo "Starting SSH agent..."
+
+          # Clean up any existing socket first
+          if [ -S "$SSH_AUTH_SOCK" ]; then
+            echo "Cleaning up existing SSH agent socket..."
+            rm -f "$SSH_AUTH_SOCK"
+          fi
+
+          ssh-agent -a "$SSH_AUTH_SOCK" > /dev/null || {
+            echo "Failed to start SSH agent"
+            exit 1
+          }
+
+          echo "Adding private key to SSH agent..."
+          echo "${{ inputs.ssh-private-key }}" | ssh-add - || {
+            echo "Failed to add private key to SSH agent"
+            exit 1
+          }
+
+          echo "SSH agent setup complete, keys loaded:"
+          ssh-add -l
+
+          # Setup known_hosts to avoid prompts
+          echo "Setting up known_hosts for ${{ inputs.host }}..."
+          mkdir -p ~/.ssh
+
+          # Try to scan SSH host keys with proper port and timeout
+          PORT="${{ inputs.port }}"
+          if [ -z "$PORT" ]; then
+            PORT="29418"
+          fi
+
+          echo "Scanning SSH keys for ${{ inputs.host }}:$PORT..."
+          if timeout 30 ssh-keyscan -H -p "$PORT" \
+            "${{ inputs.host }}" >> ~/.ssh/known_hosts 2>&1; then
+            echo "Successfully added ${{ inputs.host }} to known_hosts"
+          else
+            echo "Warning: Could not scan SSH keys for ${{ inputs.host }}:$PORT"
+            echo "Continuing with strict host checking disabled"
+          fi
+        else
+          echo "No SSH private key provided, using default SSH setup"
+        fi
+      env:
+        SSH_AUTH_SOCK: /tmp/ssh_agent_${{ github.run_id }}.sock
+
+    - name: "Install and setup gerrit-clone CLI"
+      shell: bash
+      run: |
+        # Check if gerrit-clone is already installed (from workflow setup)
+        if command -v gerrit-clone &> /dev/null; then
+          echo "gerrit-clone CLI is already available"
+          gerrit-clone --version
+        else
+          echo "Installing gerrit-clone CLI from PyPI using uvx..."
+          # Install uv if not available
+          if ! command -v uv &> /dev/null; then
+            echo "Installing uv..."
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+
+          # Install from PyPI using uvx (runs in isolated environment)
+          echo "Installing latest gerrit-clone from PyPI..."
+          uvx gerrit-clone --help > /dev/null || {
+            echo "Failed to install gerrit-clone via uvx"
+            exit 1
+          }
+
+          # Create a wrapper script so gerrit-clone is available in PATH
+          mkdir -p "$HOME/.local/bin"
+          echo '#!/bin/bash' > "$HOME/.local/bin/gerrit-clone"
+          echo 'exec uvx gerrit-clone "$@"' >> "$HOME/.local/bin/gerrit-clone"
+          chmod +x "$HOME/.local/bin/gerrit-clone"
+          export PATH="$HOME/.local/bin:$PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+          # Verify installation
+          gerrit-clone --version
+        fi
+
+    - name: "Clone repositories"
+      id: clone
+      shell: bash
+      env:
+        SSH_AUTH_SOCK: /tmp/ssh_agent_${{ github.run_id }}.sock
+      run: |
+
+        # Debug protocol selection
+        echo "DEBUG: Protocol selection - use-https: '${{ inputs.use-https }}'"
+        if [ "${{ inputs.use-https }}" = "true" ]; then
+          echo "Using HTTPS for cloning"
+        else
+          echo "Using SSH for cloning"
+          # Debug SSH agent status
+          echo "Checking SSH agent status..."
+          if [ -n "$SSH_AUTH_SOCK" ]; then
+            echo "SSH_AUTH_SOCK is set to: $SSH_AUTH_SOCK"
+            if ssh-add -l >/dev/null 2>&1; then
+              echo "SSH keys are available:"
+              ssh-add -l
+            else
+              echo "Warning: SSH agent running but no keys loaded"
+            fi
+          else
+            echo "SSH_AUTH_SOCK not set - using default SSH behavior"
+          fi
+
+          # Test SSH connection if using SSH authentication
+          if [ -n "${{ inputs.ssh-user }}" ] && \
+            [ -n "${{ inputs.ssh-private-key }}" ]; then
+            echo "Testing SSH connection to ${{ inputs.host }}..."
+            PORT="${{ inputs.port }}"
+            if [ -z "$PORT" ]; then
+              PORT="29418"
+            fi
+
+            if timeout 10 ssh -o BatchMode=yes -o ConnectTimeout=5 \
+                -p "$PORT" "${{ inputs.ssh-user }}@${{ inputs.host }}" \
+                gerrit version >/dev/null 2>&1; then
+              echo "SSH connection test successful"
+            else
+              echo "Warning: SSH connection test failed, but continuing..."
+            fi
+          fi
+        fi
+
+        # Build gerrit-clone command (use pre-installed CLI)
+        cmd="gerrit-clone clone"
+        cmd="$cmd --host '${{ inputs.host }}'"
+
+        # Only add SSH-specific parameters when not using HTTPS
+        if [ "${{ inputs.use-https }}" != "true" ]; then
+          cmd="$cmd --port '${{ inputs.port }}'"
+          if [ -n "${{ inputs.ssh-user }}" ]; then
+            cmd="$cmd --ssh-user '${{ inputs.ssh-user }}'"
+          fi
+        fi
+
+        if [ -n "${{ inputs.base-url }}" ]; then
+          cmd="$cmd --base-url '${{ inputs.base-url }}'"
+        fi
+
+        # SSH private key is handled by SSH agent setup step above
+
+        cmd="$cmd --path-prefix '${{ inputs.path-prefix }}'"
+
+        if [ "${{ inputs.skip-archived }}" = "true" ]; then
+          cmd="$cmd --skip-archived"
+        else
+          cmd="$cmd --include-archived"
+        fi
+
+        if [ -n "${{ inputs.threads }}" ]; then
+          cmd="$cmd --threads '${{ inputs.threads }}'"
+        fi
+
+        if [ -n "${{ inputs.depth }}" ]; then
+          cmd="$cmd --depth '${{ inputs.depth }}'"
+        fi
+
+        if [ -n "${{ inputs.branch }}" ]; then
+          cmd="$cmd --branch '${{ inputs.branch }}'"
+        fi
+
+        if [ "${{ inputs.use-https }}" = "true" ]; then
+          cmd="$cmd --https"
+        else
+          cmd="$cmd --ssh"
+        fi
+
+        if [ "${{ inputs.keep-remote-protocol }}" = "true" ]; then
+          cmd="$cmd --keep-remote-protocol"
+        fi
+
+        # SSH host checking only applies when using SSH
+        if [ "${{ inputs.use-https }}" != "true" ]; then
+          if [ "${{ inputs.strict-host }}" = "true" ]; then
+            cmd="$cmd --strict-host"
+          else
+            cmd="$cmd --accept-unknown-host"
+          fi
+        fi
+
+        cmd="$cmd --clone-timeout '${{ inputs.clone-timeout }}'"
+        cmd="$cmd --retry-attempts '${{ inputs.retry-attempts }}'"
+        cmd="$cmd --retry-base-delay '${{ inputs.retry-base-delay }}'"
+
+        if [ -n "${{ inputs.config-file }}" ]; then
+          cmd="$cmd --config-file '${{ inputs.config-file }}'"
+        fi
+
+        # Add include-project options (supports multiple)
+        if [ -n "${{ inputs.include-project }}" ]; then
+          # Split comma-separated list and add each project
+          IFS=',' read -ra PROJECTS <<< "${{ inputs.include-project }}"
+          for project in "${PROJECTS[@]}"; do
+            project=$(echo "$project" | xargs)  # trim whitespace
+            if [ -n "$project" ]; then
+              cmd="$cmd --include-project '$project'"
+            fi
+          done
+        fi
+
+        if [ "${{ inputs.ssh-debug }}" = "true" ]; then
+          cmd="$cmd --ssh-debug"
+        fi
+
+        if [ "${{ inputs.allow-nested-git }}" = "true" ]; then
+          cmd="$cmd --allow-nested-git"
+        else
+          cmd="$cmd --no-allow-nested-git"
+        fi
+
+        if [ "${{ inputs.nested-protection }}" = "true" ]; then
+          cmd="$cmd --nested-protection"
+        else
+          cmd="$cmd --no-nested-protection"
+        fi
+
+        if [ "${{ inputs.move-conflicting }}" = "true" ]; then
+          cmd="$cmd --move-conflicting"
+        fi
+
+        if [ "${{ inputs.exit-on-error }}" = "true" ] || \
+           [ "${{ inputs.stop-on-first-error }}" = "true" ]; then
+          cmd="$cmd --exit-on-error"
+        fi
+
+        cmd="$cmd --retry-factor '${{ inputs.retry-factor }}'"
+        cmd="$cmd --retry-max-delay '${{ inputs.retry-max-delay }}'"
+        cmd="$cmd --manifest-filename '${{ inputs.manifest-filename }}'"
+
+        if [ "${{ inputs.verbose }}" = "true" ]; then
+          cmd="$cmd --verbose"
+        fi
+
+        if [ "${{ inputs.quiet }}" = "true" ]; then
+          cmd="$cmd --quiet"
+        fi
+
+        # Log file options
+        if [ -n "${{ inputs.log-file }}" ]; then
+          cmd="$cmd --log-file '${{ inputs.log-file }}'"
+        fi
+
+        if [ "${{ inputs.disable-log-file }}" = "true" ]; then
+          cmd="$cmd --disable-log-file"
+        fi
+
+        cmd="$cmd --log-level '${{ inputs.log-level }}'"
+
+        echo "Executing: $cmd"
+
+        # Execute the command
+        eval "$cmd"
+        exit_code=$?
+
+        # Set outputs from manifest file
+        manifest_path="${{ inputs.path-prefix }}/clone-manifest.json"
+        if [ -f "$manifest_path" ]; then
+          echo "manifest-path=$manifest_path" >> "$GITHUB_OUTPUT"
+
+          # Extract counts from manifest JSON
+          success_count=$(jq -r '.succeeded // 0' "$manifest_path")
+          failure_count=$(jq -r '.failed // 0' "$manifest_path")
+          total_count=$(jq -r '.total // 0' "$manifest_path")
+
+          echo "success-count=$success_count" >> "$GITHUB_OUTPUT"
+          echo "failure-count=$failure_count" >> "$GITHUB_OUTPUT"
+          echo "total-count=$total_count" >> "$GITHUB_OUTPUT"
+
+          # Add to job summary
+          echo "## Gerrit Clone Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Total repositories:** $total_count" >> \
+            "$GITHUB_STEP_SUMMARY"
+          echo "- **Successfully cloned:** $success_count" >> \
+            "$GITHUB_STEP_SUMMARY"
+          echo "- **Failed:** $failure_count" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Manifest:** \`$manifest_path\`" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "manifest-path=" >> "$GITHUB_OUTPUT"
+          echo "success-count=0" >> "$GITHUB_OUTPUT"
+          echo "failure-count=0" >> "$GITHUB_OUTPUT"
+          echo "total-count=0" >> "$GITHUB_OUTPUT"
+        fi
+
+        exit $exit_code
