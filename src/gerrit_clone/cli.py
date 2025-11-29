@@ -21,11 +21,10 @@ from gerrit_clone import __version__
 from gerrit_clone.clone_manager import clone_repositories
 from gerrit_clone.config import ConfigurationError, load_config
 from gerrit_clone.error_codes import (
-    ExitCode,
-    exit_for_configuration_error,
     DiscoveryError,
+    ExitCode,
 )
-from gerrit_clone.file_logging import init_logging, cli_args_to_dict
+from gerrit_clone.file_logging import cli_args_to_dict, init_logging
 from gerrit_clone.github_api import (
     GitHubAPI,
     GitHubAPIError,
@@ -33,16 +32,15 @@ from gerrit_clone.github_api import (
     get_default_org_or_user,
 )
 from gerrit_clone.mirror_manager import (
-    MirrorManager,
     MirrorBatchResult,
+    MirrorManager,
     filter_projects_by_hierarchy,
 )
 from gerrit_clone.models import DiscoveryMethod, RetryPolicy
 from gerrit_clone.rich_status import (
-    create_status_manager,
+    handle_crash_display,
     show_error_summary,
     show_final_results,
-    handle_crash_display,
 )
 from gerrit_clone.unified_discovery import discover_projects
 
@@ -575,7 +573,7 @@ def clone(
                 rmtree(config.path_prefix, ignore_errors=True)
                 if file_logger:
                     file_logger.debug("Cleanup completed successfully")
-                console.print(f"[green]Cleanup complete.[/green]")
+                console.print("[green]Cleanup complete.[/green]")
             except Exception as e:
                 if file_logger:
                     file_logger.debug("Cleanup failed: %s", str(e))
@@ -625,7 +623,7 @@ def clone(
             )
         if error_collector:
             error_collector.add_critical_error(
-                f"Tool crashed: {type(e).__name__}: {str(e)}",
+                f"Tool crashed: {type(e).__name__}: {e!s}",
                 context=f"function: {crash_context}",
                 exception=e,
             )
@@ -783,6 +781,30 @@ def mirror(
         ),
         envvar="GITHUB_TOKEN",
     ),
+    skip_archived: bool = typer.Option(
+        True,
+        "--skip-archived/--include-archived",
+        help="Skip archived/read-only repositories",
+        envvar="GERRIT_SKIP_ARCHIVED",
+    ),
+    discovery_method: str = typer.Option(
+        "ssh",
+        "--discovery-method",
+        help="Method for discovering projects: ssh (default), http (REST API only), or both (union of both methods with SSH metadata preferred)",
+        envvar="GERRIT_DISCOVERY_METHOD",
+    ),
+    use_https: bool = typer.Option(
+        False,
+        "--https/--ssh",
+        help="Use HTTPS for cloning instead of SSH",
+        envvar="GERRIT_USE_HTTPS",
+    ),
+    strict_host_checking: bool = typer.Option(
+        True,
+        "--strict-host/--accept-unknown-host",
+        help="SSH strict host key checking",
+        envvar="GERRIT_STRICT_HOST",
+    ),
     manifest_filename: str = typer.Option(
         "mirror-manifest.json",
         "--manifest-filename",
@@ -823,6 +845,14 @@ def mirror(
         # Recreate existing GitHub repos
         gerrit-clone mirror --server gerrit.onap.org --org myorg \\
           --recreate --overwrite
+
+        # Use HTTPS for cloning and include archived projects
+        gerrit-clone mirror --server gerrit.onap.org --org myorg \\
+          --https --include-archived
+
+        # Use HTTP API for discovery (no SSH required)
+        gerrit-clone mirror --server gerrit.onap.org --org myorg \\
+          --discovery-method http --https
     """
     console = Console(stderr=True)
 
@@ -860,11 +890,10 @@ def mirror(
             if not quiet:
                 org_type = "organization" if is_org else "user account"
                 console.print(f"✓ Using {org_type}: [cyan]{org}[/cyan]")
-        else:
-            if not quiet:
-                console.print(
-                    f"✓ Using specified organization: [cyan]{org}[/cyan]"
-                )
+        elif not quiet:
+            console.print(
+                f"✓ Using specified organization: [cyan]{org}[/cyan]"
+            )
 
         # Parse project filters
         project_filters: list[str] = []
@@ -881,6 +910,22 @@ def mirror(
         # Build Gerrit configuration
         from gerrit_clone.models import Config
 
+        # Validate discovery method
+        try:
+            discovery_enum = DiscoveryMethod(discovery_method.lower())
+        except ValueError:
+            console.print(
+                Panel(
+                    Text(
+                        f"Invalid discovery method '{discovery_method}'\nMust be one of: ssh, http, both",
+                        style="bold red",
+                    ),
+                    title="Configuration Error",
+                    border_style="red",
+                )
+            )
+            raise typer.Exit(ExitCode.CONFIGURATION_ERROR)
+
         config = Config(
             host=server,
             port=port or 29418,
@@ -888,9 +933,10 @@ def mirror(
             ssh_identity_file=ssh_identity_file,
             path_prefix=path,
             threads=threads,
-            skip_archived=True,
-            strict_host_checking=True,
-            use_https=False,
+            skip_archived=skip_archived,
+            discovery_method=discovery_enum,
+            strict_host_checking=strict_host_checking,
+            use_https=use_https,
             retry_policy=RetryPolicy(),
         )
 
@@ -970,6 +1016,9 @@ def mirror(
         if not quiet:
             console.print()
             console.print("[bold]Mirror Summary[/bold]")
+            console.print(f"  Discovery Method: [cyan]{discovery_enum.value.upper()}[/cyan]")
+            console.print(f"  Clone Protocol: [cyan]{'HTTPS' if use_https else 'SSH'}[/cyan]")
+            console.print(f"  Skip Archived: [cyan]{skip_archived}[/cyan]")
             console.print(f"  Total: {batch_result.total_count}")
             console.print(
                 f"  [green]Succeeded: {batch_result.success_count}[/green]"

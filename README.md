@@ -120,6 +120,25 @@ gerrit-clone mirror \
   --projects "ccsdk, oom, cps"
 ```
 
+Use HTTP API for discovery and HTTPS for cloning (no SSH required):
+
+```bash
+gerrit-clone mirror \
+  --server gerrit.onap.org \
+  --org modeseven-onap \
+  --discovery-method http \
+  --https
+```
+
+Include archived/read-only repositories:
+
+```bash
+gerrit-clone mirror \
+  --server gerrit.onap.org \
+  --org modeseven-onap \
+  --include-archived
+```
+
 Delete and recreate existing GitHub repositories and overwrite local clones:
 
 ```bash
@@ -261,35 +280,45 @@ Options:
 
 ### Mirror Command Options
 
-```text
-Usage: gerrit-clone mirror [OPTIONS]
+**Discovery and Connection:**
 
-Options:
-  --server TEXT                   Gerrit server hostname [required]
-  --org TEXT                      Target GitHub organization for mirrored
-                                  content (if not specified, defaults to
-                                  user's primary org/account)
-  --projects TEXT                 Filter operations to a subset of the Gerrit
-                                  project hierarchy (comma-separated, e.g.,
-                                  'ccsdk, oom')
-  --path PATH                     Local filesystem folder/path for cloned
-                                  Gerrit projects [default: /tmp/gerrit-mirror]
-  --recreate                      Delete and recreate any pre-existing remote
-                                  GitHub repositories
-  --overwrite                     Overwrite local Git repositories at the
-                                  target filesystem path
-  -p, --port INTEGER              Gerrit port [default: 29418 for SSH]
-  -u, --ssh-user TEXT             SSH username for Gerrit clone operations
-  -i, --ssh-private-key PATH      SSH private key file for authentication
-  -t, --threads INTEGER           Number of concurrent operations (default: auto)
-  --github-token TEXT             GitHub personal access token (default:
-                                  GITHUB_TOKEN environment variable)
-  --manifest-filename TEXT        Output manifest filename
-                                  [default: mirror-manifest.json]
-  -v, --verbose                   Enable verbose/debug output
-  -q, --quiet                     Suppress all output except errors
-  --help                          Show this message and exit
-```
+- `--server TEXT`: Gerrit server hostname (required)
+- `--port INTEGER`: Gerrit SSH port (default: 29418)
+- `--ssh-user TEXT` / `-u`: SSH username for Gerrit clone operations (env: `GERRIT_SSH_USER`)
+- `--ssh-private-key PATH` / `-i`: SSH private key file for authentication
+  (env: `GERRIT_SSH_PRIVATE_KEY`)
+- `--discovery-method [ssh|http|both]`: Method for discovering projects
+  - `ssh` (default): Use SSH to query projects (requires SSH access)
+  - `http`: Use REST API (no SSH required; recommended for CI/CD)
+  - `both`: Union of both methods with SSH metadata preferred
+- `--https` / `--ssh`: Use HTTPS for cloning instead of SSH
+  (default: SSH)
+- `--strict-host` / `--accept-unknown-host`: SSH strict host key checking
+  (default: strict)
+- `--skip-archived` / `--include-archived`: Skip archived/read-only
+  repositories (default: skip)
+
+**GitHub Configuration:**
+
+- `--org TEXT`: Target GitHub organization (required or uses default from token)
+- `--github-token TEXT`: GitHub PAT (or use `GITHUB_TOKEN` env var)
+- `--recreate`: Delete and recreate existing GitHub repositories
+- `--overwrite`: Overwrite local Git repositories at target path
+
+**Project Filtering:**
+
+- `--projects TEXT`: Comma-separated list of project hierarchies to mirror
+
+**Performance:**
+
+- `--threads INTEGER`: Number of concurrent operations (default: auto)
+- `--path PATH`: Local filesystem path for cloned projects (default: `/tmp/gerrit-mirror`)
+
+**Output:**
+
+- `--manifest-filename TEXT`: Output manifest filename (default: `mirror-manifest.json`)
+- `--verbose` / `-v`: Enable verbose/debug output
+- `--quiet` / `-q`: Suppress all output except errors
 
 ### Environment Variables
 
