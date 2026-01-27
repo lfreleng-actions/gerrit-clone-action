@@ -25,8 +25,10 @@ inputs:
   base-url:
     description: "Base URL for Gerrit API (defaults to https://HOST)"
     required: false
-  path-prefix:
-    description: "Base directory for clone hierarchy"
+  output-path:
+    description: >-
+      Clone destination (default: auto-creates ./{SERVER}/ or
+      ./github.com/{ORG}/ structure)
     required: false
     default: "."
   skip-archived:
@@ -80,6 +82,13 @@ inputs:
   branch:
     description: "Clone specific branch instead of default"
     required: false
+  mirror:
+    description: >-
+      Use git clone --mirror for complete repository metadata (all refs,
+      tags, branches). Creates bare repository. Incompatible with depth
+      and branch options.
+    required: false
+    default: "true"
   use-https:
     description: "Use HTTPS for cloning instead of SSH"
     required: false
@@ -145,7 +154,7 @@ inputs:
     default: "DEBUG"
 
 outputs:
-  manifest-path:
+  manifest-output-path:
     description: "Path to the generated clone manifest file"
     value: ${{ steps.clone.outputs.manifest-path }}
   success-count:
@@ -332,7 +341,7 @@ runs:
 
         # SSH private key is handled by SSH agent setup step above
 
-        cmd="$cmd --path-prefix '${{ inputs.path-prefix }}'"
+        cmd="$cmd --path '${{ inputs.output-path }}'"
 
         if [ "${{ inputs.skip-archived }}" = "true" ]; then
           cmd="$cmd --skip-archived"
@@ -350,6 +359,12 @@ runs:
 
         if [ -n "${{ inputs.branch }}" ]; then
           cmd="$cmd --branch '${{ inputs.branch }}'"
+        fi
+
+        if [ "${{ inputs.mirror }}" = "false" ]; then
+          cmd="$cmd --no-mirror"
+        else
+          cmd="$cmd --mirror"
         fi
 
         if [ "${{ inputs.use-https }}" = "true" ]; then
@@ -455,7 +470,7 @@ runs:
         exit_code=$?
 
         # Set outputs from manifest file
-        manifest_path="${{ inputs.path-prefix }}/clone-manifest.json"
+        manifest_path="${{ inputs.output-path }}/clone-manifest.json"
         if [ -f "$manifest_path" ]; then
           echo "manifest-path=$manifest_path" >> "$GITHUB_OUTPUT"
 

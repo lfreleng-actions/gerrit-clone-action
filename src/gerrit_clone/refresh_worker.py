@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from gerrit_clone.git_utils import is_git_repository
 from gerrit_clone.logging import get_logger
 from gerrit_clone.models import Config, RefreshResult, RefreshStatus, RetryPolicy
 
@@ -516,16 +517,16 @@ class RefreshWorker:
             raise RefreshTimeoutError(f"Pull timeout after {self.timeout}s")
 
     def _is_git_repository(self, path: Path) -> bool:
-        """Check if path is a valid Git repository.
+        """Check if path is a valid Git repository (regular or bare).
 
         Args:
             path: Path to check
 
         Returns:
-            True if path is a Git repository
+            True if path is a Git repository (regular or bare)
         """
-        git_dir = path / ".git"
-        return git_dir.exists() and git_dir.is_dir()
+        # Use shared utility that detects both regular and bare repositories
+        return is_git_repository(path)
 
     def _get_remote_url(self, repo_path: Path) -> str | None:
         """Get the remote URL for the repository.

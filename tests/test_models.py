@@ -124,7 +124,7 @@ class TestConfig:
         assert config.port == 29418  # Defaults for Gerrit
         assert config.base_url == "https://gerrit.example.org"
         assert config.ssh_user is None
-        assert config.path_prefix == Path().resolve()
+        assert config.path == Path().resolve()
         assert config.skip_archived is True
         assert config.threads is None
         assert config.depth is None
@@ -144,11 +144,12 @@ class TestConfig:
             port=22,
             base_url="https://custom.example.org",
             ssh_user="testuser",
-            path_prefix=Path("/tmp/repos"),
+            path=Path("/tmp/repos"),
             skip_archived=False,
             threads=8,
             depth=10,
             branch="main",
+            mirror=False,
             strict_host_checking=False,
             clone_timeout=300,
             retry_policy=retry_policy,
@@ -161,11 +162,12 @@ class TestConfig:
         assert config.port == 22
         assert config.base_url == "https://custom.example.org"
         assert config.ssh_user == "testuser"
-        assert config.path_prefix == Path("/tmp/repos").resolve()
+        assert config.path == Path("/tmp/repos").resolve()
         assert config.skip_archived is False
         assert config.threads == 8
         assert config.depth == 10
         assert config.branch == "main"
+        assert config.mirror is False
         assert config.strict_host_checking is False
         assert config.clone_timeout == 300
         assert config.retry_policy is retry_policy
@@ -511,4 +513,4 @@ class TestBatchResult:
         config_subset = batch_dict["config"]
         assert config_subset["skip_archived"] is True
         assert config_subset["strict_host_checking"] is True
-        assert config_subset["path_prefix"] == str(config.path_prefix)
+        assert config_subset["path"] == str(config.path)

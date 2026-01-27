@@ -6,13 +6,16 @@
 from __future__ import annotations
 
 import json
+import os
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
 
 from gerrit_clone.logging import get_logger
 from gerrit_clone.models import Config, Project, ProjectState
+from gerrit_clone.netrc import GerritCredentials, resolve_gerrit_credentials
 from gerrit_clone.retry import RetryableError, execute_with_retry
 from gerrit_clone.rich_status import discovering_projects, projects_found
 
@@ -38,11 +41,30 @@ class GerritParseError(GerritAPIError):
 class GerritAPIClient:
     """Client for interacting with Gerrit REST API."""
 
-    def __init__(self, config: Config) -> None:
+    def __init__(
+        self,
+        config: Config,
+        http_user: str | None = None,
+        http_password: str | None = None,
+        use_netrc: bool = True,
+        netrc_file: Path | None = None,
+        credentials: GerritCredentials | None = None,
+    ) -> None:
         """Initialize Gerrit API client.
 
         Args:
             config: Configuration containing connection details
+            http_user: HTTP username for Basic Auth (optional, deprecated).
+            http_password: HTTP password for Basic Auth (optional, deprecated).
+            use_netrc: Whether to try .netrc for credentials (default: True).
+            netrc_file: Explicit path to a .netrc file (optional).
+            credentials: Pre-resolved GerritCredentials object (preferred).
+
+        Credential Resolution Order:
+            1. Pre-resolved GerritCredentials object (if provided)
+            2. Explicit http_user/http_password arguments
+            3. .netrc file (if use_netrc=True)
+            4. Environment variables: GERRIT_HTTP_USER/GERRIT_HTTP_PASSWORD
         """
         self.config = config
         self.base_url = config.base_url
@@ -53,6 +75,11 @@ class GerritAPIClient:
             pool=10.0,  # Pool timeout for connection reuse
         )
 
+        # Resolve HTTP authentication credentials
+        auth = self._resolve_auth(
+            config.host, http_user, http_password, use_netrc, netrc_file, credentials
+        )
+
         # Create HTTP client with reasonable defaults
         # base_url is guaranteed to be set by Config.__post_init__
         assert self.base_url is not None
@@ -60,6 +87,7 @@ class GerritAPIClient:
             base_url=self.base_url,
             timeout=self.timeout,
             follow_redirects=True,
+            auth=auth,
             limits=httpx.Limits(
                 max_keepalive_connections=5, max_connections=10, keepalive_expiry=30.0
             ),
@@ -68,6 +96,60 @@ class GerritAPIClient:
                 "Accept": "application/json",
             },
         )
+
+    def _resolve_auth(
+        self,
+        host: str,
+        http_user: str | None,
+        http_password: str | None,
+        use_netrc: bool,
+        netrc_file: Path | None,
+        credentials: GerritCredentials | None = None,
+    ) -> httpx.BasicAuth | None:
+        """Resolve HTTP Basic Auth credentials from multiple sources.
+
+        Uses the centralized resolve_gerrit_credentials function for
+        consistent credential resolution across the application.
+
+        Args:
+            host: Gerrit hostname for netrc lookup.
+            http_user: Explicit username (highest priority).
+            http_password: Explicit password (highest priority).
+            use_netrc: Whether to try .netrc file.
+            netrc_file: Explicit path to netrc file.
+            credentials: Pre-resolved GerritCredentials object (preferred).
+
+        Returns:
+            httpx.BasicAuth if credentials found, None otherwise.
+        """
+        # Use pre-resolved credentials if provided
+        if credentials is not None and credentials.is_valid:
+            logger.debug(
+                "Using pre-resolved credentials from %s",
+                credentials.auth_method_display(),
+            )
+            return httpx.BasicAuth(credentials.username, credentials.password)
+
+        # Otherwise, resolve credentials using centralized function
+        resolved = resolve_gerrit_credentials(
+            host=host,
+            explicit_username=http_user,
+            explicit_password=http_password,
+            use_netrc=use_netrc,
+            netrc_file=netrc_file,
+            env_username_var="GERRIT_HTTP_USER",
+            env_password_var="GERRIT_HTTP_PASSWORD",
+        )
+
+        if resolved is not None and resolved.is_valid:
+            logger.debug(
+                "Using credentials from %s for user: %s",
+                resolved.auth_method_display(),
+                resolved.username,
+            )
+            return httpx.BasicAuth(resolved.username, resolved.password)
+
+        return None
 
     def __enter__(self) -> GerritAPIClient:
         """Enter context manager."""

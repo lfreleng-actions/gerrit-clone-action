@@ -244,7 +244,7 @@ class MirrorManager:
         logger.info(f"Starting mirror of {len(projects)} projects")
 
         # Step 0: Clean up existing directories if overwrite is enabled
-        if self.overwrite and self.config.path_prefix.exists():
+        if self.overwrite and self.config.path.exists():
             logger.info("🧹 Overwrite enabled - cleaning existing directories...")
             self._cleanup_existing_repos(projects)
 
@@ -544,7 +544,7 @@ class MirrorManager:
         # Collect all paths that need to be removed
         paths_to_remove = []
         for project in projects:
-            project_path = self.config.path_prefix / project.name
+            project_path = self.config.path / project.name
             if project_path.exists():
                 paths_to_remove.append((project.name, project_path))
 

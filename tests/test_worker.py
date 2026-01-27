@@ -88,6 +88,60 @@ class TestCloneWorker:
         assert "1m" in worker._format_duration(65.0)
         assert "1h" in worker._format_duration(3665.0)
 
+    def test_build_clone_command_with_mirror(self) -> None:
+        """Test that clone command includes --mirror flag by default."""
+        config = Config(host="gerrit.example.org")
+        worker = CloneWorker(config)
+        project = Project("test-project", ProjectState.ACTIVE)
+        target_path = Path("/tmp/test-project")
+
+        cmd = worker._build_clone_command(project, target_path)
+
+        assert "--mirror" in cmd
+        assert "--no-hardlinks" in cmd
+        assert "--quiet" in cmd
+        assert "--depth" not in cmd
+        assert "--branch" not in cmd
+
+    def test_build_clone_command_without_mirror(self) -> None:
+        """Test that clone command excludes --mirror when disabled."""
+        config = Config(host="gerrit.example.org", mirror=False)
+        worker = CloneWorker(config)
+        project = Project("test-project", ProjectState.ACTIVE)
+        target_path = Path("/tmp/test-project")
+
+        cmd = worker._build_clone_command(project, target_path)
+
+        assert "--mirror" not in cmd
+        assert "--no-hardlinks" in cmd
+        assert "--quiet" in cmd
+
+    def test_build_clone_command_with_depth_no_mirror(self) -> None:
+        """Test that depth is included when mirror is disabled."""
+        config = Config(host="gerrit.example.org", mirror=False, depth=10)
+        worker = CloneWorker(config)
+        project = Project("test-project", ProjectState.ACTIVE)
+        target_path = Path("/tmp/test-project")
+
+        cmd = worker._build_clone_command(project, target_path)
+
+        assert "--mirror" not in cmd
+        assert "--depth" in cmd
+        assert "10" in cmd
+
+    def test_build_clone_command_with_branch_no_mirror(self) -> None:
+        """Test that branch is included when mirror is disabled."""
+        config = Config(host="gerrit.example.org", mirror=False, branch="main")
+        worker = CloneWorker(config)
+        project = Project("test-project", ProjectState.ACTIVE)
+        target_path = Path("/tmp/test-project")
+
+        cmd = worker._build_clone_command(project, target_path)
+
+        assert "--mirror" not in cmd
+        assert "--branch" in cmd
+        assert "main" in cmd
+
     def test_analyze_clone_error_permission_denied(self) -> None:
         """Test error analysis for permission denied."""
         config = Config(host="gerrit.example.org")

@@ -157,11 +157,12 @@ class Config:
     use_gh_cli: bool = False
 
     # Clone behavior
-    path_prefix: Path = field(default_factory=lambda: Path())
+    path: Path = field(default_factory=lambda: Path())
     skip_archived: bool = True
     threads: int | None = None
     depth: int | None = None
     branch: str | None = None
+    mirror: bool = True  # Use git clone --mirror by default for complete metadata
     use_https: bool = False
     keep_remote_protocol: bool = False
     # Optional inclusion filter: if non-empty, only clone listed projects (exact names)
@@ -230,6 +231,30 @@ class Config:
         if self.clone_timeout <= 0:
             raise ValueError("clone_timeout must be positive")
 
+        # Validate mirror option compatibility
+        if self.mirror:
+            # --mirror is incompatible with --depth and --branch
+            # When mirror is enabled, we override these options
+            if self.depth is not None:
+                logger = __import__(
+                    "gerrit_clone.logging", fromlist=["get_logger"]
+                ).get_logger(__name__)
+                logger.warning(
+                    "mirror mode is incompatible with --depth option. "
+                    "Ignoring --depth and using full clone."
+                )
+                object.__setattr__(self, "depth", None)
+
+            if self.branch is not None:
+                logger = __import__(
+                    "gerrit_clone.logging", fromlist=["get_logger"]
+                ).get_logger(__name__)
+                logger.warning(
+                    "mirror mode is incompatible with --branch option. "
+                    "Ignoring --branch and cloning all refs."
+                )
+                object.__setattr__(self, "branch", None)
+
         # Normalize include_projects (strip whitespace, drop empties, de-dup preserve order)
         if self.include_projects:
             seen: set[str] = set()
@@ -241,8 +266,8 @@ class Config:
                     seen.add(clean)
             object.__setattr__(self, "include_projects", normalized)
 
-        # Ensure path_prefix is absolute
-        self.path_prefix = self.path_prefix.resolve()
+        # Ensure path is absolute
+        self.path = self.path.resolve()
 
         # Generate base_url if not provided
         if self.base_url is None:
@@ -570,7 +595,7 @@ class BatchResult:
                 "depth": self.config.depth,
                 "branch": self.config.branch,
                 "strict_host_checking": self.config.strict_host_checking,
-                "path_prefix": str(self.config.path_prefix),
+                "path": str(self.config.path),
             },
             "results": [result.to_dict() for result in self.results],
         }

@@ -202,6 +202,9 @@ def create_parent_directories(path: Path, mode: int = 0o755) -> None:
 def check_path_conflicts(target_path: Path, is_nested_repo: bool = False) -> str | None:
     """Check for path conflicts that would prevent cloning.
 
+    Detects both regular repositories (with .git subdirectory) and bare repositories
+    (created with git clone --mirror).
+
     Args:
         target_path: Intended clone destination
         is_nested_repo: True if this is a nested repository under a parent
@@ -221,19 +224,27 @@ def check_path_conflicts(target_path: Path, is_nested_repo: bool = False) -> str
         return f"File exists at target path: {target_path}"
 
     if target_path.is_dir():
-        # Check if it's already a git repository
-        git_dir = target_path / ".git"
-        if git_dir.exists():
+        # Check if it's already a git repository (regular or bare)
+        from gerrit_clone.git_utils import is_git_repository
+
+        if is_git_repository(target_path):
             return "already_cloned"  # Special case - not an error
         else:
             # Directory exists but is not a git repo - could be incomplete clone
             contents = list(target_path.iterdir())
             if contents:
-                # Check if this looks like an incomplete git clone
-                git_files = ['.git', '.gitignore', 'README.md', 'pom.xml', 'Makefile']
-                has_git_artifacts = any(item.name in git_files for item in contents)
+                # Check if this looks like an incomplete git clone (regular or bare)
+                # Regular repo artifacts
+                regular_git_files = ['.git', '.gitignore', 'README.md', 'pom.xml', 'Makefile']
+                has_regular_artifacts = any(item.name in regular_git_files for item in contents)
 
-                if has_git_artifacts:
+                # Bare repo artifacts (partial bare clone that failed)
+                bare_git_files = ['HEAD', 'objects', 'refs', 'config', 'hooks', 'info', 'description']
+                has_bare_artifacts = any(item.name in bare_git_files for item in contents)
+
+                # If it has git artifacts but is_git_repository returned False,
+                # it's likely an incomplete clone that should be cleaned up
+                if has_regular_artifacts or has_bare_artifacts:
                     return "incomplete_clone"  # Special case - cleanup and retry
                 else:
                     return f"Non-empty directory exists: {target_path} (contains {len(contents)} items)"
@@ -244,12 +255,12 @@ def check_path_conflicts(target_path: Path, is_nested_repo: bool = False) -> str
     return f"Filesystem object exists at target path: {target_path}"
 
 
-def move_conflicting_path(target_path: Path, is_nested_repo: bool = False) -> bool:
+def move_conflicting_path(target_path: Path, _is_nested_repo: bool = False) -> bool:
     """Move conflicting file or directory to .parent suffix to allow nested cloning.
 
     Args:
         target_path: Path that needs to be cleared for cloning
-        is_nested_repo: True if this is for a nested repository
+        _is_nested_repo: True if this is for a nested repository (currently unused)
 
     Returns:
         True if conflict was moved, False if no conflict or move failed

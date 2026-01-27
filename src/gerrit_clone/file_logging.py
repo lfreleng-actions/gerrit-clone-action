@@ -14,12 +14,11 @@ in rich_status.py and are not part of the logging system.
 
 from __future__ import annotations
 
-import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from gerrit_clone.logging import setup_logging
 
@@ -33,7 +32,7 @@ class ErrorRecord:
         message: str,
         level: int,
         context: str = "",
-        exception: Optional[Exception] = None,
+        exception: Exception | None = None,
     ):
         self.timestamp = timestamp
         self.message = message
@@ -41,7 +40,7 @@ class ErrorRecord:
         self.context = context
         self.exception = exception
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
             "timestamp": self.timestamp.isoformat(),
@@ -56,14 +55,14 @@ class ErrorCollector:
     """Collects errors and warnings for end-of-run summary."""
 
     def __init__(self) -> None:
-        self.errors: List[ErrorRecord] = []
-        self.warnings: List[ErrorRecord] = []
-        self.critical_errors: List[ErrorRecord] = []
+        self.errors: list[ErrorRecord] = []
+        self.warnings: list[ErrorRecord] = []
+        self.critical_errors: list[ErrorRecord] = []
 
-    def add_error(self, message: str, context: str = "", exception: Optional[Exception] = None) -> None:
+    def add_error(self, message: str, context: str = "", exception: Exception | None = None) -> None:
         """Add an error message."""
         record = ErrorRecord(
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             message=message,
             level=logging.ERROR,
             context=context,
@@ -71,10 +70,10 @@ class ErrorCollector:
         )
         self.errors.append(record)
 
-    def add_warning(self, message: str, context: str = "", exception: Optional[Exception] = None) -> None:
+    def add_warning(self, message: str, context: str = "", exception: Exception | None = None) -> None:
         """Add a warning message."""
         record = ErrorRecord(
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             message=message,
             level=logging.WARNING,
             context=context,
@@ -82,10 +81,10 @@ class ErrorCollector:
         )
         self.warnings.append(record)
 
-    def add_critical_error(self, message: str, context: str = "", exception: Optional[Exception] = None) -> None:
+    def add_critical_error(self, message: str, context: str = "", exception: Exception | None = None) -> None:
         """Add a critical error message."""
         record = ErrorRecord(
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             message=message,
             level=logging.CRITICAL,
             context=context,
@@ -105,7 +104,7 @@ class ErrorCollector:
         """Get total number of issues collected."""
         return len(self.errors) + len(self.warnings) + len(self.critical_errors)
 
-    def get_summary(self) -> Dict[str, Any]:
+    def get_summary(self) -> dict[str, Any]:
         """Get summary of collected issues."""
         return {
             "critical_errors": len(self.critical_errors),
@@ -114,7 +113,7 @@ class ErrorCollector:
             "total": self.get_total_count(),
         }
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert all collected issues to dictionary."""
         return {
             "summary": self.get_summary(),
@@ -191,7 +190,7 @@ class FileLogger:
 
     def __init__(
         self,
-        log_file_path: Optional[Path] = None,
+        log_file_path: Path | None = None,
         enabled: bool = True,
         log_level: str = "DEBUG",
     ):
@@ -199,10 +198,10 @@ class FileLogger:
         self.enabled = enabled
         self.log_level = getattr(logging, log_level.upper(), logging.DEBUG)
         self.error_collector = ErrorCollector()
-        self._file_handler: Optional[logging.FileHandler] = None
-        self._collector_handler: Optional[CollectingHandler] = None
+        self._file_handler: logging.FileHandler | None = None
+        self._collector_handler: CollectingHandler | None = None
 
-    def create_log_file(self, cli_args: Optional[Dict[str, Any]] = None) -> Path:
+    def create_log_file(self, cli_args: dict[str, Any] | None = None) -> Path:
         """Create log file with header containing CLI arguments."""
         if not self.enabled:
             return self.log_file_path
@@ -216,7 +215,7 @@ class FileLogger:
                 f.write("=" * 60 + "\n")
                 f.write("GERRIT CLONE EXECUTION LOG\n")
                 f.write("=" * 60 + "\n")
-                f.write(f"Date: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n")
+                f.write(f"Date: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}\n")
 
                 if cli_args:
                     # Reconstruct command line from args
@@ -319,10 +318,10 @@ class FileLogger:
 
 
 def setup_file_logging(
-    log_file_path: Optional[Path] = None,
+    log_file_path: Path | None = None,
     enabled: bool = True,
     log_level: str = "DEBUG",
-    cli_args: Optional[Dict[str, Any]] = None,
+    cli_args: dict[str, Any] | None = None,
 ) -> tuple[logging.Logger, ErrorCollector]:
     """
     Setup file-based logging system.
@@ -359,27 +358,35 @@ def setup_file_logging(
     return logger, file_logger.get_error_collector()
 
 
-def get_default_log_path(host: str | None = None, path_prefix: Path | None = None) -> Path:
-    """Get default log file path in path_prefix directory (or current working directory).
+def get_default_log_path(host: str | None = None, path: Path | None = None) -> Path:
+    """Get default log file path in path directory (or current working directory).
 
     Args:
-        host: Gerrit server hostname to use in log filename
-        path_prefix: Base directory for log file (defaults to current working directory)
+        host: Gerrit server hostname or URL to use in log filename
+        path: Base directory for log file (defaults to current working directory)
 
     Returns:
         Path to log file with dynamic name based on hostname
     """
     # Determine base directory for log file
-    base_dir = path_prefix if path_prefix is not None else Path.cwd()
+    base_dir = path if path is not None else Path.cwd()
 
     if host and host.strip():
-        # Sanitize hostname for filename
+        # Sanitize hostname for filename (replace slashes with dots to include org)
+        # Examples:
+        #   "gerrit.onap.org" -> "gerrit.onap.org"
+        #   "github.com/opennetworkinglab" -> "github.com.opennetworkinglab"
+        #   "github.example.com/myorg" -> "github.example.com.myorg"
+
         # 1. Remove port number (everything after first colon)
         clean_host = host.split(':')[0]
-        # 2. Replace path separators and other problematic characters
-        clean_host = clean_host.replace('/', '_').replace('\\', '_')
-        # 3. Replace other characters that could be problematic in filenames
+
+        # 2. Replace path separators with dots to preserve org/user structure
+        clean_host = clean_host.replace('/', '.').replace('\\', '.')
+
+        # 3. Replace any remaining problematic characters
         clean_host = clean_host.replace(':', '_')
+
         # 4. Strip whitespace and ensure we have something left
         clean_host = clean_host.strip()
 
@@ -391,15 +398,15 @@ def get_default_log_path(host: str | None = None, path_prefix: Path | None = Non
 
 def init_logging(
     *,
-    log_file: Optional[Path] = None,
+    log_file: Path | None = None,
     disable_file: bool = False,
     log_level: str = "DEBUG",
     console_level: str = "INFO",
     quiet: bool = False,
     verbose: bool = False,
-    cli_args: Optional[Dict[str, Any]] = None,
-    host: Optional[str] = None,
-    path_prefix: Optional[Path] = None,
+    cli_args: dict[str, Any] | None = None,
+    host: str | None = None,
+    path: Path | None = None,
 ) -> tuple[logging.Logger, ErrorCollector]:
     """Initialize both file and console logging in one place.
 
@@ -415,13 +422,13 @@ def init_logging(
         verbose: Enable verbose console output
         cli_args: CLI arguments to include in log header
         host: Gerrit server hostname for dynamic log file naming
-        path_prefix: Base directory for log file (defaults to current working directory)
+        path: Base directory for log file (defaults to current working directory)
 
     Returns:
         Tuple of (file_logger, error_collector)
     """
     # Set up file logging (unchanged behavior)
-    log_path = log_file or get_default_log_path(host, path_prefix)
+    log_path = log_file or get_default_log_path(host, path)
     file_logger, collector = setup_file_logging(
         log_file_path=log_path,
         enabled=not disable_file,
@@ -439,7 +446,7 @@ def init_logging(
     return file_logger, collector
 
 
-def cli_args_to_dict(**kwargs: Any) -> Dict[str, Any]:
+def cli_args_to_dict(**kwargs: Any) -> dict[str, Any]:
     """Convert CLI arguments to dictionary for logging."""
     # Filter out None values and internal parameters
     filtered_args = {}

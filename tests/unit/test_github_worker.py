@@ -6,8 +6,8 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 from subprocess import TimeoutExpired
-from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 from gerrit_clone.github_worker import (
@@ -16,8 +16,21 @@ from gerrit_clone.github_worker import (
 )
 from gerrit_clone.models import CloneStatus, Config, Project, ProjectState, SourceType
 
-if TYPE_CHECKING:
-    from pathlib import Path
+
+def _mock_successful_git_clone(*args, **kwargs):
+    """Mock subprocess.run for git clone that creates the target directory.
+
+    This is needed because AtomicClonePath expects the temp directory to exist
+    after git clone runs, so we need to actually create it in our mock.
+    """
+    # Extract the target path from git clone command
+    cmd = args[0] if args else kwargs.get("cmd", [])
+    if isinstance(cmd, list) and "clone" in cmd:
+        # Last argument is the target path
+        target_path = cmd[-1]
+        Path(target_path).mkdir(parents=True, exist_ok=True)
+
+    return MagicMock(returncode=0, stderr="", stdout="")
 
 
 class TestIsGhCliAvailable:
@@ -51,7 +64,7 @@ class TestCloneGitHubRepository:
         config = Config(
             host="github.com/org",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path,
+            path=tmp_path,
         )
 
         # Create existing repo
@@ -77,7 +90,7 @@ class TestCloneGitHubRepository:
         config = Config(
             host="github.com/org",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path,
+            path=tmp_path,
         )
 
         # Create non-git directory
@@ -112,7 +125,7 @@ class TestCloneGitHubRepository:
         config = Config(
             host="github.com/org",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path,
+            path=tmp_path,
             use_gh_cli=True,
         )
 
@@ -127,17 +140,17 @@ class TestCloneGitHubRepository:
         assert cmd[1] == "repo"
         assert cmd[2] == "clone"
 
-    @patch("gerrit_clone.github_worker.subprocess.run")
     @patch("gerrit_clone.github_worker._is_gh_cli_available")
+    @patch("gerrit_clone.github_worker.subprocess.run")
     def test_falls_back_to_git_when_gh_not_available(
         self,
-        mock_gh_available: MagicMock,
         mock_run: MagicMock,
+        mock_gh_available: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Test falls back to git clone when gh CLI not available."""
+        """Test falls back to git clone when gh CLI is not available."""
         mock_gh_available.return_value = False
-        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        mock_run.side_effect = _mock_successful_git_clone
 
         project = Project(
             name="test-repo",
@@ -149,7 +162,7 @@ class TestCloneGitHubRepository:
         config = Config(
             host="github.com/org",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path,
+            path=tmp_path,
             use_gh_cli=True,
         )
 
@@ -169,7 +182,7 @@ class TestCloneGitHubRepository:
         tmp_path: Path,
     ) -> None:
         """Test uses git clone by default."""
-        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        mock_run.side_effect = _mock_successful_git_clone
 
         project = Project(
             name="test-repo",
@@ -181,7 +194,7 @@ class TestCloneGitHubRepository:
         config = Config(
             host="github.com/org",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path,
+            path=tmp_path,
             use_gh_cli=False,
         )
 
@@ -199,8 +212,8 @@ class TestCloneGitHubRepository:
         mock_run: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Test includes --depth for shallow clone."""
-        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        """Test includes --depth flag for shallow clones."""
+        mock_run.side_effect = _mock_successful_git_clone
 
         project = Project(
             name="test-repo",
@@ -212,8 +225,9 @@ class TestCloneGitHubRepository:
         config = Config(
             host="github.com/org",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path,
+            path=tmp_path,
             depth=1,
+            mirror=False,
         )
 
         result = clone_github_repository(project, config)
@@ -230,8 +244,8 @@ class TestCloneGitHubRepository:
         mock_run: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Test includes --branch when specified."""
-        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        """Test includes --branch flag when branch is specified."""
+        mock_run.side_effect = _mock_successful_git_clone
 
         project = Project(
             name="test-repo",
@@ -243,8 +257,9 @@ class TestCloneGitHubRepository:
         config = Config(
             host="github.com/org",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path,
+            path=tmp_path,
             branch="develop",
+            mirror=False,
         )
 
         result = clone_github_repository(project, config)
@@ -260,8 +275,8 @@ class TestCloneGitHubRepository:
         mock_run: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Test performs full clone by default (all branches, full history, all tags)."""
-        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        """Test performs full clone by default (no --depth or --branch)."""
+        mock_run.side_effect = _mock_successful_git_clone
 
         project = Project(
             name="test-repo",
@@ -274,7 +289,7 @@ class TestCloneGitHubRepository:
         config = Config(
             host="github.com/org",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path,
+            path=tmp_path,
         )
 
         result = clone_github_repository(project, config)
@@ -310,14 +325,14 @@ class TestCloneGitHubRepository:
         config = Config(
             host="github.com/org",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path,
+            path=tmp_path,
         )
 
         result = clone_github_repository(project, config)
 
         assert result.status == CloneStatus.FAILED
         assert result.error_message is not None
-        assert "repository not found" in result.error_message
+        assert "Repository not found" in result.error_message
 
     @patch("gerrit_clone.github_worker.subprocess.run")
     def test_handles_timeout(
@@ -338,7 +353,7 @@ class TestCloneGitHubRepository:
         config = Config(
             host="github.com/org",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path,
+            path=tmp_path,
             clone_timeout=10,
         )
 
@@ -354,8 +369,8 @@ class TestCloneGitHubRepository:
         mock_run: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Test uses SSH URL by default (not specifying use_https)."""
-        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        """Test uses SSH URL by default."""
+        mock_run.side_effect = _mock_successful_git_clone
 
         project = Project(
             name="test-repo",
@@ -368,7 +383,7 @@ class TestCloneGitHubRepository:
         config = Config(
             host="github.com/org",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path,
+            path=tmp_path,
             # use_https not specified - should default to SSH
         )
 
@@ -385,8 +400,8 @@ class TestCloneGitHubRepository:
         mock_run: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Test uses SSH URL when use_https is explicitly False."""
-        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        """Test uses SSH URL when HTTPS is not requested."""
+        mock_run.side_effect = _mock_successful_git_clone
 
         project = Project(
             name="test-repo",
@@ -399,7 +414,7 @@ class TestCloneGitHubRepository:
         config = Config(
             host="github.com/org",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path,
+            path=tmp_path,
             use_https=False,
         )
 
@@ -416,8 +431,8 @@ class TestCloneGitHubRepository:
         mock_run: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Test uses HTTPS URL when explicitly requested."""
-        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        """Test uses HTTPS URL when use_https is True."""
+        mock_run.side_effect = _mock_successful_git_clone
 
         project = Project(
             name="test-repo",
@@ -430,7 +445,7 @@ class TestCloneGitHubRepository:
         config = Config(
             host="github.com/org",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path,
+            path=tmp_path,
             use_https=True,
         )
 
@@ -447,8 +462,8 @@ class TestCloneGitHubRepository:
         mock_run: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Test creates parent directory if it doesn't exist."""
-        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        """Test creates parent directories if they don't exist."""
+        mock_run.side_effect = _mock_successful_git_clone
 
         project = Project(
             name="nested/test-repo",
@@ -460,7 +475,7 @@ class TestCloneGitHubRepository:
         config = Config(
             host="github.com/org",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path,
+            path=tmp_path,
         )
 
         result = clone_github_repository(project, config)
@@ -475,8 +490,8 @@ class TestCloneGitHubRepository:
         mock_run: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Test embeds GitHub token in HTTPS URL for authentication."""
-        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        """Test embeds GitHub token in HTTPS URL."""
+        mock_run.side_effect = _mock_successful_git_clone
 
         project = Project(
             name="test-repo",
@@ -489,7 +504,7 @@ class TestCloneGitHubRepository:
         config = Config(
             host="github.com/org",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path,
+            path=tmp_path,
             use_https=True,
             github_token="ghp_test123456789",
         )
@@ -507,12 +522,18 @@ class TestCloneGitHubRepository:
         mock_run: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Test removes token from git remote URL after successful clone."""
+        """Test removes token from remote URL after successful clone."""
+
         # First call is git clone (success), second is git remote set-url
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stderr="", stdout=""),  # git clone
-            MagicMock(returncode=0, stderr="", stdout=""),  # git remote set-url
-        ]
+        def mock_git_calls(*args, **kwargs):
+            cmd = args[0] if args else kwargs.get("cmd", [])
+            if isinstance(cmd, list) and "clone" in cmd:
+                # Create target directory for clone
+                target_path = cmd[-1]
+                Path(target_path).mkdir(parents=True, exist_ok=True)
+            return MagicMock(returncode=0, stderr="", stdout="")
+
+        mock_run.side_effect = mock_git_calls
 
         project = Project(
             name="test-repo",
@@ -524,7 +545,7 @@ class TestCloneGitHubRepository:
         config = Config(
             host="github.com/org",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path,
+            path=tmp_path,
             use_https=True,
             github_token="ghp_test123456789",
         )
@@ -576,8 +597,8 @@ class TestCloneGitHubRepository:
         mock_run: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Test sets GIT_TERMINAL_PROMPT=0 for HTTPS to prevent interactive prompts."""
-        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        """Test sets GIT_TERMINAL_PROMPT=0 for HTTPS clones."""
+        mock_run.side_effect = _mock_successful_git_clone
 
         project = Project(
             name="test-repo",
@@ -589,7 +610,7 @@ class TestCloneGitHubRepository:
         config = Config(
             host="github.com/org",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path,
+            path=tmp_path,
             use_https=True,
             github_token="ghp_test123456789",
         )
@@ -610,8 +631,8 @@ class TestCloneGitHubRepository:
         mock_run: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Test HTTPS without token falls back to git credential helper."""
-        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        """Test HTTPS without token relies on git credential helper."""
+        mock_run.side_effect = _mock_successful_git_clone
 
         project = Project(
             name="test-repo",
@@ -623,7 +644,7 @@ class TestCloneGitHubRepository:
         config = Config(
             host="github.com/org",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path,
+            path=tmp_path,
             use_https=True,
             # No github_token provided
         )
@@ -661,7 +682,7 @@ class TestCloneGitHubRepository:
         config = Config(
             host="github.com/org",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path,
+            path=tmp_path,
             use_https=True,
             github_token="ghp_test123456789",
         )

@@ -36,7 +36,7 @@ class ConfigManager:
         base_url: str | None = None,
         ssh_user: str | None = None,
         ssh_identity_file: str | Path | None = None,
-        path_prefix: str | Path | None = None,
+        path: str | Path | None = None,
         skip_archived: bool | None = None,
         discovery_method: str | None = None,
         allow_nested_git: bool | None = None,
@@ -45,6 +45,7 @@ class ConfigManager:
         threads: int | None = None,
         depth: int | None = None,
         branch: str | None = None,
+        mirror: bool | None = None,
         use_https: bool | None = None,
         keep_remote_protocol: bool | None = None,
         strict_host_checking: bool | None = None,
@@ -80,7 +81,7 @@ class ConfigManager:
             base_url: Base URL for Gerrit API (overrides host-based default)
             ssh_user: SSH username
             ssh_identity_file: SSH private key file for authentication
-            path_prefix: Base directory for clones
+            path: Base directory for clones
             skip_archived: Skip non-active repositories
             discovery_method: Method for discovering projects (ssh/http/both)
             allow_nested_git: Permit nested git working trees
@@ -89,6 +90,7 @@ class ConfigManager:
             threads: Number of concurrent clone threads
             depth: Git clone depth (shallow clone)
             branch: Specific branch to clone
+            mirror: Use git clone --mirror for complete metadata (default: True)
             use_https: Use HTTPS for cloning instead of SSH
             keep_remote_protocol: Keep original clone protocol for remote
             strict_host_checking: Enforce strict SSH host key checking
@@ -132,7 +134,7 @@ class ConfigManager:
             base_url=base_url,
             ssh_user=ssh_user,
             ssh_identity_file=ssh_identity_file,
-            path_prefix=path_prefix,
+            path=path,
             skip_archived=skip_archived,
             discovery_method=discovery_method,
             allow_nested_git=allow_nested_git,
@@ -141,6 +143,7 @@ class ConfigManager:
             threads=threads,
             depth=depth,
             branch=branch,
+            mirror=mirror,
             use_https=use_https,
             keep_remote_protocol=keep_remote_protocol,
             strict_host_checking=strict_host_checking,
@@ -243,10 +246,10 @@ class ConfigManager:
             config["ssh_identity_file"] = ssh_identity_file
 
         # Path settings (support both new and legacy env var names)
-        if path_prefix := (
-            os.getenv("GERRIT_PATH_PREFIX") or os.getenv("GERRIT_OUTPUT_DIR")
+        if path := (
+            os.getenv("OUTPUT_PATH") or os.getenv("GERRIT_PATH_PREFIX") or os.getenv("GERRIT_OUTPUT_DIR")
         ):
-            config["path_prefix"] = path_prefix
+            config["path"] = path
 
     def _load_clone_behavior_env_vars(self, config: dict[str, Any]) -> None:
         """Load clone behavior environment variables."""
@@ -273,6 +276,8 @@ class ConfigManager:
             config["depth"] = self._parse_int(depth_str, "GERRIT_CLONE_DEPTH")
         if branch := os.getenv("GERRIT_BRANCH"):
             config["branch"] = branch
+        if mirror_str := os.getenv("GERRIT_MIRROR"):
+            config["mirror"] = self._parse_bool(mirror_str, "GERRIT_MIRROR")
         if use_https_str := os.getenv("GERRIT_USE_HTTPS"):
             config["use_https"] = self._parse_bool(use_https_str, "GERRIT_USE_HTTPS")
         if keep_remote_protocol_str := os.getenv("GERRIT_KEEP_REMOTE_PROTOCOL"):
@@ -358,9 +363,9 @@ class ConfigManager:
         # Create retry policy
         retry_policy = RetryPolicy(**retry_config) if retry_config else RetryPolicy()
 
-        # Handle path_prefix conversion
-        if "path_prefix" in config_dict:
-            config_dict["path_prefix"] = Path(config_dict["path_prefix"])
+        # Handle path conversion
+        if "path" in config_dict:
+            config_dict["path"] = Path(config_dict["path"])
 
         # Handle ssh_identity_file conversion
         if "ssh_identity_file" in config_dict:
@@ -392,19 +397,38 @@ class ConfigManager:
         source_type = config_dict.get("source_type", SourceType.GERRIT)
         use_https = config_dict.get("use_https", False)
 
+        # Auto-adjust path to include server/org structure when using default (current directory)
+        # This prevents naming conflicts when multiple clone operations run in the same directory
+        if "host" in config_dict and "path" in config_dict:
+            host = config_dict["host"]
+            path = config_dict["path"]
+
+            # Only adjust if path is effectively the default/current directory
+            # Compare resolved paths since CLI uses resolve_path=True
+            if Path(path).resolve() == Path.cwd().resolve():
+                if source_type == SourceType.GITHUB:
+                    # GitHub: ./github.com/{ORG} or ./{ENTERPRISE_SERVER}/{ORG}
+                    # E.g., host="github.com/opennetworkinglab" -> path="./github.com/opennetworkinglab"
+                    # Or: host="github.enterprise.com/org" -> path="./github.enterprise.com/org"
+                    config_dict["path"] = Path(host)
+                elif source_type == SourceType.GERRIT:
+                    # Gerrit: ./{GERRIT_SERVER_NAME}
+                    # E.g., host="gerrit.example.org" -> path="./gerrit.example.org"
+                    # Extract just the hostname (without port if present)
+                    server_name = host.split(":")[0] if ":" in host else host
+                    config_dict["path"] = Path(server_name)
+
         # For GitHub sources, port should always be None (not used)
         if source_type == SourceType.GITHUB:
             if "port" in config_dict:
                 # User explicitly set port for GitHub - remove it
                 config_dict.pop("port")
-        else:
-            # Gerrit sources need port configuration
-            if "port" not in config_dict:
-                # No port specified, use protocol-appropriate default
-                config_dict["port"] = 443 if use_https else 29418
-            elif config_dict["port"] == 29418 and use_https:
-                # SSH port specified but using HTTPS, switch to HTTPS port
-                config_dict["port"] = 443
+        elif "port" not in config_dict:
+            # No port specified, use protocol-appropriate default
+            config_dict["port"] = 443 if use_https else 29418
+        elif config_dict["port"] == 29418 and use_https:
+            # SSH port specified but using HTTPS, switch to HTTPS port
+            config_dict["port"] = 443
 
         # Validate required fields
         if "host" not in config_dict:

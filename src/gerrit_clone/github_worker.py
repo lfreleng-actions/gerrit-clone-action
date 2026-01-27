@@ -8,11 +8,21 @@ from __future__ import annotations
 import shutil
 import subprocess
 from datetime import UTC, datetime
-from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse, urlunparse
 
+from gerrit_clone.clone_utils import (
+    analyze_git_clone_error,
+    build_base_clone_command,
+    should_cleanup_on_clone_error,
+)
+from gerrit_clone.git_utils import is_git_repository
 from gerrit_clone.logging import get_logger
 from gerrit_clone.models import CloneResult, CloneStatus, Config, Project
+from gerrit_clone.pathing import AtomicClonePath
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = get_logger(__name__)
 
@@ -42,11 +52,11 @@ def clone_github_repository(
         CloneResult with outcome
     """
     started_at = datetime.now(UTC)
-    target_path = config.path_prefix / project.filesystem_path
+    target_path = config.path / project.filesystem_path
 
-    # Check if already exists
+    # Check if already exists (both regular and bare repositories)
     if target_path.exists():
-        if (target_path / ".git").exists():
+        if is_git_repository(target_path):
             logger.debug(f"Repository already exists: {project.name}")
             completed_at = datetime.now(UTC)
             duration = (completed_at - started_at).total_seconds()
@@ -126,15 +136,21 @@ def _clone_with_gh_cli(
     cmd.append(repo_identifier)
     cmd.append(str(target_path))
 
-    # Add depth for shallow clone
-    if config.depth:
-        cmd.extend(["--", "--depth", str(config.depth)])
+    # Use --mirror for complete repository metadata (all refs, tags, branches)
+    # This creates a bare repository that is a complete copy of the remote
+    if config.mirror:
+        cmd.extend(["--", "--mirror"])
+    else:
+        # Non-mirror mode: optionally use shallow clone or specific branch
+        # Add depth for shallow clone
+        if config.depth:
+            cmd.extend(["--", "--depth", str(config.depth)])
 
-    # Add branch if specified
-    if config.branch:
-        if "--" not in cmd:
-            cmd.append("--")
-        cmd.extend(["--branch", config.branch])
+        # Add branch if specified
+        if config.branch:
+            if "--" not in cmd:
+                cmd.append("--")
+            cmd.extend(["--branch", config.branch])
 
     # Execute clone
     try:
@@ -219,7 +235,7 @@ def _clone_with_gh_cli(
         )
 
 
-def _clone_with_git(
+def _clone_with_git(  # noqa: PLR0915
     project: Project,
     config: Config,
     target_path: Path,
@@ -278,65 +294,85 @@ def _clone_with_git(
             log_url = f"https://***@github.com/{project.name}.git"
     logger.debug(f"Cloning {project.name} with git from {log_url}")
 
-    # Build git clone command
-    cmd = ["git", "clone"]
-
-    # Add depth for shallow clone (only if explicitly requested)
-    if config.depth:
-        cmd.extend(["--depth", str(config.depth)])
-
-    # Add branch if explicitly specified by user (not default branch)
-    # Only use --single-branch when user explicitly requests a specific branch
-    if config.branch:
-        cmd.extend(["--branch", config.branch])
-        cmd.append("--single-branch")
-
-    # Default: full clone with all branches, full history, and all tags
-    # Do NOT add --branch or --single-branch for default clones
-
-    # Add URL and target path
-    cmd.append(clone_url)
-    cmd.append(str(target_path))
-
     # Setup environment for git
     env = _build_git_env(config)
 
-    # Execute clone
-    try:
-        logger.debug(f"Executing: {' '.join(cmd)}")
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=config.clone_timeout,
-            env=env,
-            check=False,
-        )
+    # Use atomic clone path for safety (automatic cleanup on failure)
+    with AtomicClonePath(target_path) as atomic_path:
+        # Build clone command using shared utility
+        cmd = build_base_clone_command(clone_url, atomic_path.temp_path, config)
 
-        if result.returncode == 0:
-            logger.debug(f"✓ Cloned {project.name}")
+        # GitHub-specific: add --single-branch when user explicitly requests a branch
+        # Must insert before the URL (second to last position)
+        if not config.mirror and config.branch:
+            cmd.insert(-2, "--single-branch")
 
-            # Post-clone: remove token from remote URL for security
-            if config.github_token and config.use_https and config.github_token in clone_url:
-                _remove_token_from_remote_url(target_path, project, config)
-
-            completed_at = datetime.now(UTC)
-            duration = (completed_at - started_at).total_seconds()
-            return CloneResult(
-                project=project,
-                status=CloneStatus.SUCCESS,
-                path=target_path,
-                started_at=started_at,
-                completed_at=completed_at,
-                duration_seconds=duration,
+        # Execute clone
+        try:
+            logger.debug(f"Executing: {' '.join(cmd)}")
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=config.clone_timeout,
+                env=env,
+                check=False,
             )
-        else:
-            error_msg = result.stderr.strip() or result.stdout.strip()
-            logger.error(f"✗ Failed to clone {project.name}: {error_msg}")
 
-            # Clean up failed clone directory
-            if target_path.exists():
-                shutil.rmtree(target_path, ignore_errors=True)
+            if result.returncode == 0:
+                logger.debug(f"✓ Cloned {project.name}")
+
+                # Post-clone: remove token from remote URL for security
+                if config.github_token and config.use_https and config.github_token in clone_url:
+                    _remove_token_from_remote_url(atomic_path.temp_path, project, config)
+
+                # Finalize atomic operation (move temp to target)
+                atomic_path.finalize()
+
+                completed_at = datetime.now(UTC)
+                duration = (completed_at - started_at).total_seconds()
+                return CloneResult(
+                    project=project,
+                    status=CloneStatus.SUCCESS,
+                    path=target_path,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    duration_seconds=duration,
+                )
+            else:
+                error_output = result.stderr.strip() or result.stdout.strip()
+
+                # Use shared error analysis for better diagnostics
+                analyzed_error = analyze_git_clone_error(
+                    error_output, project.name, config.host
+                )
+                logger.error(f"✗ Failed to clone {project.name}: {analyzed_error}")
+
+                # Decide whether to cleanup or preserve directory for inspection
+                if should_cleanup_on_clone_error(error_output):
+                    # Normal error - cleanup temp directory
+                    atomic_path.cleanup_temp()
+                else:
+                    # Special case (e.g., auth error) - preserve for inspection
+                    logger.debug(f"Preserving directory for inspection: {atomic_path.temp_path}")
+
+                completed_at = datetime.now(UTC)
+                duration = (completed_at - started_at).total_seconds()
+                return CloneResult(
+                    project=project,
+                    status=CloneStatus.FAILED,
+                    path=target_path,
+                    error_message=analyzed_error,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    duration_seconds=duration,
+                )
+
+        except subprocess.TimeoutExpired:
+            error_msg = f"Clone timeout after {config.clone_timeout}s"
+            logger.error(f"✗ {project.name}: {error_msg}")
+            # Explicitly cleanup temp directory since we're catching the exception
+            atomic_path.cleanup_temp()
 
             completed_at = datetime.now(UTC)
             duration = (completed_at - started_at).total_seconds()
@@ -349,45 +385,23 @@ def _clone_with_git(
                 completed_at=completed_at,
                 duration_seconds=duration,
             )
+        except Exception as e:
+            error_msg = f"Clone error: {e}"
+            logger.error(f"✗ {project.name}: {error_msg}")
+            # Explicitly cleanup temp directory since we're catching the exception
+            atomic_path.cleanup_temp()
 
-    except subprocess.TimeoutExpired:
-        error_msg = f"Clone timeout after {config.clone_timeout}s"
-        logger.error(f"✗ {project.name}: {error_msg}")
-
-        # Clean up
-        if target_path.exists():
-            shutil.rmtree(target_path, ignore_errors=True)
-
-        completed_at = datetime.now(UTC)
-        duration = (completed_at - started_at).total_seconds()
-        return CloneResult(
-            project=project,
-            status=CloneStatus.FAILED,
-            path=target_path,
-            error_message=error_msg,
-            started_at=started_at,
-            completed_at=completed_at,
-            duration_seconds=duration,
-        )
-    except Exception as e:
-        error_msg = f"Clone error: {e}"
-        logger.error(f"✗ {project.name}: {error_msg}")
-
-        # Clean up
-        if target_path.exists():
-            shutil.rmtree(target_path, ignore_errors=True)
-
-        completed_at = datetime.now(UTC)
-        duration = (completed_at - started_at).total_seconds()
-        return CloneResult(
-            project=project,
-            status=CloneStatus.FAILED,
-            path=target_path,
-            error_message=error_msg,
-            started_at=started_at,
-            completed_at=completed_at,
-            duration_seconds=duration,
-        )
+            completed_at = datetime.now(UTC)
+            duration = (completed_at - started_at).total_seconds()
+            return CloneResult(
+                project=project,
+                status=CloneStatus.FAILED,
+                path=target_path,
+                error_message=error_msg,
+                started_at=started_at,
+                completed_at=completed_at,
+                duration_seconds=duration,
+            )
 
 
 def _build_git_env(config: Config) -> dict[str, str]:

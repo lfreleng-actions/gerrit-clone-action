@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -190,6 +191,101 @@ class TestCheckPathConflicts:
 
             result = check_path_conflicts(existing_file)
             assert result is not None  # Should detect conflict
+
+    def test_check_path_conflicts_regular_git_repo(self) -> None:
+        """Test detection of existing regular git repository."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_path = Path(temp_dir) / "existing-repo"
+            repo_path.mkdir()
+
+            # Initialize a regular git repository
+            subprocess.run(
+                ["git", "init"],
+                cwd=repo_path,
+                check=True,
+                capture_output=True,
+            )
+
+            result = check_path_conflicts(repo_path)
+            assert result == "already_cloned"
+
+    def test_check_path_conflicts_bare_git_repo(self) -> None:
+        """Test detection of existing bare git repository (mirror clone)."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bare_repo_path = Path(temp_dir) / "existing-bare-repo.git"
+            bare_repo_path.mkdir()
+
+            # Initialize a bare git repository
+            subprocess.run(
+                ["git", "init", "--bare"],
+                cwd=bare_repo_path,
+                check=True,
+                capture_output=True,
+            )
+
+            result = check_path_conflicts(bare_repo_path)
+            assert result == "already_cloned"
+
+    def test_check_path_conflicts_mirror_cloned_repo(self) -> None:
+        """Test detection of mirror-cloned repository."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Create a source repository
+            source_repo = Path(temp_dir) / "source"
+            source_repo.mkdir()
+            subprocess.run(
+                ["git", "init"],
+                cwd=source_repo,
+                check=True,
+                capture_output=True,
+            )
+
+            # Create a commit in source repo
+            test_file = source_repo / "test.txt"
+            test_file.write_text("test content")
+            subprocess.run(
+                ["git", "add", "test.txt"],
+                cwd=source_repo,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "-c", "commit.gpgsign=false", "commit", "-m", "Initial commit"],
+                cwd=source_repo,
+                check=True,
+                capture_output=True,
+                env={
+                    "GIT_AUTHOR_NAME": "Test",
+                    "GIT_AUTHOR_EMAIL": "test@example.com",
+                    "GIT_COMMITTER_NAME": "Test",
+                    "GIT_COMMITTER_EMAIL": "test@example.com",
+                },
+            )
+
+            # Mirror clone the repository
+            mirror_repo = Path(temp_dir) / "mirror"
+            subprocess.run(
+                ["git", "clone", "--mirror", str(source_repo), str(mirror_repo)],
+                check=True,
+                capture_output=True,
+            )
+
+            result = check_path_conflicts(mirror_repo)
+            assert result == "already_cloned"
+
+    def test_check_path_conflicts_incomplete_bare_clone(self) -> None:
+        """Test detection of incomplete bare repository clone."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            incomplete_bare = Path(temp_dir) / "incomplete-bare"
+            incomplete_bare.mkdir()
+
+            # Create only some bare repo markers (incomplete)
+            (incomplete_bare / "HEAD").write_text("ref: refs/heads/main\n")
+            (incomplete_bare / "config").write_text("[core]\n\tbare = true\n")
+            (incomplete_bare / "objects").mkdir()
+            # Missing refs/ directory makes it incomplete
+
+            result = check_path_conflicts(incomplete_bare)
+            assert result == "incomplete_clone"
 
     def test_check_path_conflicts_permission_issues(self) -> None:
         """Test detection of permission-related conflicts."""

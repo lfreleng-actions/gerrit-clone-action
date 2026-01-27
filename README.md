@@ -20,6 +20,8 @@ reliability, speed, and CI/CD compatibility.
   network-limited operations)
 - **Hierarchy Preservation**: Maintains complete Gerrit project folder
   structure without flattening
+- **Complete Metadata Cloning**: Uses `git clone --mirror` by default to
+  capture all refs, tags, and branches for complete repository backups
 - **GitHub Mirroring**: Mirror Gerrit repositories to GitHub organizations
   with automatic name transformation
 - **Robust Retry Logic**: Exponential backoff with jitter for transient
@@ -83,17 +85,25 @@ Clone to a specific directory with custom thread count:
 
 ```bash
 gerrit-clone clone --host gerrit.example.org \
-  --path-prefix ./repositories \
+  --output-path ./repositories \
   --threads 8
 ```
 
-Clone with shallow depth and specific branch:
+Clone with shallow depth and specific branch (requires --no-mirror):
 
 ```bash
 gerrit-clone clone --host gerrit.example.org \
+  --no-mirror \
   --depth 10 \
   --branch main \
   --threads 16
+```
+
+Clone without mirror mode (standard clone with working directory):
+
+```bash
+gerrit-clone clone --host gerrit.example.org \
+  --no-mirror
 ```
 
 Include archived repositories and use custom SSH key:
@@ -104,6 +114,71 @@ gerrit-clone clone --host gerrit.example.org \
   --ssh-user myuser \
   --ssh-private-key ~/.ssh/gerrit_rsa
 ```
+
+### Understanding Path Behavior
+
+By default (when `--output-path` is not specified), `gerrit-clone`
+automatically creates an organized folder structure to prevent naming
+conflicts when cloning from different sources:
+
+**Gerrit sources:**
+
+```bash
+# Clones to: ./gerrit.example.org/project-name
+gerrit-clone clone --host gerrit.example.org
+
+# Strips port from output-path: ./gerrit.example.org/project-name
+gerrit-clone clone --host gerrit.example.org:29418
+```
+
+**GitHub sources:**
+
+```bash
+# Clones to: ./github.com/myorg/repo-name
+gerrit-clone clone --host github.com/myorg
+
+# GitHub Enterprise: ./github.enterprise.com/engineering/repo-name
+gerrit-clone clone --host github.enterprise.com/engineering
+```
+
+**Custom path (no auto-structure):**
+
+```bash
+# Clones directly to: ./my-repos/project-name
+gerrit-clone clone --host gerrit.example.org --output-path ./my-repos
+```
+
+This design prevents repository naming conflicts when running concurrent
+clone operations in the same directory (e.g., on GitHub Actions runners).
+
+### Understanding Mirror Mode
+
+By default, `gerrit-clone` uses `git clone --mirror` to create **bare repositories**
+that contain complete metadata from the remote repository:
+
+- ✅ All branches (not just the default)
+- ✅ All tags
+- ✅ All refs and notes
+- ✅ Complete commit history
+- ✅ Perfect for backups and mirrors
+
+**Important**: Mirror mode creates **bare repositories** (no working directory).
+This is ideal for:
+
+- Creating complete backups
+- Mirroring to other Git servers (e.g., GitHub)
+- Archival purposes
+- CI/CD pipelines that only need repository metadata
+
+**When to use `--no-mirror`**:
+
+- You need a working directory to browse/edit files
+- You only want a specific branch (`--branch`)
+- You want a shallow clone (`--depth`)
+
+**Note**: The `--mirror` flag is incompatible with `--depth` and `--branch`.
+If you specify mirror mode along with these options, the tool ignores them with
+a warning.
 
 ### Refresh Command Examples
 
@@ -116,37 +191,37 @@ gerrit-clone refresh
 Refresh ONAP repositories in a specific directory:
 
 ```bash
-gerrit-clone refresh --path /Users/mwatkins/Repositories/onap
+gerrit-clone refresh --output-path ~/repos/onap
 ```
 
 Fetch only (don't merge changes):
 
 ```bash
-gerrit-clone refresh --path ~/onap --fetch-only
+gerrit-clone refresh --output-path ~/onap --fetch-only
 ```
 
 Use 16 threads for faster refresh:
 
 ```bash
-gerrit-clone refresh --path ~/onap --threads 16
+gerrit-clone refresh --output-path ~/onap --threads 16
 ```
 
 Automatically stash uncommitted changes before refresh:
 
 ```bash
-gerrit-clone refresh --path ~/onap --auto-stash
+gerrit-clone refresh --output-path ~/onap --auto-stash
 ```
 
 Use rebase strategy instead of merge:
 
 ```bash
-gerrit-clone refresh --path ~/onap --strategy rebase
+gerrit-clone refresh --output-path ~/onap --strategy rebase
 ```
 
 Dry run to see what changes would occur:
 
 ```bash
-gerrit-clone refresh --path ~/onap --dry-run
+gerrit-clone refresh --output-path ~/onap --dry-run
 ```
 
 Refresh all repositories (not just Gerrit):
@@ -162,7 +237,7 @@ Here's a complete example showing the refresh workflow:
 ```bash
 # Refresh ONAP repositories with auto-stash and 16 threads
 gerrit-clone refresh \
-  --path /Users/mwatkins/Repositories/onap \
+  --output-path ~/repos/onap \
   --threads 16 \
   --auto-stash \
   --strategy merge
@@ -174,7 +249,7 @@ gerrit-clone refresh \
 🏷️  gerrit-clone refresh version X.Y.Z
 
 Refresh Configuration
-Base Path: /Users/mwatkins/Repositories/onap
+Base Path: ~/repos/onap
 Threads: 16
 Mode: Pull (merge)
 Prune: True
@@ -186,7 +261,7 @@ Dry Run: False
 Force: False
 Recursive: True
 
-🔍 Discovering Git repositories in /Users/mwatkins/Repositories/onap
+🔍 Discovering Git repositories in ~/repos/onap
 📂 Discovered 127 Git repositories
 🔄 Refreshing 127 repositories with 16 threads
 
@@ -212,7 +287,7 @@ Issues:
   ❌ ccsdk-apps-services: Network error during pull
   ⚠️  ccsdk-features-sdnr: Merge conflicts detected
 
-📄 Manifest: /Users/mwatkins/Repositories/onap/refresh-manifest.json
+📄 Manifest: ~/repos/onap/refresh-manifest.json
 
 ⚠️  2 repositories failed to refresh
 ```
@@ -241,7 +316,7 @@ Mirror specific projects with hierarchical filtering:
 gerrit-clone mirror \
   --server gerrit.onap.org \
   --org modeseven-onap \
-  --path /tmp/modeseven-onap \
+  --output-path /tmp/modeseven-onap \
   --projects "ccsdk, oom, cps"
 ```
 
@@ -308,7 +383,7 @@ export GITHUB_TOKEN="github_pat_XXXXXXXX"
 gerrit-clone mirror \
   --server gerrit.onap.org \
   --org modeseven-onap \
-  --path /tmp/modeseven-onap \
+  --output-path /tmp/modeseven-onap \
   --projects "ccsdk, oom, cps" \
   --recreate \
   --overwrite
@@ -362,7 +437,7 @@ Compare local Gerrit clone with remote GitHub before deletion:
 
 ```bash
 gerrit-clone reset --org my-test-org \
-  --path /tmp/gerrit-mirror \
+  --output-path /tmp/gerrit-mirror \
   --compare
 ```
 
@@ -426,7 +501,7 @@ gerrit-clone reset --org my-test-org
 
 **Optional:**
 
-- `--path DIRECTORY`: Local Gerrit clone folder hierarchy (default: current
+- `--output-path DIRECTORY`: Local Gerrit clone folder hierarchy (default: current
   directory)
 - `--compare`: Compare local Gerrit clone with remote GitHub repositories
   before deletion
@@ -452,7 +527,7 @@ Options:
   --base-url TEXT                 Base URL for Gerrit API
   -u, --ssh-user TEXT             SSH username for clone operations
   -i, --ssh-private-key PATH      SSH private key file for authentication
-  --path-prefix PATH              Base directory for clone hierarchy [default: .]
+  --output-path PATH              Base directory for clone hierarchy [default: .]
   --skip-archived / --include-archived
                                   Skip archived and inactive repositories
                                   [default: skip-archived]
@@ -490,7 +565,7 @@ Options:
   --manifest-filename TEXT        Output manifest filename
                                   [default: clone-manifest.json]
   -c, --config-file PATH          Configuration file path (YAML or JSON)
-  --cleanup / --no-cleanup        Remove cloned repositories (path-prefix) after
+  --cleanup / --no-cleanup        Remove cloned repositories (path) after
                                   run completes (success or failure)
   --exit-on-error                 Exit when first error occurs
   --log-file PATH                 Custom log file path
@@ -536,7 +611,7 @@ Options:
 **Performance:**
 
 - `--threads INTEGER`: Number of concurrent operations (default: auto)
-- `--path PATH`: Local filesystem path for cloned projects (default: `/tmp/gerrit-mirror`)
+- `--output-path PATH`: Local filesystem path for cloned projects (default: `/tmp/gerrit-mirror`)
 
 **Output:**
 
@@ -554,7 +629,7 @@ export GERRIT_HOST=gerrit.example.org
 export GERRIT_PORT=29418
 export GERRIT_SSH_USER=myuser
 export GERRIT_SSH_PRIVATE_KEY=~/.ssh/gerrit_key
-export GERRIT_PATH_PREFIX=/workspace/repos
+export OUTPUT_PATH=/workspace/repos
 export GERRIT_SKIP_ARCHIVED=1
 export GERRIT_THREADS=16
 export GERRIT_CLONE_DEPTH=5
@@ -568,6 +643,46 @@ export GERRIT_CLEANUP=0
 gerrit-clone  # Uses environment variables
 ```
 
+### Using .netrc Files
+
+Gerrit-clone supports loading HTTP credentials from `.netrc` files, following
+the standard format used by curl and other tools.
+
+**Search order:**
+
+1. `.netrc` in the current directory
+2. `~/.netrc` in your home directory
+3. `~/_netrc` (Windows fallback)
+
+**Example `.netrc` file:**
+
+```text
+machine gerrit.onap.org login myuser password mytoken
+machine gerrit.opendaylight.org login myuser password anothertoken
+```
+
+**CLI options:**
+
+| Option | Description |
+| ------ | ----------- |
+| `--no-netrc` | Disable .netrc file lookup |
+| `--netrc-file PATH` | Use a specific .netrc file |
+| `--netrc-optional` | Do not fail if .netrc file is missing (default) |
+| `--netrc-required` | Require a .netrc file and fail if missing |
+
+By default, `.netrc` lookup is optional (`--netrc-optional`): if the tool
+finds no `.netrc` file, it continues and falls back to environment variables.
+Use `--netrc-required` to enforce that a `.netrc` file must be present.
+
+When a `.netrc` file is present, credentials load automatically. Explicit
+environment variables or CLI arguments take precedence over `.netrc` entries.
+
+**Credential Priority Order:**
+
+1. **CLI arguments** (highest priority)
+2. **`.netrc` file** (if not disabled with `--no-netrc`)
+3. **Environment variables** (e.g., `GERRIT_HTTP_USER`, `GERRIT_HTTP_PASSWORD`)
+
 ### Configuration Files
 
 Create `~/.config/gerrit-clone/config.yaml`:
@@ -577,7 +692,7 @@ host: gerrit.example.org
 port: 29418
 ssh_user: myuser
 ssh_identity_file: ~/.ssh/gerrit_key
-path_prefix: /workspace/repos
+output-path: /workspace/repos
 skip_archived: true
 threads: 8
 clone_timeout: 600
@@ -593,7 +708,7 @@ Or JSON format `~/.config/gerrit-clone/config.json`:
   "port": 29418,
   "ssh_user": "myuser",
   "ssh_identity_file": "~/.ssh/gerrit_key",
-  "path_prefix": "/workspace/repos",
+  "path": "/workspace/repos",
   "skip_archived": true,
   "threads": 8
 }
@@ -700,13 +815,13 @@ export GITHUB_TOKEN=ghp_your_token_here
 gerrit-clone mirror --server gerrit.onap.org --org modeseven-onap
 ```
 
-Mirror specific projects with custom local path:
+Mirror specific projects with custom local output-path:
 
 ```bash
 gerrit-clone mirror \
   --server gerrit.onap.org \
   --org modeseven-onap \
-  --path /tmp/modeseven-onap \
+  --output-path /tmp/modeseven-onap \
   --projects "ccsdk, oom, cps"
 ```
 
@@ -833,7 +948,8 @@ jobs:
         with:
           host: gerrit.example.org
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-          path-prefix: repositories
+          output-path: repositories
+          mirror: true  # Default: creates bare repos with complete metadata
 ```
 
 ### Advanced Example
@@ -857,9 +973,10 @@ jobs:
           base-url: https://gerrit.example.org/gerrit
           ssh-user: automation
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-          path-prefix: workspace
+          output-path: workspace
           skip-archived: true
           threads: 12
+          mirror: false  # Use --no-mirror for working directory
           depth: 1
           branch: main
           use-https: false
@@ -879,7 +996,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: clone-manifest
-          path: ${{ steps.clone.outputs.manifest-path }}
+          output-path: ${{ steps.clone.outputs.manifest-path }}
 ```
 
 ### HTTPS Cloning Example
@@ -898,7 +1015,8 @@ jobs:
           host: gerrit.example.org
           base-url: https://gerrit.example.org/r
           use-https: true
-          path-prefix: repos
+          mirror: true  # Complete mirror with all refs
+          output-path: repos
           quiet: true
         env:
           # Use GitHub token or other auth for HTTPS
@@ -933,7 +1051,7 @@ jobs:
           allow-nested-git: true
           nested-protection: true
           move-conflicting: true  # Move conflicting files to ensure 100% clone success
-          path-prefix: complete-clone
+          output-path: complete-clone
           threads: 8
           verbose: true
 
@@ -976,39 +1094,39 @@ jobs:
 
 <!-- markdownlint-disable MD013 -->
 
-| Input                  | Required | Default               | Description                                                         |
-| ---------------------- | -------- | --------------------- | ------------------------------------------------------------------- |
-| `host`                 | Yes      |                       | Gerrit server hostname                                              |
-| `port`                 | No       | `29418`               | Gerrit SSH port                                                     |
-| `base-url`             | No       |                       | Base URL for Gerrit API (defaults to <https://HOST>)                |
-| `ssh-user`             | No       |                       | SSH username for clone operations                                   |
-| `ssh-private-key`      | No       |                       | SSH private key content for authentication                          |
-| `path-prefix`          | No       | `.`                   | Base directory for clone hierarchy                                  |
-| `skip-archived`        | No       | `true`                | Skip archived and inactive repositories                             |
-| `include-project`      | No       |                       | Restrict cloning to specific project(s) (comma-separated)           |
-| `ssh-debug`            | No       | `false`               | Enable verbose SSH (-vvv) for troubleshooting                       |
-| `allow-nested-git`     | No       | `true`                | Allow nested git working trees                                      |
-| `nested-protection`    | No       | `true`                | Auto-add nested child repo paths to parent .git/info/exclude        |
-| `move-conflicting`     | No       | `false`               | Move conflicting files/directories in parent repos to [NAME].parent |
-| `exit-on-error`        | No       | `false`               | Exit when first error occurs                                        |
-| `threads`              | No       | auto                  | Number of concurrent clone threads                                  |
-| `depth`                | No       |                       | Create shallow clone with given depth                               |
-| `branch`               | No       |                       | Clone specific branch instead of default                            |
-| `use-https`            | No       | `false`               | Use HTTPS for cloning instead of SSH                                |
-| `keep-remote-protocol` | No       | `false`               | Keep original clone protocol for remote                             |
-| `strict-host`          | No       | `true`                | SSH strict host key checking                                        |
-| `clone-timeout`        | No       | `600`                 | Timeout per clone operation in seconds                              |
-| `retry-attempts`       | No       | `3`                   | Max retry attempts per repository                                   |
-| `retry-base-delay`     | No       | `2.0`                 | Base delay for retry backoff in seconds                             |
-| `retry-factor`         | No       | `2.0`                 | Exponential backoff factor for retries                              |
-| `retry-max-delay`      | No       | `30.0`                | Max retry delay in seconds                                          |
-| `manifest-filename`    | No       | `clone-manifest.json` | Output manifest filename                                            |
-| `config-file`          | No       |                       | Configuration file path (YAML or JSON)                              |
-| `verbose`              | No       | `false`               | Enable verbose/debug output                                         |
-| `quiet`                | No       | `false`               | Suppress all output except errors                                   |
-| `log-file`             | No       |                       | Custom log file path                                                |
-| `disable-log-file`     | No       | `false`               | Disable creation of log file                                        |
-| `log-level`            | No       | `DEBUG`               | File logging level                                                  |
+| Input                  | Required | Default               | Description                                                                                          |
+| ---------------------- | -------- | --------------------- | ---------------------------------------------------------------------------------------------------- |
+| `host`                 | Yes      |                       | Gerrit server hostname                                                                               |
+| `port`                 | No       | `29418`               | Gerrit SSH port                                                                                      |
+| `base-url`             | No       |                       | Base URL for Gerrit API (defaults to <https://HOST>)                                                 |
+| `ssh-user`             | No       |                       | SSH username for clone operations                                                                    |
+| `ssh-private-key`      | No       |                       | SSH private key content for authentication                                                           |
+| `output-path`          | No       | `.`                   | Clone destination (auto-creates `./{SERVER}/` or `./github.com/{ORG}/` structure when not specified) |
+| `skip-archived`        | No       | `true`                | Skip archived and inactive repositories                                                              |
+| `include-project`      | No       |                       | Restrict cloning to specific project(s) (comma-separated)                                            |
+| `ssh-debug`            | No       | `false`               | Enable verbose SSH (-vvv) for troubleshooting                                                        |
+| `allow-nested-git`     | No       | `true`                | Allow nested git working trees                                                                       |
+| `nested-protection`    | No       | `true`                | Auto-add nested child repo paths to parent .git/info/exclude                                         |
+| `move-conflicting`     | No       | `false`               | Move conflicting files/directories in parent repos to [NAME].parent                                  |
+| `exit-on-error`        | No       | `false`               | Exit when first error occurs                                                                         |
+| `threads`              | No       | auto                  | Number of concurrent clone threads                                                                   |
+| `depth`                | No       |                       | Create shallow clone with given depth                                                                |
+| `branch`               | No       |                       | Clone specific branch instead of default                                                             |
+| `use-https`            | No       | `false`               | Use HTTPS for cloning instead of SSH                                                                 |
+| `keep-remote-protocol` | No       | `false`               | Keep original clone protocol for remote                                                              |
+| `strict-host`          | No       | `true`                | SSH strict host key checking                                                                         |
+| `clone-timeout`        | No       | `600`                 | Timeout per clone operation in seconds                                                               |
+| `retry-attempts`       | No       | `3`                   | Max retry attempts per repository                                                                    |
+| `retry-base-delay`     | No       | `2.0`                 | Base delay for retry backoff in seconds                                                              |
+| `retry-factor`         | No       | `2.0`                 | Exponential backoff factor for retries                                                               |
+| `retry-max-delay`      | No       | `30.0`                | Max retry delay in seconds                                                                           |
+| `manifest-filename`    | No       | `clone-manifest.json` | Output manifest filename                                                                             |
+| `config-file`          | No       |                       | Configuration file path (YAML or JSON)                                                               |
+| `verbose`              | No       | `false`               | Enable verbose/debug output                                                                          |
+| `quiet`                | No       | `false`               | Suppress all output except errors                                                                    |
+| `log-file`             | No       |                       | Custom log file path                                                                                 |
+| `disable-log-file`     | No       | `false`               | Disable creation of log file                                                                         |
+| `log-level`            | No       | `DEBUG`               | File logging level                                                                                   |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -1148,7 +1266,7 @@ Each run generates a detailed JSON manifest (`clone-manifest.json`):
     "depth": null,
     "branch": null,
     "strict_host_checking": true,
-    "path_prefix": "/workspace/repos"
+    "path": "/workspace/repos"
   },
   "results": [
     {
@@ -1206,7 +1324,7 @@ ssh-keyscan -H -p 29418 gerrit.example.org >> ~/.ssh/known_hosts
 #### Path conflicts or permission errors
 
 - Existing non-git directories block clones
-- Use clean target directory: `--path-prefix ./clean-workspace`
+- Use clean target directory: `--output-path ./clean-workspace`
 - Check disk space and write permissions
 - Remove conflicting directories: `rm -rf conflicting-path`
 

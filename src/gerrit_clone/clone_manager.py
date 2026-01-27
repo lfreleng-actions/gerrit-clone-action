@@ -15,6 +15,7 @@ from typing import Any
 from typing import cast
 
 from gerrit_clone.concurrent_utils import interruptible_executor
+from gerrit_clone.git_utils import is_git_repository
 from gerrit_clone.logging import get_logger, suppress_console_logging
 from gerrit_clone.models import (
     BatchResult,
@@ -301,7 +302,7 @@ class CloneManager:
     def _get_disk_space_info(self) -> str:
         """Get disk space information for logging."""
         try:
-            stat = os.statvfs(self.config.path_prefix)
+            stat = os.statvfs(self.config.path)
             free_bytes = stat.f_frsize * stat.f_bavail
             total_bytes = stat.f_frsize * stat.f_blocks
             free_gb = free_bytes / (1024**3)
@@ -473,7 +474,7 @@ class CloneManager:
         results = []
 
         # Ensure output directory exists before starting
-        self.config.path_prefix.mkdir(parents=True, exist_ok=True)
+        self.config.path.mkdir(parents=True, exist_ok=True)
 
         # Use filesystem-safe thread count
         max_threads = self.config.effective_threads
@@ -542,7 +543,7 @@ class CloneManager:
                         error_result = CloneResult(
                             project=project,
                             status=CloneStatus.FAILED,
-                            path=self.config.path_prefix / project.name,
+                            path=self.config.path / project.name,
                             attempts=0,
                             error_message=str(e),
                             started_at=now,
@@ -582,7 +583,7 @@ class CloneManager:
                         error_result = CloneResult(
                             project=project,
                             status=CloneStatus.FAILED,
-                            path=self.config.path_prefix / project.name,
+                            path=self.config.path / project.name,
                             attempts=0,
                             error_message=f"Operation timed out after {overall_timeout}s",
                             started_at=now,
@@ -663,7 +664,7 @@ def _check_existing_manifest(config: Config, console: Any | None = None) -> dict
     Returns:
         Existing manifest data if found, None otherwise
     """
-    manifest_path = config.path_prefix / config.manifest_filename
+    manifest_path = config.path / config.manifest_filename
 
     if not manifest_path.exists():
         return None
@@ -781,7 +782,7 @@ def clone_repositories(config: Config) -> BatchResult:
                 )
 
             # Ensure output directory exists before starting operations
-            config.path_prefix.mkdir(parents=True, exist_ok=True)
+            config.path.mkdir(parents=True, exist_ok=True)
 
             # Create clone manager (needed for gap analysis)
             manager = CloneManager(config, progress_tracker)
@@ -791,8 +792,9 @@ def clone_repositories(config: Config) -> BatchResult:
             repos_to_refresh = []
 
             for project in projects:
-                target_path = config.path_prefix / project.filesystem_path
-                if target_path.exists() and (target_path / ".git").exists():
+                target_path = config.path / project.filesystem_path
+                # Check if repository already exists (both regular and bare repos)
+                if target_path.exists() and is_git_repository(target_path):
                     repos_to_refresh.append(project)
                 else:
                     repos_needing_clone.append(project)
@@ -861,7 +863,7 @@ def clone_repositories(config: Config) -> BatchResult:
                         logger.debug("Checking which repositories need refresh using SHA comparison")
 
                         for project in repos_to_refresh:
-                            target_path = config.path_prefix / project.filesystem_path
+                            target_path = config.path / project.filesystem_path
 
                             # If no metadata is available for this project, refresh it by default
                             if not getattr(project, "metadata", None):
@@ -916,7 +918,7 @@ def clone_repositories(config: Config) -> BatchResult:
 
                     # Create results for up-to-date repos (verified but not refreshed)
                     for project in repos_up_to_date:
-                        target_path = config.path_prefix / project.filesystem_path
+                        target_path = config.path / project.filesystem_path
                         results.append(CloneResult(
                             project=project,
                             status=CloneStatus.VERIFIED,
@@ -991,7 +993,7 @@ def clone_repositories(config: Config) -> BatchResult:
                             )
 
                             for project in repos_needing_refresh:
-                                target_path = config.path_prefix / project.filesystem_path
+                                target_path = config.path / project.filesystem_path
                                 refresh_start = datetime.now(UTC)
 
                                 # Update progress description
@@ -1051,7 +1053,7 @@ def clone_repositories(config: Config) -> BatchResult:
                         len(repos_to_refresh)
                     )
                     for project in repos_to_refresh:
-                        target_path = config.path_prefix / project.filesystem_path
+                        target_path = config.path / project.filesystem_path
                         results.append(CloneResult(
                             project=project,
                             status=CloneStatus.ALREADY_EXISTS,
@@ -1174,7 +1176,7 @@ def _write_manifest(batch_result: BatchResult, config: Config) -> None:
         batch_result: Batch result to write
         config: Configuration with manifest filename
     """
-    manifest_path = config.path_prefix / config.manifest_filename
+    manifest_path = config.path / config.manifest_filename
 
     try:
         manifest_data = batch_result.to_dict()

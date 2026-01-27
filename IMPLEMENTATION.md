@@ -279,7 +279,7 @@ inputs:
   port: { default: "29418" }
   ssh-user: { required: false }
   ssh-private-key: { required: false }
-  path-prefix: { default: "." }
+  output-path: { default: "." }
   skip-archived: { default: "true" }
   threads: { required: false }
   depth: { required: false }
@@ -302,7 +302,7 @@ inputs:
 
 ```yaml
 outputs:
-  manifest-path: "Path to clone manifest JSON"
+  manifest-output-path: "Path to clone manifest JSON"
   success-count: "Number of successful clones"
   failure-count: "Number of failed clones"
   total-count: "Total repositories processed"
@@ -330,7 +330,7 @@ Generated `clone-manifest.json` structure:
     "depth": null,
     "branch": null,
     "strict_host_checking": true,
-    "path_prefix": "/workspace/repos"
+    "path": "/workspace/repos"
   },
   "results": [
     {

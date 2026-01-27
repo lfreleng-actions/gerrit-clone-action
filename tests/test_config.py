@@ -15,7 +15,7 @@ import pytest
 import yaml
 
 from gerrit_clone.config import ConfigManager, ConfigurationError, load_config
-from gerrit_clone.models import Config
+from gerrit_clone.models import Config, SourceType
 
 
 class TestConfigManager:
@@ -38,11 +38,12 @@ class TestConfigManager:
             port=22,
             base_url="https://custom.example.org",
             ssh_user="testuser",
-            path_prefix="/tmp/repos",
+            path="/tmp/repos",
             skip_archived=False,
             threads=8,
             depth=10,
             branch="main",
+            mirror=False,
             strict_host_checking=False,
             clone_timeout=300,
             retry_attempts=5,
@@ -58,11 +59,12 @@ class TestConfigManager:
         assert config.port == 22
         assert config.base_url == "https://custom.example.org"
         assert config.ssh_user == "testuser"
-        assert config.path_prefix == Path("/tmp/repos").resolve()
+        assert config.path == Path("/tmp/repos").resolve()
         assert config.skip_archived is False
         assert config.threads == 8
         assert config.depth == 10
         assert config.branch == "main"
+        assert config.mirror is False
         assert config.strict_host_checking is False
         assert config.clone_timeout == 300
         assert config.retry_policy.max_attempts == 5
@@ -90,6 +92,7 @@ class TestConfigManager:
             "GERRIT_THREADS": "16",
             "GERRIT_CLONE_DEPTH": "5",
             "GERRIT_BRANCH": "develop",
+            "GERRIT_MIRROR": "false",
             "GERRIT_STRICT_HOST": "false",
             "GERRIT_CLONE_TIMEOUT": "900",
             "GERRIT_RETRY_ATTEMPTS": "4",
@@ -108,10 +111,54 @@ class TestConfigManager:
         assert config.threads == 16
         assert config.depth == 5
         assert config.branch == "develop"
+        assert config.mirror is False
         assert config.strict_host_checking is False
         assert config.clone_timeout == 900
         assert config.retry_policy.max_attempts == 4
         assert config.retry_policy.base_delay == 3.0
+
+    def test_load_config_mirror_default_true(self):
+        """Test that mirror defaults to True."""
+        manager = ConfigManager()
+        config = manager.load_config(host="gerrit.example.org")
+
+        assert config.mirror is True
+
+    def test_load_config_mirror_explicit_false(self):
+        """Test setting mirror to False explicitly."""
+        manager = ConfigManager()
+        config = manager.load_config(host="gerrit.example.org", mirror=False)
+
+        assert config.mirror is False
+
+    def test_load_config_mirror_incompatible_with_depth(self):
+        """Test that mirror mode ignores depth option with warning."""
+        manager = ConfigManager()
+        config = manager.load_config(host="gerrit.example.org", mirror=True, depth=10)
+
+        assert config.mirror is True
+        assert config.depth is None  # Depth is ignored in mirror mode
+
+    def test_load_config_mirror_incompatible_with_branch(self):
+        """Test that mirror mode ignores branch option with warning."""
+        manager = ConfigManager()
+        config = manager.load_config(
+            host="gerrit.example.org", mirror=True, branch="main"
+        )
+
+        assert config.mirror is True
+        assert config.branch is None  # Branch is ignored in mirror mode
+
+    @patch.dict(
+        os.environ, {"GERRIT_HOST": "env.example.org", "GERRIT_MIRROR": "false"}
+    )
+    def test_load_config_mirror_from_env(self):
+        """Test loading mirror configuration from environment variable."""
+        manager = ConfigManager()
+        config = manager.load_config()
+
+        assert config.host == "env.example.org"
+        assert config.mirror is False
 
     @patch.dict(
         os.environ,
@@ -125,13 +172,13 @@ class TestConfigManager:
         manager = ConfigManager()
         config = manager.load_config()
 
-        assert config.path_prefix == Path("/legacy/path").resolve()
+        assert config.path == Path("/legacy/path").resolve()
 
     @patch.dict(
         os.environ,
         {
             "GERRIT_HOST": "env.gerrit.org",
-            "GERRIT_PATH_PREFIX": "/new/path",
+            "OUTPUT_PATH": "/new/path",
             "GERRIT_OUTPUT_DIR": "/legacy/path",  # Should be overridden
         },
     )
@@ -140,7 +187,7 @@ class TestConfigManager:
         manager = ConfigManager()
         config = manager.load_config()
 
-        assert config.path_prefix == Path("/new/path").resolve()
+        assert config.path == Path("/new/path").resolve()
 
     def test_load_config_cli_overrides_env(self):
         """Test CLI arguments override environment variables."""
@@ -196,6 +243,7 @@ class TestConfigManager:
             "ssh_user": "jsonuser",
             "depth": 20,
             "branch": "release",
+            "mirror": False,
         }
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -211,6 +259,7 @@ class TestConfigManager:
             assert config.ssh_user == "jsonuser"
             assert config.depth == 20
             assert config.branch == "release"
+            assert config.mirror is False
         finally:
             config_file.unlink()
 
@@ -347,3 +396,180 @@ class TestLoadConfigFunction:
         assert config.host == "test.gerrit.org"
         assert config.port == 2222
         assert config.threads == 4
+
+
+class TestPathAutoAdjustment:
+    """Test path auto-adjustment for both Gerrit and GitHub sources."""
+
+    def test_github_path_auto_adjusted_from_current_dir(self, tmp_path: Path):
+        """Test that path is auto-adjusted to host when using current directory."""
+        manager = ConfigManager()
+
+        # Simulate being in tmp_path
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(tmp_path)
+
+            # When path is current directory (default), it should be adjusted to host
+            config = manager.load_config(
+                host="github.com/myorg",
+                source_type=SourceType.GITHUB,
+                path=Path.cwd(),  # Current directory
+            )
+
+            # path should be adjusted to the host value (but resolved to absolute)
+            # The cwd when the config was created was tmp_path, so it becomes tmp_path / "github.com/myorg"
+            assert config.path == (tmp_path / "github.com/myorg").resolve()
+        finally:
+            os.chdir(original_cwd)
+
+    def test_github_enterprise_path_auto_adjusted(self, tmp_path: Path):
+        """Test that path is auto-adjusted for GitHub Enterprise servers."""
+        manager = ConfigManager()
+
+        # Simulate being in tmp_path
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(tmp_path)
+
+            # GitHub Enterprise server with org
+            config = manager.load_config(
+                host="github.enterprise.com/engineering",
+                source_type=SourceType.GITHUB,
+                path=Path.cwd(),
+            )
+
+            # Should create structure: github.enterprise.com/engineering/{PROJECT}
+            # path is resolved to absolute, so it becomes tmp_path / "github.enterprise.com/engineering"
+            assert (
+                config.path
+                == (tmp_path / "github.enterprise.com/engineering").resolve()
+            )
+        finally:
+            os.chdir(original_cwd)
+
+    def test_github_explicit_path_not_adjusted(self, tmp_path: Path):
+        """Test that explicitly set path is not auto-adjusted."""
+        manager = ConfigManager()
+
+        # Explicitly set to a different directory
+        custom_path = tmp_path / "custom" / "repos"
+        config = manager.load_config(
+            host="github.com/myorg",
+            source_type=SourceType.GITHUB,
+            path=custom_path,
+        )
+
+        # path should remain as explicitly set
+        assert config.path == custom_path
+
+    def test_github_path_creates_expected_structure(self, tmp_path: Path):
+        """Test that the path structure matches commit message specification."""
+        manager = ConfigManager()
+
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(tmp_path)
+
+            config = manager.load_config(
+                host="github.com/opennetworkinglab",
+                source_type=SourceType.GITHUB,
+                path=Path.cwd(),
+            )
+
+            # Verify the structure matches: {PATH}/github.com/{ORG}
+            # path is resolved to absolute, so relative to where config was created (tmp_path)
+            assert config.path == (tmp_path / "github.com/opennetworkinglab").resolve()
+
+            # Simulate project clone path construction
+            project_name = "my-repo"
+            expected_clone_path = config.path / project_name
+            assert (
+                expected_clone_path
+                == (tmp_path / "github.com/opennetworkinglab/my-repo").resolve()
+            )
+        finally:
+            os.chdir(original_cwd)
+
+    def test_gerrit_path_auto_adjusted_from_current_dir(self, tmp_path: Path):
+        """Test that Gerrit path is auto-adjusted to server name when using current directory."""
+        manager = ConfigManager()
+
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(tmp_path)
+
+            # When path is current directory (default), it should be adjusted to server name
+            config = manager.load_config(
+                host="gerrit.example.org",
+                source_type=SourceType.GERRIT,
+                path=Path.cwd(),
+            )
+
+            # path should be adjusted to the server name
+            # Structure: ./{GERRIT_SERVER_NAME}
+            assert config.path == (tmp_path / "gerrit.example.org").resolve()
+        finally:
+            os.chdir(original_cwd)
+
+    def test_gerrit_path_auto_adjusted_with_port_in_host(self, tmp_path: Path):
+        """Test that Gerrit path uses only hostname when host includes port."""
+        manager = ConfigManager()
+
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(tmp_path)
+
+            # Host with port should extract just the hostname
+            config = manager.load_config(
+                host="gerrit.example.org:29418",
+                source_type=SourceType.GERRIT,
+                path=Path.cwd(),
+            )
+
+            # path should use only hostname, not the port
+            assert config.path == (tmp_path / "gerrit.example.org").resolve()
+        finally:
+            os.chdir(original_cwd)
+
+    def test_gerrit_explicit_path_not_adjusted(self, tmp_path: Path):
+        """Test that explicitly set Gerrit path is not auto-adjusted."""
+        manager = ConfigManager()
+
+        # Explicitly set to a different directory
+        custom_path = tmp_path / "custom" / "gerrit-repos"
+        config = manager.load_config(
+            host="gerrit.example.org",
+            source_type=SourceType.GERRIT,
+            path=custom_path,
+        )
+
+        # path should remain as explicitly set
+        assert config.path == custom_path
+
+    def test_gerrit_path_creates_expected_structure(self, tmp_path: Path):
+        """Test that Gerrit path structure matches specification."""
+        manager = ConfigManager()
+
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(tmp_path)
+
+            config = manager.load_config(
+                host="gerrit.o-ran-sc.org",
+                source_type=SourceType.GERRIT,
+                path=Path.cwd(),
+            )
+
+            # Verify the structure matches: ./{GERRIT_SERVER_NAME}
+            assert config.path == (tmp_path / "gerrit.o-ran-sc.org").resolve()
+
+            # Simulate project clone path construction
+            project_name = "test-project"
+            expected_clone_path = config.path / project_name
+            assert (
+                expected_clone_path
+                == (tmp_path / "gerrit.o-ran-sc.org/test-project").resolve()
+            )
+        finally:
+            os.chdir(original_cwd)

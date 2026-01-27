@@ -208,7 +208,7 @@ class ProgressTracker:
 
             # Initialize results
             for project in projects:
-                target_path = self.config.path_prefix / project.name
+                target_path = self.config.path / project.name
                 self._results[project.name] = CloneResult(
                     project=project,
                     status=CloneStatus.PENDING,

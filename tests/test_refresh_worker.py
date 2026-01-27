@@ -63,9 +63,9 @@ def temp_git_repo(tmp_path, ssh_config, monkeypatch):
     repo_path = tmp_path / "test-repo"
     repo_path.mkdir()
 
-    # Initialize git repo
+    # Initialize git repo with explicit initial branch
     subprocess.run(
-        ["git", "init"],
+        ["git", "init", "-b", "main"],
         cwd=repo_path,
         capture_output=True,
         check=True,
@@ -196,7 +196,12 @@ class TestRefreshWorker:
         """Test getting remote URL when no remote exists."""
         repo_path = tmp_path / "no-remote"
         repo_path.mkdir()
-        subprocess.run(["git", "init"], cwd=repo_path, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "init", "-b", "main"],
+            cwd=repo_path,
+            capture_output=True,
+            check=True,
+        )
 
         url = worker._get_remote_url(repo_path)
         assert url is None
@@ -438,7 +443,12 @@ class TestRefreshWorker:
         # Create git repo with GitHub remote
         repo_path = tmp_path / "github-repo"
         repo_path.mkdir()
-        subprocess.run(["git", "init"], cwd=repo_path, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "init", "-b", "main"],
+            cwd=repo_path,
+            capture_output=True,
+            check=True,
+        )
         subprocess.run(
             ["git", "remote", "add", "origin", "https://github.com/user/repo.git"],
             cwd=repo_path,

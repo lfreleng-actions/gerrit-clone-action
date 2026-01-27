@@ -64,7 +64,7 @@ jobs:
           host: "gerrit.o-ran-sc.org"
           ssh-user: "${{ vars.GERRIT_SSH_USER }}"
           ssh-private-key: "${{ secrets.GERRIT_SSH_PRIVATE_KEY }}"
-          path-prefix: "gerrit.o-ran-sc.org-action"
+          output-path: "gerrit.o-ran-sc.org-action"
           depth: "1"
           strict-host: "false"
 
@@ -103,7 +103,7 @@ jobs:
           SSH_AUTH_SOCK="$SSH_AUTH_SOCK" gerrit-clone clone \
             --host "gerrit.o-ran-sc.org" \
             --ssh-user "${{ vars.GERRIT_SSH_USER }}" \
-            --path-prefix "gerrit.o-ran-sc.org-cli" \
+            --output-path "gerrit.o-ran-sc.org-cli" \
             --threads "2" \
             --depth "1" \
             --ssh \
@@ -135,7 +135,7 @@ jobs:
         uses: ./
         with:
           host: "gerrit.o-ran-sc.org"
-          path-prefix: "gerrit.o-ran-sc.org-action-https"
+          output-path: "gerrit.o-ran-sc.org-action-https"
           depth: "1"
           use-https: "true"
 
@@ -162,7 +162,7 @@ jobs:
         run: |
           gerrit-clone clone \
             --host "gerrit.o-ran-sc.org" \
-            --path-prefix "gerrit.o-ran-sc.org-cli-https" \
+            --output-path "gerrit.o-ran-sc.org-cli-https" \
             --threads "2" \
             --depth "1" \
             --https \

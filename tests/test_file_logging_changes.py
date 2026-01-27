@@ -41,9 +41,17 @@ class TestDynamicLogFileNaming:
     def test_get_default_log_path_sanitizes_special_chars(self) -> None:
         """Test log path sanitizes special characters."""
         test_cases = [
-            ("host/with/path", "host_with_path.log"),
-            (r"host\with\backslash", "host_with_backslash.log"),
-            ("host:443/path", "host.log"),  # Port and path after colon are removed
+            ("host/with/path", "host.with.path.log"),  # Slashes replaced with dots
+            (
+                r"host\with\backslash",
+                "host.with.backslash.log",
+            ),  # Backslashes replaced with dots
+            ("host:443/path", "host.log"),  # Port (and everything after) removed first
+            ("github.com/org", "github.com.org.log"),  # GitHub org structure preserved
+            (
+                "github.example.com/myorg",
+                "github.example.com.myorg.log",
+            ),  # GitHub Enterprise
         ]
 
         for host, expected_name in test_cases:
@@ -186,7 +194,7 @@ class TestDynamicLogFileNaming:
                         quiet=True,
                     )
 
-                    # Verify get_default_log_path was called with the host and path_prefix
+                    # Verify get_default_log_path was called with the host and path
                     mock_get_log_path.assert_called_once_with(test_host, None)
 
             finally:

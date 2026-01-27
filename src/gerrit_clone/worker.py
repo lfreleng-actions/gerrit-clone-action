@@ -20,6 +20,7 @@ if sys.platform == "win32":
 else:
     pass
 
+from gerrit_clone.clone_utils import build_base_clone_command
 from gerrit_clone.logging import get_logger
 from gerrit_clone.models import CloneResult, CloneStatus, Config, Project
 from gerrit_clone.pathing import (
@@ -134,7 +135,7 @@ class CloneWorker:
             CloneResult with operation details
         """
         logger.debug(f"🔄 Processing {project.name}")
-        target_path = get_project_path(project.name, self.config.path_prefix)
+        target_path = get_project_path(project.name, self.config.path)
         started_at = datetime.now(UTC)
 
         # Initialize result object
@@ -164,7 +165,7 @@ class CloneWorker:
             # crossing above the configured path prefix.
             def _find_project_git_ancestor(p: Path) -> Path | None:
                 try:
-                    base = self.config.path_prefix.resolve()
+                    base = self.config.path.resolve()
                     current = p.parent.resolve()
                 except OSError:
                     return None
@@ -206,7 +207,7 @@ class CloneWorker:
             if ancestor_repo and allow_nested:
                 # Annotate intended nesting relationship early with relative path under base
                 try:
-                    rel = ancestor_repo.relative_to(self.config.path_prefix)
+                    rel = ancestor_repo.relative_to(self.config.path)
                     result.nested_under = rel.as_posix()
                     logger.debug(
                         f"🧬 Nested repo detected early: {project.name} (parent={result.nested_under})"
@@ -275,7 +276,7 @@ class CloneWorker:
                     if move_conflicting_enabled:
                         # Try to move the conflicting file/directory
                         try:
-                            if move_conflicting_path(target_path, is_nested_repo=True):
+                            if move_conflicting_path(target_path, _is_nested_repo=True):
                                 parent_name = result.nested_under or "parent"
                                 logger.warning(
                                     f"⚠️ Moved conflicting content in parent repository '{parent_name}' to allow cloning of nested repository [project]{project.name}[/project]"
@@ -284,7 +285,7 @@ class CloneWorker:
                             else:
                                 # Move failed, skip gracefully
                                 result.status = CloneStatus.SKIPPED
-                                result.error_message = f"Skipped due to file conflict with parent repository (move failed)"
+                                result.error_message = "Skipped due to file conflict with parent repository (move failed)"
                                 result.completed_at = datetime.now(UTC)
                                 result.duration_seconds = (
                                     result.completed_at - started_at
@@ -313,7 +314,7 @@ class CloneWorker:
                         # Move conflicting disabled, skip gracefully
                         result.status = CloneStatus.SKIPPED
                         result.error_message = (
-                            f"Skipped due to file conflict with parent repository"
+                            "Skipped due to file conflict with parent repository"
                         )
                         result.completed_at = datetime.now(UTC)
                         result.duration_seconds = (
@@ -653,7 +654,7 @@ class CloneWorker:
                 self._late_nested_checks += 1
                 try:
                     # Re-run ancestor detection using the same logic as earlier
-                    base = self.config.path_prefix.resolve()
+                    base = self.config.path.resolve()
                     current = target_path.parent.resolve()
                     while True:
                         if current == base:
@@ -724,7 +725,7 @@ class CloneWorker:
                 errors="replace",
                 timeout=self.config.clone_timeout,
                 env=env,
-                cwd=self.config.path_prefix,
+                cwd=self.config.path,
                 check=False,
             )
             # If SSH debug enabled and clone failed, log raw stderr/stdout (truncated) before analysis
@@ -806,35 +807,14 @@ class CloneWorker:
         Returns:
             Git clone command as list of strings
         """
-        cmd = ["git", "clone"]
-
-        # Add options to reduce filesystem contention and config access
-        cmd.extend(
-            [
-                "--no-hardlinks",  # Prevent hardlink creation that can cause locks
-                "--quiet",  # Reduce output and potential I/O contention
-            ]
-        )
-
-        # Add depth option for shallow clone
-        if self.config.depth is not None:
-            cmd.extend(["--depth", str(self.config.depth)])
-
-        # Add branch option
-        if self.config.branch is not None:
-            cmd.extend(["--branch", self.config.branch])
-
         # Build clone URL (HTTPS or SSH)
         if self.config.use_https:
             clone_url = self._build_https_url(project)
         else:
             clone_url = self._build_ssh_url(project)
-        cmd.append(clone_url)
 
-        # Target path (will be updated to temp path)
-        cmd.append(str(target_path))
-
-        return cmd
+        # Use shared utility to build base clone command
+        return build_base_clone_command(clone_url, target_path, self.config)
 
     def _build_ssh_url(self, project: Project) -> str:
         """Build SSH URL for project.

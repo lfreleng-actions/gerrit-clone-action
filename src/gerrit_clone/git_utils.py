@@ -6,11 +6,68 @@
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+def is_git_repository(repo_path: Path) -> bool:
+    """Check if a path is a git repository (regular or bare).
+
+    This function detects both:
+    - Regular repositories (with a .git subdirectory)
+    - Bare repositories (where the repo root IS the git directory)
+
+    Args:
+        repo_path: Path to check
+
+    Returns:
+        True if the path is a git repository (regular or bare), False otherwise
+    """
+    if not repo_path.exists():
+        return False
+
+    if not repo_path.is_dir():
+        return False
+
+    # Check for regular repository (.git subdirectory exists)
+    git_dir = repo_path / ".git"
+    if git_dir.exists():
+        return True
+
+    # Check for bare repository filesystem markers first (cheap operation)
+    # A bare repo typically has these at the root level
+    bare_markers = ["HEAD", "objects", "refs", "config"]
+    has_markers = all((repo_path / marker).exists() for marker in bare_markers)
+
+    if has_markers:
+        return True
+
+    # If filesystem markers aren't present, use git command as fallback
+    # This handles edge cases where git knows it's a repo but markers are non-standard
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_path), "rev-parse", "--is-bare-repository"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+        # If git command succeeds and returns "true", it's a bare repo
+        if result.returncode == 0 and result.stdout.strip() == "true":
+            return True
+    except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+        # If the git command fails, it's not a valid git repository
+        pass
+
+    return False
 
 
 def get_current_commit_sha(repo_path: Path) -> str | None:
     """Get the current commit SHA (HEAD) for a local repository.
+
+    Works with both regular and bare repositories.
 
     Args:
         repo_path: Path to the git repository
@@ -25,8 +82,7 @@ def get_current_commit_sha(repo_path: Path) -> str | None:
     if not repo_path.exists():
         raise FileNotFoundError(f"Repository path does not exist: {repo_path}")
 
-    git_dir = repo_path / ".git"
-    if not git_dir.exists():
+    if not is_git_repository(repo_path):
         raise ValueError(f"Not a git repository: {repo_path}")
 
     try:
@@ -53,6 +109,8 @@ def get_current_commit_sha(repo_path: Path) -> str | None:
 def get_current_branch(repo_path: Path) -> str | None:
     """Get the current branch name for a local repository.
 
+    Works with both regular and bare repositories.
+
     Args:
         repo_path: Path to the git repository
 
@@ -66,8 +124,7 @@ def get_current_branch(repo_path: Path) -> str | None:
     if not repo_path.exists():
         raise FileNotFoundError(f"Repository path does not exist: {repo_path}")
 
-    git_dir = repo_path / ".git"
-    if not git_dir.exists():
+    if not is_git_repository(repo_path):
         raise ValueError(f"Not a git repository: {repo_path}")
 
     try:
@@ -94,6 +151,9 @@ def get_current_branch(repo_path: Path) -> str | None:
 def is_repo_dirty(repo_path: Path) -> bool:
     """Check if a repository has uncommitted changes.
 
+    Note: Bare repositories cannot have uncommitted changes by definition,
+    so this will always return False for bare repos.
+
     Args:
         repo_path: Path to the git repository
 
@@ -107,8 +167,7 @@ def is_repo_dirty(repo_path: Path) -> bool:
     if not repo_path.exists():
         raise FileNotFoundError(f"Repository path does not exist: {repo_path}")
 
-    git_dir = repo_path / ".git"
-    if not git_dir.exists():
+    if not is_git_repository(repo_path):
         raise ValueError(f"Not a git repository: {repo_path}")
 
     try:
@@ -134,6 +193,8 @@ def is_repo_dirty(repo_path: Path) -> bool:
 def get_remote_url(repo_path: Path, remote: str = "origin") -> str | None:
     """Get the remote URL for a repository.
 
+    Works with both regular and bare repositories.
+
     Args:
         repo_path: Path to the git repository
         remote: Name of the remote (default: "origin")
@@ -148,8 +209,7 @@ def get_remote_url(repo_path: Path, remote: str = "origin") -> str | None:
     if not repo_path.exists():
         raise FileNotFoundError(f"Repository path does not exist: {repo_path}")
 
-    git_dir = repo_path / ".git"
-    if not git_dir.exists():
+    if not is_git_repository(repo_path):
         raise ValueError(f"Not a git repository: {repo_path}")
 
     try:

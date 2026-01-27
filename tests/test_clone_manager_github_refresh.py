@@ -33,7 +33,7 @@ def github_config(tmp_path: Path) -> Config:
     return Config(
         host="github.com",
         source_type=SourceType.GITHUB,
-        path_prefix=tmp_path / "repos",
+        path=tmp_path / "repos",
         github_token="test-token",
         github_org="test-org",
         use_https=True,
@@ -60,9 +60,9 @@ def temp_github_repo(tmp_path: Path, github_project: Project) -> Path:
     repo_path = tmp_path / "repos" / github_project.name
     repo_path.mkdir(parents=True)
 
-    # Initialize git repo
+    # Initialize git repo with explicit initial branch
     subprocess.run(
-        ["git", "init"],
+        ["git", "init", "-b", "main"],
         cwd=repo_path,
         capture_output=True,
         check=True,
@@ -77,6 +77,13 @@ def temp_github_repo(tmp_path: Path, github_project: Project) -> Path:
     )
     subprocess.run(
         ["git", "config", "user.name", "Test User"],
+        cwd=repo_path,
+        capture_output=True,
+        check=True,
+    )
+    # Disable GPG signing to prevent SSH agent prompts for commits
+    subprocess.run(
+        ["git", "config", "commit.gpgsign", "false"],
         cwd=repo_path,
         capture_output=True,
         check=True,
@@ -222,7 +229,7 @@ class TestGitHubRefreshInCloneManager:
         https_config = Config(
             host="github.com",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path / "https",
+            path=tmp_path / "https",
             github_token="test-token",
             use_https=True,
         )
@@ -231,7 +238,7 @@ class TestGitHubRefreshInCloneManager:
         ssh_config = Config(
             host="github.com",
             source_type=SourceType.GITHUB,
-            path_prefix=tmp_path / "ssh",
+            path=tmp_path / "ssh",
             use_https=False,
         )
 
@@ -421,7 +428,10 @@ class TestGitHubRefreshInCloneManager:
             repo_path = tmp_path / "repos" / proj.name
             repo_path.mkdir(parents=True)
             subprocess.run(
-                ["git", "init"], cwd=repo_path, capture_output=True, check=True
+                ["git", "init", "-b", "main"],
+                cwd=repo_path,
+                capture_output=True,
+                check=True,
             )
             subprocess.run(
                 ["git", "config", "user.email", "test@example.com"],
@@ -431,6 +441,13 @@ class TestGitHubRefreshInCloneManager:
             )
             subprocess.run(
                 ["git", "config", "user.name", "Test User"],
+                cwd=repo_path,
+                capture_output=True,
+                check=True,
+            )
+            # Disable GPG signing to prevent SSH agent prompts for commits
+            subprocess.run(
+                ["git", "config", "commit.gpgsign", "false"],
                 cwd=repo_path,
                 capture_output=True,
                 check=True,
@@ -590,7 +607,12 @@ class TestGitHubRefreshInCloneManager:
         # Create an empty local repository (no commits)
         repo_path = tmp_path / "repos" / "empty-repo"
         repo_path.mkdir(parents=True)
-        subprocess.run(["git", "init"], cwd=repo_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "init", "-b", "main"],
+            cwd=repo_path,
+            check=True,
+            capture_output=True,
+        )
         # Don't create any commits - this simulates an empty repository
 
         # Mock get_current_commit_sha to return None (empty local repo)

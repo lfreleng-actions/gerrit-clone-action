@@ -237,7 +237,7 @@ class TestMirrorManager:
         config = Config(
             host="gerrit.example.org",
             port=29418,
-            path_prefix=Path("/tmp/test"),
+            path=Path("/tmp/test"),
         )
 
         github_api = Mock()
@@ -262,7 +262,7 @@ class TestMirrorManager:
         config = Config(
             host="gerrit.example.org",
             port=29418,
-            path_prefix=Path("/tmp/test"),
+            path=Path("/tmp/test"),
         )
         github_api = Mock()
         manager = MirrorManager(
@@ -303,7 +303,7 @@ class TestMirrorManager:
         config = Config(
             host="gerrit.example.org",
             port=29418,
-            path_prefix=Path("/tmp/test"),
+            path=Path("/tmp/test"),
         )
         github_api = Mock()
         manager = MirrorManager(
@@ -337,7 +337,7 @@ class TestMirrorManager:
         config = Config(
             host="gerrit.example.org",
             port=29418,
-            path_prefix=Path("/tmp/test"),
+            path=Path("/tmp/test"),
             ssh_identity_file=Path("/path/to/key"),
         )
         github_api = Mock()
@@ -373,7 +373,7 @@ class TestMirrorManager:
         config = Config(
             host="gerrit.example.org",
             port=29418,
-            path_prefix=Path("/tmp/test"),
+            path=Path("/tmp/test"),
         )
         github_api = Mock()
         manager = MirrorManager(
@@ -403,7 +403,7 @@ class TestMirrorManager:
         config = Config(
             host="gerrit.example.org",
             port=29418,
-            path_prefix=Path("/tmp/test"),
+            path=Path("/tmp/test"),
         )
         github_api = Mock()
         manager = MirrorManager(
@@ -427,7 +427,7 @@ class TestMirrorManager:
         config = Config(
             host="gerrit.example.org",
             port=29418,
-            path_prefix=Path("/tmp/test"),
+            path=Path("/tmp/test"),
         )
         github_api = Mock()
         github_api.list_all_repos_graphql = Mock(return_value={})
@@ -482,7 +482,7 @@ class TestMirrorManager:
         config = Config(
             host="gerrit.example.org",
             port=29418,
-            path_prefix=Path("/tmp/test"),
+            path=Path("/tmp/test"),
         )
         github_api = Mock()
         github_api.list_all_repos_graphql = Mock(return_value={})
@@ -526,7 +526,7 @@ class TestMirrorManager:
         config = Config(
             host="gerrit.example.org",
             port=29418,
-            path_prefix=Path("/tmp/test"),
+            path=Path("/tmp/test"),
         )
         github_api = Mock()
         github_api.list_all_repos_graphql = Mock(return_value={})
@@ -585,7 +585,7 @@ class TestMirrorManager:
         config = Config(
             host="gerrit.example.org",
             port=29418,
-            path_prefix=Path("/tmp/test"),
+            path=Path("/tmp/test"),
         )
         github_api = Mock()
         github_api.list_all_repos_graphql = Mock(return_value={})
@@ -640,7 +640,7 @@ class TestMirrorManager:
         config = Config(
             host="gerrit.example.org",
             port=29418,
-            path_prefix=Path("/tmp/test"),
+            path=Path("/tmp/test"),
         )
         github_api = Mock()
         github_api.list_all_repos_graphql = Mock(return_value={})
@@ -699,7 +699,7 @@ class TestMirrorManager:
         config = Config(
             host="gerrit.example.org",
             port=29418,
-            path_prefix=Path("/tmp/test"),
+            path=Path("/tmp/test"),
         )
         github_api = Mock()
         github_api.list_all_repos_graphql = Mock(return_value={})
