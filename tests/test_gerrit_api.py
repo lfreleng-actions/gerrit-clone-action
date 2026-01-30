@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 from unittest.mock import Mock, patch
 
 import httpx
@@ -54,6 +55,72 @@ class TestGerritAPIClient:
         assert client.config is config
         assert client.base_url == "https://gerrit.example.org"
         assert isinstance(client.client, httpx.Client)
+
+    def test_client_initialization_with_http_credentials(self) -> None:
+        """Test client initialization with HTTP credentials from environment."""
+        config = Config(host="gerrit.example.org")
+
+        # Set environment variables for HTTP auth
+        with patch.dict(
+            os.environ,
+            {"GERRIT_HTTP_USER": "testuser", "GERRIT_HTTP_PASSWORD": "testpass"},
+        ):
+            client = GerritAPIClient(config)
+
+            # Verify auth is configured (httpx stores auth internally)
+            assert client.client._auth is not None
+            client.close()
+
+    def test_client_initialization_with_fallback_credentials(self) -> None:
+        """Test client uses GERRIT_USERNAME/PASSWORD as fallback."""
+        config = Config(host="gerrit.example.org")
+
+        # Set fallback environment variables
+        with patch.dict(
+            os.environ,
+            {
+                "GERRIT_USERNAME": "fallbackuser",
+                "GERRIT_PASSWORD": "fallbackpass",
+            },
+            clear=False,
+        ):
+            # Clear primary credentials
+            env = os.environ.copy()
+            env.pop("GERRIT_HTTP_USER", None)
+            env.pop("GERRIT_HTTP_PASSWORD", None)
+
+            with patch.dict(os.environ, env, clear=True):
+                # Re-add the fallback credentials
+                os.environ["GERRIT_USERNAME"] = "fallbackuser"
+                os.environ["GERRIT_PASSWORD"] = "fallbackpass"
+
+                client = GerritAPIClient(config)
+
+                # Verify auth is configured from fallback
+                assert client.client._auth is not None
+                client.close()
+
+    def test_client_initialization_no_credentials(self) -> None:
+        """Test client initialization without credentials uses anonymous access."""
+        config = Config(host="gerrit.example.org")
+
+        # Clear all credential environment variables
+        with patch.dict(
+            os.environ,
+            {},
+            clear=True,
+        ):
+            # Ensure no Gerrit credentials are set
+            os.environ.pop("GERRIT_HTTP_USER", None)
+            os.environ.pop("GERRIT_HTTP_PASSWORD", None)
+            os.environ.pop("GERRIT_USERNAME", None)
+            os.environ.pop("GERRIT_PASSWORD", None)
+
+            client = GerritAPIClient(config)
+
+            # Verify no auth is configured
+            assert client.client._auth is None
+            client.close()
 
     def test_client_initialization_custom_base_url(self) -> None:
         """Test client with custom base URL."""

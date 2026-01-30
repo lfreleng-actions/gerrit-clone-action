@@ -26,6 +26,10 @@ from gerrit_clone.error_codes import (
     DiscoveryError,
     ExitCode,
 )
+from gerrit_clone.netrc import (
+    NetrcParseError,
+    resolve_gerrit_credentials,
+)
 from gerrit_clone.file_logging import cli_args_to_dict, init_logging
 from gerrit_clone.github_api import (
     GitHubAPI,
@@ -417,6 +421,41 @@ def clone(
         help="File logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
         envvar="GERRIT_LOG_LEVEL",
     ),
+    http_user: str | None = typer.Option(
+        None,
+        "--http-user",
+        help="HTTP username for Gerrit authentication (highest priority)",
+        envvar="GERRIT_HTTP_USER",
+    ),
+    http_password: str | None = typer.Option(
+        None,
+        "--http-password",
+        help="HTTP password for Gerrit authentication (highest priority)",
+        envvar="GERRIT_HTTP_PASSWORD",
+    ),
+    no_netrc: bool = typer.Option(
+        False,
+        "--no-netrc",
+        help="Disable .netrc credential lookup for HTTP authentication",
+        envvar="GERRIT_NO_NETRC",
+    ),
+    netrc_file: Path | None = typer.Option(
+        None,
+        "--netrc-file",
+        help="Explicit path to .netrc file for HTTP credentials",
+        envvar="GERRIT_NETRC_FILE",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+    netrc_optional: bool = typer.Option(
+        True,
+        "--netrc-optional/--netrc-required",
+        help="Whether to fail if .netrc file is not found (default: optional)",
+        envvar="GERRIT_NETRC_OPTIONAL",
+    ),
 ) -> None:
     """Clone all repositories from a Gerrit server or GitHub organization.
 
@@ -449,6 +488,15 @@ def clone(
 
         # Clone with shallow depth and specific branch
         gerrit-clone clone --host gerrit.example.org --no-mirror --depth 10 --branch main
+
+        # Clone with explicit HTTP credentials (highest priority)
+        gerrit-clone clone --host gerrit.example.org --https --http-user myuser --http-password mypass
+
+        # Clone with credentials from specific .netrc file
+        gerrit-clone clone --host gerrit.example.org --netrc-file ~/.netrc.gerrit
+
+        # Clone requiring .netrc credentials (fail if not found)
+        gerrit-clone clone --host gerrit.example.org --netrc-required
     """
     # Configure graceful interrupt handling for multi-threaded operations
     handle_sigint_gracefully()
@@ -506,48 +554,51 @@ def clone(
 
         # Prepare CLI arguments for logging
         cli_args = cli_args_to_dict(
-            host=host,
-            source_type=detected_source_type.value,
-            github_token="<redacted>" if github_token else None,
-            github_org=detected_github_org,
-            use_gh_cli=use_gh_cli,
-            no_refresh=no_refresh,
-            force=force,
-            fetch_only=fetch_only,
-            skip_conflicts=skip_conflicts,
-            port=port,
-            base_url=base_url,
-            ssh_user=ssh_user,
-            ssh_identity_file=ssh_identity_file,
-            path=output_path,
-            skip_archived=skip_archived,
-            include_project=include_project,
-            ssh_debug=ssh_debug,
-            allow_nested_git=allow_nested_git,
-            nested_protection=nested_protection,
-            move_conflicting=move_conflicting,
-            threads=threads,
-            depth=depth,
-            branch=branch,
-            mirror=mirror,
-            use_https=use_https,
-            keep_remote_protocol=keep_remote_protocol,
-            strict_host_checking=strict_host_checking,
-            clone_timeout=clone_timeout,
-            retry_attempts=retry_attempts,
-            retry_base_delay=retry_base_delay,
-            retry_factor=retry_factor,
-            retry_max_delay=retry_max_delay,
-            manifest_filename=manifest_filename,
-            config_file=config_file,
-            verbose=verbose,
-            quiet=quiet,
-            cleanup=cleanup,
-            exit_on_error=exit_on_error,
-            log_file=log_file,
-            disable_log_file=disable_log_file,
-            log_level=log_level,
-        )
+        host=host,
+        source_type=detected_source_type.value,
+        github_token="<redacted>" if github_token else None,
+        github_org=detected_github_org,
+        use_gh_cli=use_gh_cli,
+        no_refresh=no_refresh,
+        force=force,
+        fetch_only=fetch_only,
+        skip_conflicts=skip_conflicts,
+        port=port,
+        base_url=base_url,
+        ssh_user=ssh_user,
+        ssh_identity_file=ssh_identity_file,
+        path=output_path,
+        skip_archived=skip_archived,
+        include_project=include_project,
+        ssh_debug=ssh_debug,
+        allow_nested_git=allow_nested_git,
+        nested_protection=nested_protection,
+        move_conflicting=move_conflicting,
+        threads=threads,
+        depth=depth,
+        branch=branch,
+        mirror=mirror,
+        use_https=use_https,
+        keep_remote_protocol=keep_remote_protocol,
+        strict_host_checking=strict_host_checking,
+        clone_timeout=clone_timeout,
+        retry_attempts=retry_attempts,
+        retry_base_delay=retry_base_delay,
+        retry_factor=retry_factor,
+        retry_max_delay=retry_max_delay,
+        manifest_filename=manifest_filename,
+        config_file=config_file,
+        verbose=verbose,
+        quiet=quiet,
+        cleanup=cleanup,
+        exit_on_error=exit_on_error,
+        log_file=log_file,
+        disable_log_file=disable_log_file,
+        log_level=log_level,
+        no_netrc=no_netrc,
+        netrc_file=str(netrc_file) if netrc_file else None,
+        netrc_optional=netrc_optional,
+    )
 
         # Set up unified logging system (file + console)
         file_logger, error_collector = init_logging(
@@ -566,6 +617,49 @@ def clone(
         from gerrit_clone.file_logging import get_default_log_path
 
         log_file_path = log_file if log_file else get_default_log_path(host, Path(output_path) if output_path else None)
+
+        # Handle credential resolution for HTTP authentication
+        # Priority: 1. CLI arguments (--http-user/--http-password)
+        #           2. .netrc file
+        #           3. Environment variables (GERRIT_HTTP_USER/GERRIT_HTTP_PASSWORD)
+        #           4. Fallback environment variables (GERRIT_USERNAME/GERRIT_PASSWORD)
+        if use_https:
+            try:
+                resolved_creds = resolve_gerrit_credentials(
+                    host=host,
+                    explicit_username=http_user,
+                    explicit_password=http_password,
+                    use_netrc=not no_netrc,
+                    netrc_file=netrc_file,
+                    env_username_var="GERRIT_HTTP_USER",
+                    env_password_var="GERRIT_HTTP_PASSWORD",
+                    fallback_env_username_var="GERRIT_USERNAME",
+                    fallback_env_password_var="GERRIT_PASSWORD",
+                )
+                if resolved_creds:
+                    # Set environment variables for downstream code to use
+                    os.environ["GERRIT_HTTP_USER"] = resolved_creds.username
+                    os.environ["GERRIT_HTTP_PASSWORD"] = resolved_creds.password
+                    file_logger.debug(
+                        "Loaded HTTP credentials for %s from %s",
+                        host,
+                        resolved_creds.source_detail,
+                    )
+                elif not no_netrc and not netrc_optional:
+                    # No credentials found and netrc was required
+                    console.print(
+                        "[red]Error:[/red] No credentials found and --netrc-required set"
+                    )
+                    raise typer.Exit(ExitCode.CONFIGURATION_ERROR)
+            except FileNotFoundError:
+                if not netrc_optional:
+                    console.print(
+                        "[red]Error:[/red] No .netrc file found and --netrc-required set"
+                    )
+                    raise typer.Exit(ExitCode.CONFIGURATION_ERROR)
+            except NetrcParseError as e:
+                console.print(f"[red]Error:[/red] Failed to parse .netrc file: {e}")
+                raise typer.Exit(ExitCode.CONFIGURATION_ERROR)
 
         # Log version to file in GitHub Actions environment (file only, no console)
         if _is_github_actions_context():
@@ -1309,6 +1403,41 @@ def mirror(
         help="Suppress all output except errors",
         envvar="GERRIT_QUIET",
     ),
+    http_user: str | None = typer.Option(
+        None,
+        "--http-user",
+        help="HTTP username for Gerrit authentication (highest priority)",
+        envvar="GERRIT_HTTP_USER",
+    ),
+    http_password: str | None = typer.Option(
+        None,
+        "--http-password",
+        help="HTTP password for Gerrit authentication (highest priority)",
+        envvar="GERRIT_HTTP_PASSWORD",
+    ),
+    no_netrc: bool = typer.Option(
+        False,
+        "--no-netrc",
+        help="Disable .netrc credential lookup for HTTP authentication",
+        envvar="GERRIT_NO_NETRC",
+    ),
+    netrc_file: Path | None = typer.Option(
+        None,
+        "--netrc-file",
+        help="Explicit path to .netrc file for HTTP credentials",
+        envvar="GERRIT_NETRC_FILE",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+    netrc_optional: bool = typer.Option(
+        True,
+        "--netrc-optional/--netrc-required",
+        help="Whether to fail if .netrc file is not found (default: optional)",
+        envvar="GERRIT_NETRC_OPTIONAL",
+    ),
 ) -> None:
     """Mirror repositories from a Gerrit server to GitHub.
 
@@ -1337,6 +1466,14 @@ def mirror(
         # Use HTTP API for discovery (no SSH required)
         gerrit-clone mirror --server gerrit.onap.org --org myorg \\
           --discovery-method http --https
+
+        # Mirror with explicit HTTP credentials (highest priority)
+        gerrit-clone mirror --server gerrit.onap.org --org myorg \\
+          --https --http-user myuser --http-password mypass
+
+        # Mirror with credentials from specific .netrc file
+        gerrit-clone mirror --server gerrit.onap.org --org myorg \\
+          --https --netrc-file ~/.netrc.gerrit
     """
     # Configure graceful interrupt handling for multi-threaded operations
     handle_sigint_gracefully()
@@ -1351,6 +1488,48 @@ def mirror(
                 "be used together"
             )
             raise typer.Exit(ExitCode.CONFIGURATION_ERROR)
+
+        # Handle credential resolution for HTTP authentication
+        # Priority: 1. CLI arguments (--http-user/--http-password)
+        #           2. .netrc file
+        #           3. Environment variables (GERRIT_HTTP_USER/GERRIT_HTTP_PASSWORD)
+        #           4. Fallback environment variables (GERRIT_USERNAME/GERRIT_PASSWORD)
+        if use_https:
+            try:
+                resolved_creds = resolve_gerrit_credentials(
+                    host=server,
+                    explicit_username=http_user,
+                    explicit_password=http_password,
+                    use_netrc=not no_netrc,
+                    netrc_file=netrc_file,
+                    env_username_var="GERRIT_HTTP_USER",
+                    env_password_var="GERRIT_HTTP_PASSWORD",
+                    fallback_env_username_var="GERRIT_USERNAME",
+                    fallback_env_password_var="GERRIT_PASSWORD",
+                )
+                if resolved_creds:
+                    # Set environment variables for downstream code to use
+                    os.environ["GERRIT_HTTP_USER"] = resolved_creds.username
+                    os.environ["GERRIT_HTTP_PASSWORD"] = resolved_creds.password
+                    if not quiet:
+                        console.print(
+                            f"🔐 Loaded HTTP credentials from {resolved_creds.source_detail}"
+                        )
+                elif not no_netrc and not netrc_optional:
+                    # No credentials found and netrc was required
+                    console.print(
+                        "[red]Error:[/red] No credentials found and --netrc-required set"
+                    )
+                    raise typer.Exit(ExitCode.CONFIGURATION_ERROR)
+            except FileNotFoundError:
+                if not netrc_optional:
+                    console.print(
+                        "[red]Error:[/red] No .netrc file found and --netrc-required set"
+                    )
+                    raise typer.Exit(ExitCode.CONFIGURATION_ERROR)
+            except NetrcParseError as e:
+                console.print(f"[red]Error:[/red] Failed to parse .netrc file: {e}")
+                raise typer.Exit(ExitCode.CONFIGURATION_ERROR)
 
         # Show startup banner
         console.print(_format_version_string(command="mirror"))

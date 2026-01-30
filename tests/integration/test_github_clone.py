@@ -92,6 +92,7 @@ class TestGitHubClone:
             path=tmp_clone_dir,
             include_projects=["gerrit-clone-action"],  # Known repo
             threads=1,
+            mirror=False,  # Use regular clone (not bare) for testing
         )
 
         # Discover and verify the repository exists
@@ -110,9 +111,10 @@ class TestGitHubClone:
         # Verify repository exists on disk
         repo_path = tmp_clone_dir / "gerrit-clone-action"
         assert repo_path.exists()
-        assert (repo_path / ".git").exists()
 
         # Verify it's a valid git repository
+        # With mirror=False, .git directory should exist
+        assert (repo_path / ".git").exists()
         assert (repo_path / ".git" / "config").exists()
 
     def test_clone_with_shallow_depth(
@@ -265,6 +267,7 @@ class TestGitHubCloneWithGhCli:
             include_projects=["gerrit-clone-action"],
             use_gh_cli=True,
             threads=1,
+            mirror=False,  # Use regular clone (not bare) for testing
         )
 
         # Clone the repository
@@ -277,4 +280,7 @@ class TestGitHubCloneWithGhCli:
         # Verify repository exists on disk
         repo_path = tmp_clone_dir / "gerrit-clone-action"
         assert repo_path.exists()
+
+        # Verify it's a valid git repository
+        # With mirror=False, .git directory should exist
         assert (repo_path / ".git").exists()

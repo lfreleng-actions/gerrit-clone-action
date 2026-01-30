@@ -643,6 +643,68 @@ export GERRIT_CLEANUP=0
 gerrit-clone  # Uses environment variables
 ```
 
+### Using .netrc Files
+
+Gerrit-clone supports loading HTTP credentials from `.netrc` files, following
+the standard format used by curl and other tools.
+
+**Search order:**
+
+1. `.netrc` in the current directory
+2. `~/.netrc` in your home directory
+3. `~/_netrc` (Windows fallback)
+
+**Example `.netrc` file:**
+
+```text
+machine gerrit.onap.org login myuser password mytoken
+machine gerrit.opendaylight.org login myuser password anothertoken
+```
+
+**CLI options:**
+
+| Option                 | Description                                     |
+| ---------------------- | ----------------------------------------------- |
+| `--http-user TEXT`     | HTTP username for Gerrit authentication         |
+| `--http-password TEXT` | HTTP password for Gerrit authentication         |
+| `--no-netrc`           | Disable .netrc file lookup                      |
+| `--netrc-file PATH`    | Use a specific .netrc file                      |
+| `--netrc-optional`     | Do not fail if .netrc file is missing (default) |
+| `--netrc-required`     | Require a .netrc file and fail if missing       |
+
+By default, `.netrc` lookup is optional (`--netrc-optional`): if the tool
+finds no `.netrc` file, it continues and falls back to environment variables.
+Use `--netrc-required` to enforce that a `.netrc` file must be present.
+
+When a `.netrc` file is present, credentials load automatically. Explicit
+environment variables or CLI arguments take precedence over `.netrc` entries.
+
+**Credential Priority Order:**
+
+1. **CLI arguments** (`--http-user`/`--http-password`) - highest priority
+2. **`.netrc` file** (if not disabled with `--no-netrc`)
+3. **Environment variables** (`GERRIT_HTTP_USER`, `GERRIT_HTTP_PASSWORD`)
+4. **Fallback environment variables** (`GERRIT_USERNAME`, `GERRIT_PASSWORD`)
+
+The fallback environment variables (`GERRIT_USERNAME`/`GERRIT_PASSWORD`) provide
+compatibility with other Gerrit-related actions and tools in the lfreleng-actions
+ecosystem.
+
+**Example with explicit credentials:**
+
+```bash
+# Use CLI credentials (highest priority)
+gerrit-clone clone --host gerrit.example.org --https \
+  --http-user myuser --http-password mytoken
+
+# Use .netrc file
+gerrit-clone clone --host gerrit.example.org --https \
+  --netrc-file ~/.netrc.gerrit
+
+# Require .netrc credentials (fail if not found)
+gerrit-clone clone --host gerrit.example.org --https --netrc-required
+```
+
 ### Configuration Files
 
 Create `~/.config/gerrit-clone/config.yaml`:

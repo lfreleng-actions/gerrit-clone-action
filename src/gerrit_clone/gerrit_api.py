@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from typing import Any
 
@@ -43,6 +44,12 @@ class GerritAPIClient:
 
         Args:
             config: Configuration containing connection details
+
+        Authentication is configured from environment variables:
+            - GERRIT_HTTP_USER / GERRIT_HTTP_PASSWORD (primary)
+            - GERRIT_USERNAME / GERRIT_PASSWORD (fallback)
+
+        If credentials are available, HTTP Basic Auth is used.
         """
         self.config = config
         self.base_url = config.base_url
@@ -53,6 +60,19 @@ class GerritAPIClient:
             pool=10.0,  # Pool timeout for connection reuse
         )
 
+        # Check for HTTP credentials from environment variables
+        # Priority: GERRIT_HTTP_USER/PASSWORD > GERRIT_USERNAME/PASSWORD
+        http_user = os.getenv("GERRIT_HTTP_USER") or os.getenv("GERRIT_USERNAME")
+        http_password = os.getenv("GERRIT_HTTP_PASSWORD") or os.getenv("GERRIT_PASSWORD")
+
+        # Configure authentication if credentials are available
+        auth = None
+        if http_user and http_password:
+            auth = httpx.BasicAuth(http_user, http_password)
+            logger.debug("HTTP Basic Auth configured for Gerrit API")
+        else:
+            logger.debug("No HTTP credentials found, using anonymous access")
+
         # Create HTTP client with reasonable defaults
         # base_url is guaranteed to be set by Config.__post_init__
         assert self.base_url is not None
@@ -60,6 +80,7 @@ class GerritAPIClient:
             base_url=self.base_url,
             timeout=self.timeout,
             follow_redirects=True,
+            auth=auth,
             limits=httpx.Limits(
                 max_keepalive_connections=5, max_connections=10, keepalive_expiry=30.0
             ),
