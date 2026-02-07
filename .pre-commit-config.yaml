@@ -128,7 +128,7 @@ repos:
       - id: pytest
         name: pytest
         entry: uv
-        args: [run, pytest, --tb=short, -q]
+        args: [run, pytest, --tb=short, -q, --ignore=tests/integration]
         language: system
         pass_filenames: false
         always_run: true

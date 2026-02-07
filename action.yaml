@@ -341,7 +341,7 @@ runs:
 
         # SSH private key is handled by SSH agent setup step above
 
-        cmd="$cmd --path '${{ inputs.output-path }}'"
+        cmd="$cmd --output-path '${{ inputs.output-path }}'"
 
         if [ "${{ inputs.skip-archived }}" = "true" ]; then
           cmd="$cmd --skip-archived"
