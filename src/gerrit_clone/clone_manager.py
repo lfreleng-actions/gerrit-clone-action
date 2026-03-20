@@ -84,15 +84,27 @@ class CloneManager:
         # Remove duplicates (fast operation)
         unique_projects = self._remove_duplicates(projects)
 
-        # Apply include-project filtering (exact match) if configured
-        if getattr(self.config, "include_projects", None):
-            include_set = set(self.config.include_projects)
+        # Apply include/exclude project filtering (supports wildcards)
+        include_pats = getattr(self.config, "include_projects", None)
+        exclude_pats = getattr(self.config, "exclude_projects", None)
+        if include_pats or exclude_pats:
+            from gerrit_clone.models import filter_projects
+
             before_count = len(unique_projects)
-            unique_projects = [p for p in unique_projects if p.name in include_set]
+            unique_projects = filter_projects(
+                unique_projects,
+                include_patterns=include_pats or None,
+                exclude_patterns=exclude_pats or None,
+            )
             after_count = len(unique_projects)
+            filter_desc_parts: list[str] = []
+            if include_pats:
+                filter_desc_parts.append(f"include={sorted(include_pats)}")
+            if exclude_pats:
+                filter_desc_parts.append(f"exclude={sorted(exclude_pats)}")
             logger.debug(
-                f"Inclusion filter active: kept {after_count}/{before_count} projects "
-                f"({sorted(list(include_set))})"
+                f"Project filter active: kept {after_count}/{before_count} projects "
+                f"({', '.join(filter_desc_parts)})"
             )
 
         # Update project name index early
@@ -126,9 +138,12 @@ class CloneManager:
             sample_items = sorted(parent_children.items())[:5]
             logger.debug(f"Parent sample (up to 5): {sample_items}")
 
+        has_filters = getattr(self.config, "include_projects", None) or getattr(
+            self.config, "exclude_projects", None
+        )
         logger.debug(
-            f"Starting bulk clone of {len(unique_projects)} projects (include filter applied)"
-            if getattr(self.config, "include_projects", None)
+            f"Starting bulk clone of {len(unique_projects)} projects (project filter applied)"
+            if has_filters
             else f"Starting bulk clone of {len(unique_projects)} projects"
         )
 

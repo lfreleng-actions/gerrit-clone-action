@@ -531,7 +531,9 @@ Options:
   --skip-archived / --include-archived
                                   Skip archived and inactive repositories
                                   [default: skip-archived]
-  --include-project TEXT          Restrict cloning to specific project(s)
+  --include-projects TEXT         Restrict cloning to specific project(s)
+  --exclude-projects TEXT         Exclude project(s); supports wildcard and
+                                  hierarchical (path-style) matching
   --discovery-method TEXT         Method for discovering projects: ssh (default),
                                   http (REST API), or both (union of both methods
                                   with SSH metadata preferred)
@@ -1133,7 +1135,8 @@ jobs:
 | `use-gh-cli`           | No       | `false`               | Use GitHub CLI (`gh`) for cloning instead of git                                                     |
 | `output-path`          | No       | `.`                   | Clone destination (auto-creates `./{SERVER}/` or `./github.com/{ORG}/` structure when not specified) |
 | `skip-archived`        | No       | `true`                | Skip archived and inactive repositories                                                              |
-| `include-project`      | No       |                       | Restrict cloning to specific project(s) (comma-separated)                                            |
+| `include-projects`     | No       |                       | Restrict to specific project(s); comma/space-separated, wildcard and hierarchical patterns           |
+| `exclude-projects`     | No       |                       | Exclude specific project(s); comma/space-separated, wildcard and hierarchical patterns               |
 | `ssh-debug`            | No       | `false`               | Enable verbose SSH (-vvv) for troubleshooting                                                        |
 | `allow-nested-git`     | No       | `true`                | Allow nested git working trees                                                                       |
 | `nested-protection`    | No       | `true`                | Auto-add nested child repo paths to parent .git/info/exclude                                         |

@@ -212,6 +212,9 @@ def _convert_to_projects(repos: list[dict[str, Any]]) -> list[Project]:
 def _apply_filters(projects: list[Project], config: Config) -> list[Project]:
     """Apply configuration filters to project list.
 
+    Supports shell-style wildcards (``*``, ``?``, ``[seq]``) and
+    hierarchical matching for both include and exclude patterns.
+
     Args:
         projects: List of projects to filter
         config: Configuration with filter settings
@@ -221,12 +224,26 @@ def _apply_filters(projects: list[Project], config: Config) -> list[Project]:
     """
     filtered = projects
 
-    # Filter by include_projects if specified
-    if config.include_projects:
-        filtered = [p for p in filtered if p.name in config.include_projects]
+    # Apply include/exclude project filtering (supports wildcards)
+    include_pats = getattr(config, "include_projects", None)
+    exclude_pats = getattr(config, "exclude_projects", None)
+    if include_pats or exclude_pats:
+        from gerrit_clone.models import filter_projects
+
+        before_count = len(filtered)
+        filtered = filter_projects(
+            filtered,
+            include_patterns=include_pats or None,
+            exclude_patterns=exclude_pats or None,
+        )
+        parts: list[str] = []
+        if include_pats:
+            parts.append(f"include={sorted(include_pats)}")
+        if exclude_pats:
+            parts.append(f"exclude={sorted(exclude_pats)}")
         logger.debug(
-            f"Filtered to {len(filtered)} repositories matching "
-            f"include list: {config.include_projects}"
+            f"Project filter: kept {len(filtered)}/{before_count} repositories "
+            f"({', '.join(parts)})"
         )
 
     # Filter archived repositories if skip_archived is True

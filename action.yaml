@@ -55,10 +55,17 @@ inputs:
     description: "Skip archived/read-only repositories"
     required: false
     default: "true"
-  include-project:
+  include-projects:
     description: >-
-      Restrict cloning to specific project(s). Use comma-separated list for
-      multiple projects.
+      Restrict cloning to specific project(s). Supports shell-style wildcards
+      (*, ?, [seq]), hierarchical matching (e.g. 'ccsdk' includes ccsdk/apps),
+      and comma or space-separated lists.
+    required: false
+  exclude-projects:
+    description: >-
+      Exclude specific project(s) from cloning. Applied after include filters.
+      Supports shell-style wildcards (*, ?, [seq]), hierarchical matching,
+      and comma or space-separated lists.
     required: false
   ssh-debug:
     description: >-
@@ -384,6 +391,9 @@ runs:
     - name: "Clone repositories"
       id: clone
       shell: bash
+      env:
+        INPUT_INCLUDE_PROJECTS: ${{ inputs.include-projects }}
+        INPUT_EXCLUDE_PROJECTS: ${{ inputs.exclude-projects }}
       run: |
         # Use action-managed SSH agent socket if it exists; otherwise,
         # fall back to any existing SSH_AUTH_SOCK on the runner so that
@@ -558,14 +568,30 @@ runs:
           cmd+=(--config-file "${{ inputs.config-file }}")
         fi
 
-        # Add include-project options (supports multiple)
-        if [ -n "${{ inputs.include-project }}" ]; then
-          IFS=',' read -ra PROJECTS \
-            <<< "${{ inputs.include-project }}"
+        # Add include-projects options (supports multiple)
+        # Use env var to avoid shell injection from ${{ }} in
+        # command substitutions; normalize commas to spaces.
+        if [ -n "$INPUT_INCLUDE_PROJECTS" ]; then
+          read -ra PROJECTS \
+            <<< "$(echo "$INPUT_INCLUDE_PROJECTS" | tr ',' ' ')"
           for project in "${PROJECTS[@]}"; do
             project=$(echo "$project" | xargs)
             if [ -n "$project" ]; then
-              cmd+=(--include-project "$project")
+              cmd+=(--include-projects "$project")
+            fi
+          done
+        fi
+
+        # Add exclude-projects options (supports multiple)
+        # Use env var to avoid shell injection from ${{ }} in
+        # command substitutions; normalize commas to spaces.
+        if [ -n "$INPUT_EXCLUDE_PROJECTS" ]; then
+          read -ra EXCLUDES \
+            <<< "$(echo "$INPUT_EXCLUDE_PROJECTS" | tr ',' ' ')"
+          for project in "${EXCLUDES[@]}"; do
+            project=$(echo "$project" | xargs)
+            if [ -n "$project" ]; then
+              cmd+=(--exclude-projects "$project")
             fi
           done
         fi

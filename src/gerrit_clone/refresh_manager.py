@@ -48,6 +48,8 @@ class RefreshManager:
         dry_run: bool = False,
         force: bool = False,
         recursive: bool = True,
+        include_projects: list[str] | None = None,
+        exclude_projects: list[str] | None = None,
     ) -> None:
         """Initialize refresh manager.
 
@@ -66,6 +68,12 @@ class RefreshManager:
             dry_run: Show what would be refreshed without executing
             force: Force refresh by fixing detached HEAD, upstream tracking, and stashing changes
             recursive: Recursively discover repositories in subdirectories (default: True)
+            include_projects: Optional list of project name patterns to include.
+                Supports shell-style wildcards (*, ?, [seq]) and hierarchical
+                matching.  Comma and space-separated values are accepted.
+            exclude_projects: Optional list of project name patterns to exclude.
+                Applied after include filters.  Same pattern syntax as
+                include_projects.
         """
         self.config = config
         self.retry_policy = retry_policy or RetryPolicy()
@@ -80,6 +88,8 @@ class RefreshManager:
         self.dry_run = dry_run
         self.force = force
         self.recursive = recursive
+        self.include_projects = include_projects
+        self.exclude_projects = exclude_projects
 
         # Determine thread count
         if threads is not None:
@@ -156,7 +166,61 @@ class RefreshManager:
         # 1. Deterministic processing order across runs
         # 2. Better progress tracking (alphabetical display)
         # 3. Easier debugging and log analysis
-        return sorted(repositories)
+        sorted_repos = sorted(repositories)
+
+        # Apply include/exclude project filtering using relative paths
+        # from base_path as project names (matching Gerrit's hierarchical
+        # naming convention, e.g. "testsuite/pythonsdk-tests").
+        if self.include_projects or self.exclude_projects:
+            from gerrit_clone.models import match_project_pattern, normalize_project_list
+
+            include_pats = normalize_project_list(self.include_projects) if self.include_projects else []
+            exclude_pats = normalize_project_list(self.exclude_projects) if self.exclude_projects else []
+
+            before_count = len(sorted_repos)
+            filtered: list[Path] = []
+            base_resolved = base_path.resolve()
+            for repo_path in sorted_repos:
+                # Derive a project name from the path relative to base_path
+                # Use as_posix() for consistent forward-slash separators
+                # matching Gerrit's hierarchical naming convention.
+                try:
+                    rel = repo_path.relative_to(base_resolved)
+                    if rel == Path("."):
+                        # repo is exactly at base_path; use directory
+                        # name so filters can match it.
+                        project_name = repo_path.name
+                    else:
+                        project_name = rel.as_posix()
+                except ValueError:
+                    # Fallback: use just the directory name
+                    project_name = repo_path.name
+
+                # Apply include filter (if specified, only keep matches)
+                if include_pats:
+                    if not any(match_project_pattern(project_name, p) for p in include_pats):
+                        continue
+
+                # Apply exclude filter
+                if exclude_pats:
+                    if any(match_project_pattern(project_name, p) for p in exclude_pats):
+                        continue
+
+                filtered.append(repo_path)
+
+            after_count = len(filtered)
+            filter_desc: list[str] = []
+            if include_pats:
+                filter_desc.append(f"include={sorted(include_pats)}")
+            if exclude_pats:
+                filter_desc.append(f"exclude={sorted(exclude_pats)}")
+            logger.debug(
+                f"Project filter: kept {after_count}/{before_count} repositories "
+                f"({', '.join(filter_desc)})"
+            )
+            return filtered
+
+        return sorted_repos
 
     def refresh_repositories(
         self, base_path: Path, repo_paths: list[Path] | None = None
@@ -451,6 +515,8 @@ def refresh_repositories(
     strategy: str = "merge",
     filter_gerrit_only: bool = True,
     threads: int | None = None,
+    include_projects: list[str] | None = None,
+    exclude_projects: list[str] | None = None,
     exit_on_error: bool = False,
     dry_run: bool = False,
     force: bool = False,
@@ -471,6 +537,8 @@ def refresh_repositories(
         strategy: Git pull strategy ('merge' or 'rebase')
         filter_gerrit_only: Only refresh repositories with Gerrit remotes
         threads: Number of concurrent threads (None = auto-detect)
+        include_projects: Optional list of project name patterns to include
+        exclude_projects: Optional list of project name patterns to exclude
         exit_on_error: Exit immediately on first error
         dry_run: Show what would be refreshed without executing
         force: Force refresh by fixing detached HEAD, upstream tracking, and stashing changes
@@ -489,6 +557,8 @@ def refresh_repositories(
         strategy=strategy,
         filter_gerrit_only=filter_gerrit_only,
         threads=threads,
+        include_projects=include_projects,
+        exclude_projects=exclude_projects,
         exit_on_error=exit_on_error,
         dry_run=dry_run,
         force=force,

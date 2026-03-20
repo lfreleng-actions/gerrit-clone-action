@@ -1048,38 +1048,51 @@ class MirrorManager:
 
 
 def filter_projects_by_hierarchy(
-    projects: list[Project], filter_names: list[str]
+    projects: list[Project],
+    filter_names: list[str],
+    exclude_patterns: list[str] | None = None,
 ) -> list[Project]:
-    """Filter projects based on hierarchical names.
+    """Filter projects using include/exclude patterns with wildcard support.
 
-    If a filter name like 'ccsdk' is provided, it matches:
-    - Exact: 'ccsdk'
-    - Children: 'ccsdk/apps', 'ccsdk/features', etc.
+    Include patterns use hierarchical matching — a plain name like ``ccsdk``
+    matches both the exact project ``ccsdk`` *and* any child such as
+    ``ccsdk/apps``.  Shell-style wildcards (``*``, ``?``, ``[seq]``) are
+    also supported (e.g. ``*sdk*`` matches ``ccsdk`` and ``pythonsdk-tests``).
+
+    Exclude patterns are applied **after** inclusion and use the same
+    matching rules.  A project that matches any exclude pattern is removed
+    regardless of whether it matched an include pattern.
 
     Args:
-        projects: List of all projects
-        filter_names: List of project name prefixes to include
+        projects: List of all projects.
+        filter_names: List of project name patterns to include.
+            An empty list means "include everything".
+        exclude_patterns: Optional list of project name patterns to exclude.
 
     Returns:
-        Filtered list of projects
+        Filtered list of projects.
     """
-    if not filter_names:
+    from gerrit_clone.models import filter_projects as _filter_projects
+
+    include = filter_names if filter_names else None
+    exclude = exclude_patterns if exclude_patterns else None
+
+    if not include and not exclude:
         return projects
 
-    filtered: list[Project] = []
-    for project in projects:
-        for filter_name in filter_names:
-            # Exact match
-            if project.name == filter_name:
-                filtered.append(project)
-                break
-            # Hierarchical match (must start with filter_name/)
-            elif project.name.startswith(f"{filter_name}/"):
-                filtered.append(project)
-                break
+    filtered = _filter_projects(
+        projects,
+        include_patterns=include,
+        exclude_patterns=exclude,
+    )
 
+    parts: list[str] = []
+    if include:
+        parts.append(f"include={filter_names}")
+    if exclude:
+        parts.append(f"exclude={exclude_patterns}")
     logger.info(
         f"Filtered {len(projects)} projects to {len(filtered)} "
-        f"based on hierarchy filters: {filter_names}"
+        f"({', '.join(parts)})"
     )
     return filtered

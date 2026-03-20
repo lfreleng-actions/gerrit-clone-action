@@ -44,6 +44,7 @@ from gerrit_clone.models import (
     RefreshBatchResult,
     RetryPolicy,
     SourceType,
+    normalize_project_list,
 )
 from gerrit_clone.netrc import (
     NetrcParseError,
@@ -213,10 +214,26 @@ def clone(
         help="Skip archived/read-only repositories",
         envvar="GERRIT_SKIP_ARCHIVED",
     ),
-    include_project: list[str] = typer.Option(
+    include_projects: list[str] | None = typer.Option(
         None,
-        "--include-project",
-        help="Restrict cloning to specific project(s). Repeat for multiple. Exact match required.",
+        "--include-projects",
+        "--include-project",  # Backward-compatible alias
+        help=(
+            "Restrict cloning to specific project(s). Supports shell-style wildcards "
+            "(*, ?, [seq]), hierarchical matching (e.g. 'ccsdk' includes ccsdk/apps), "
+            "and comma or space-separated lists. Repeat for multiple patterns."
+        ),
+        envvar=None,
+    ),
+    exclude_projects: list[str] | None = typer.Option(
+        None,
+        "--exclude-projects",
+        "--exclude-project",  # Backward-compatible alias
+        help=(
+            "Exclude specific project(s) from cloning. Applied after include filters. "
+            "Supports shell-style wildcards (*, ?, [seq]), hierarchical matching, "
+            "and comma or space-separated lists. Repeat for multiple patterns."
+        ),
         envvar=None,
     ),
     ssh_debug: bool = typer.Option(
@@ -575,7 +592,8 @@ def clone(
         ssh_identity_file=ssh_identity_file,
         path=output_path,
         skip_archived=skip_archived,
-        include_project=include_project,
+        include_projects=include_projects,
+        exclude_projects=exclude_projects,
         ssh_debug=ssh_debug,
         allow_nested_git=allow_nested_git,
         nested_protection=nested_protection,
@@ -729,7 +747,8 @@ def clone(
                 config_file=config_file,
                 verbose=verbose,
                 quiet=quiet,
-                include_projects=include_project,
+                include_projects=include_projects,
+                exclude_projects=exclude_projects,
                 ssh_debug=ssh_debug,
                 exit_on_error=exit_on_error,
                 discovery_method=discovery_method_enum,
@@ -947,6 +966,7 @@ def _show_startup_banner(console: Console, config: Any) -> None:
         [
             f"Strict Host Check: [cyan]{config.strict_host_checking}[/cyan]",
             f"Include Filter: [cyan]{', '.join(config.include_projects) if getattr(config, 'include_projects', []) else '—'}[/cyan]",
+            f"Exclude Filter: [cyan]{', '.join(config.exclude_projects) if getattr(config, 'exclude_projects', []) else '—'}[/cyan]",
             f"SSH Debug: [cyan]{getattr(config, 'ssh_debug', False)}[/cyan]",
             f"Exit on Error: [cyan]{getattr(config, 'exit_on_error', False)}[/cyan]",
         ]
@@ -981,6 +1001,28 @@ def refresh(
         file_okay=False,
         dir_okay=True,
         resolve_path=False,
+    ),
+    include_projects: list[str] | None = typer.Option(
+        None,
+        "--include-projects",
+        "--include-project",  # Backward-compatible alias
+        help=(
+            "Restrict refresh to specific project(s). Supports shell-style wildcards "
+            "(*, ?, [seq]), hierarchical matching (e.g. 'ccsdk' includes ccsdk/apps), "
+            "and comma or space-separated lists. Repeat for multiple patterns."
+        ),
+        envvar=None,
+    ),
+    exclude_projects: list[str] | None = typer.Option(
+        None,
+        "--exclude-projects",
+        "--exclude-project",  # Backward-compatible alias
+        help=(
+            "Exclude specific project(s) from refresh. Applied after include filters. "
+            "Supports shell-style wildcards (*, ?, [seq]), hierarchical matching, "
+            "and comma or space-separated lists. Repeat for multiple patterns."
+        ),
+        envvar=None,
     ),
     threads: int | None = typer.Option(
         None,
@@ -1082,6 +1124,12 @@ def refresh(
         # Refresh ONAP repositories
         gerrit-clone refresh --output-path ~/repos/onap
 
+        # Refresh only specific projects (with wildcard)
+        gerrit-clone refresh --output-path ~/repos --include-projects "ccsdk*"
+
+        # Refresh all except a problematic repo
+        gerrit-clone refresh --exclude-projects "testsuite/pythonsdk-tests"
+
         # Fetch only (don't merge)
         gerrit-clone refresh --output-path ~/repos --fetch-only
 
@@ -1150,6 +1198,10 @@ def refresh(
         console.print(f"Skip Conflicts: [cyan]{skip_conflicts}[/cyan]")
         console.print(f"Auto Stash: [cyan]{auto_stash}[/cyan]")
         console.print(f"Filter: [cyan]{'Gerrit only' if filter_gerrit_only else 'All repos'}[/cyan]")
+        inc_display = normalize_project_list(list(include_projects)) if include_projects else []
+        exc_display = normalize_project_list(list(exclude_projects)) if exclude_projects else []
+        console.print(f"Include Filter: [cyan]{', '.join(inc_display) if inc_display else '—'}[/cyan]")
+        console.print(f"Exclude Filter: [cyan]{', '.join(exc_display) if exc_display else '—'}[/cyan]")
         console.print(f"Dry Run: [cyan]{dry_run}[/cyan]")
         console.print(f"Force: [cyan]{force}[/cyan]")
         console.print(f"Recursive: [cyan]{recursive}[/cyan]")
@@ -1172,6 +1224,8 @@ def refresh(
             dry_run=dry_run,
             force=force,
             recursive=recursive,
+            include_projects=include_projects if include_projects else None,
+            exclude_projects=exclude_projects if exclude_projects else None,
         )
 
         # Display results
@@ -1299,14 +1353,26 @@ def mirror(
         ),
         envvar="GITHUB_ORG",
     ),
-    projects: str | None = typer.Option(
+    include_projects: str | None = typer.Option(
         None,
-        "--projects",
+        "--include-projects",
+        "--projects",  # Backward-compatible alias
         help=(
-            "Filter operations to a subset of the Gerrit project "
-            "hierarchy (comma-separated, e.g., 'ccsdk, oom')"
+            "Include only matching projects. Supports shell-style wildcards "
+            "(*, ?, [seq]), hierarchical matching (e.g. 'ccsdk' includes ccsdk/apps), "
+            "and comma or space-separated lists."
         ),
         envvar="GERRIT_PROJECTS",
+    ),
+    exclude_projects_str: str | None = typer.Option(
+        None,
+        "--exclude-projects",
+        help=(
+            "Exclude matching projects. Applied after include filters. "
+            "Supports shell-style wildcards (*, ?, [seq]), hierarchical matching, "
+            "and comma or space-separated lists."
+        ),
+        envvar="GERRIT_EXCLUDE_PROJECTS",
     ),
     output_path: Path = typer.Option(
         Path("/tmp/gerrit-mirror"),
@@ -1494,36 +1560,44 @@ def mirror(
         # Mirror all projects to a GitHub org
         gerrit-clone mirror --server gerrit.onap.org --org myorg
 
-        # Mirror specific projects
-        gerrit-clone mirror --server gerrit.onap.org --org myorg \\
-          --projects "ccsdk, oom, cps"
+        # Mirror specific projects (renamed from --projects)
+        gerrit-clone mirror --server gerrit.onap.org --org myorg \
+          --include-projects "ccsdk, oom, cps"
+
+        # Exclude a problematic repository
+        gerrit-clone mirror --server gerrit.onap.org --org myorg \
+          --exclude-projects "testsuite/pythonsdk-tests"
+
+        # Combine include and exclude with wildcards
+        gerrit-clone mirror --server gerrit.onap.org --org myorg \
+          --include-projects "ccsdk, oom" --exclude-projects "*test*"
 
         # Recreate existing GitHub repos
-        gerrit-clone mirror --server gerrit.onap.org --org myorg \\
+        gerrit-clone mirror --server gerrit.onap.org --org myorg \
           --recreate --overwrite
 
         # Use HTTPS for cloning and include archived projects
-        gerrit-clone mirror --server gerrit.onap.org --org myorg \\
+        gerrit-clone mirror --server gerrit.onap.org --org myorg \
           --https --include-archived
 
         # Mirror without setting default branch on GitHub
-        gerrit-clone mirror --server gerrit.onap.org --org myorg \\
+        gerrit-clone mirror --server gerrit.onap.org --org myorg \
           --no-set-default-branch
 
         # Disable the post-sync default branch repair pass
-        gerrit-clone mirror --server gerrit.onap.org --org myorg \\
+        gerrit-clone mirror --server gerrit.onap.org --org myorg \
           --no-fix-default-branch
 
         # Use HTTP API for discovery (no SSH required)
-        gerrit-clone mirror --server gerrit.onap.org --org myorg \\
+        gerrit-clone mirror --server gerrit.onap.org --org myorg \
           --discovery-method http --https
 
         # Mirror with explicit HTTP credentials (highest priority)
-        gerrit-clone mirror --server gerrit.onap.org --org myorg \\
+        gerrit-clone mirror --server gerrit.onap.org --org myorg \
           --https --http-user myuser --http-password mypass
 
         # Mirror with credentials from specific .netrc file
-        gerrit-clone mirror --server gerrit.onap.org --org myorg \\
+        gerrit-clone mirror --server gerrit.onap.org --org myorg \
           --https --netrc-file ~/.netrc.gerrit
     """
     # Configure graceful interrupt handling for multi-threaded operations
@@ -1609,7 +1683,8 @@ def mirror(
             cli_args=cli_args_to_dict(
                 server=server,
                 org=org,
-                projects=projects,
+                include_projects=include_projects,
+                exclude_projects=exclude_projects_str,
                 output_path=str(output_path),
                 recreate=recreate,
                 overwrite=overwrite,
@@ -1651,17 +1726,25 @@ def mirror(
                 f"✓ Using specified organization: [cyan]{org}[/cyan]"
             )
 
-        # Parse project filters
-        project_filters: list[str] = []
-        if projects:
-            project_filters = [
-                p.strip() for p in projects.split(",") if p.strip()
-            ]
-            if not quiet:
-                console.print(
-                    f"📋 Project filters: "
-                    f"[cyan]{', '.join(project_filters)}[/cyan]"
-                )
+        # Parse project filters (include)
+        project_filters = normalize_project_list(
+            [include_projects] if include_projects else []
+        )
+        if project_filters and not quiet:
+            console.print(
+                f"📋 Include filters: "
+                f"[cyan]{', '.join(project_filters)}[/cyan]"
+            )
+
+        # Parse project filters (exclude)
+        exclude_filters = normalize_project_list(
+            [exclude_projects_str] if exclude_projects_str else []
+        )
+        if exclude_filters and not quiet:
+            console.print(
+                f"🚫 Exclude filters: "
+                f"[cyan]{', '.join(exclude_filters)}[/cyan]"
+            )
 
         # Build Gerrit configuration
         from gerrit_clone.models import Config
@@ -1709,10 +1792,12 @@ def mirror(
             console.print("[yellow]No projects found on Gerrit server[/yellow]")
             raise typer.Exit(0)
 
-        # Filter projects by hierarchy if specified
-        if project_filters:
+        # Filter projects by include/exclude patterns
+        if project_filters or exclude_filters:
             projects_to_mirror = filter_projects_by_hierarchy(
-                all_projects, project_filters
+                all_projects,
+                project_filters,
+                exclude_patterns=exclude_filters or None,
             )
         else:
             projects_to_mirror = all_projects

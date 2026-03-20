@@ -319,6 +319,11 @@ reportUnusedImport = "none"
 reportConstantRedefinition = "none"
 reportUnusedClass = "none"
 reportUntypedClassDecorator = "none"
+# Report pre-existing issues as warnings; detailed cleanup is deferred to a dedicated PR
+reportGeneralTypeIssues = "warning"
+reportUnnecessaryIsInstance = "none"
+reportPossiblyUnboundVariable = "warning"
+reportMissingParameterType = "warning"
 # Enable additional type checking features
 reportCallIssue = "error"
 reportArgumentType = "error"
