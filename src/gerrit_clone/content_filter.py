@@ -53,7 +53,11 @@ def match_file_pattern(file_path: str, pattern: str) -> bool:
     """
     if pattern.startswith("regex:"):
         regex = pattern[len("regex:") :]
-        return bool(re.search(regex, file_path))
+        try:
+            return bool(re.search(regex, file_path))
+        except re.error as exc:
+            logger.warning("Invalid regex pattern %r: %s", regex, exc)
+            return False
 
     # Normalize separators for matching
     normalized = file_path.replace("\\", "/")
@@ -72,17 +76,16 @@ def match_file_pattern(file_path: str, pattern: str) -> bool:
     # Also try matching just the filename or relative segments
     # e.g., pattern ".github/dependabot.yml" should match
     # "some/prefix/.github/dependabot.yml"
+    matched = False
     if "/" in pat:
         # Multi-component pattern: check if path ends with pattern
-        if normalized.endswith("/" + pat) or normalized == pat:
-            return True
+        matched = normalized.endswith("/" + pat) or normalized == pat
     else:
         # Single-component: match against any path segment
         parts = normalized.split("/")
-        if any(fnmatch.fnmatchcase(part, pat) for part in parts):
-            return True
+        matched = any(fnmatch.fnmatchcase(part, pat) for part in parts)
 
-    return False
+    return matched
 
 
 def normalize_file_patterns(raw: list[str]) -> list[str]:
@@ -150,7 +153,7 @@ def remove_files_from_bare_repo(
         timeout: Timeout in seconds for git operations.
 
     Returns:
-        List of file paths that were removed.
+        List of pattern arguments or file paths that were processed.
     """
     if not patterns:
         return []
@@ -195,7 +198,7 @@ def _remove_files_filter_repo(
             regex = pattern[len("regex:") :]
             cmd.extend(["--path-regex", regex, "--invert-paths"])
             applied.append(pattern)
-        elif "**" in pattern or "*" in pattern or "?" in pattern:
+        elif any(c in pattern for c in ("*", "?", "[", "]")):
             cmd.extend(["--path-glob", pattern, "--invert-paths"])
             applied.append(pattern)
         else:
@@ -221,12 +224,11 @@ def _remove_files_filter_repo(
             timeout=timeout,
         )
         if result.returncode != 0:
-            logger.error(
-                "git filter-repo failed for %s: %s",
-                repo_path.name,
-                result.stderr.strip(),
+            msg = (
+                f"git filter-repo failed for {repo_path.name}: {result.stderr.strip()}"
             )
-            return []
+            logger.error(msg)
+            raise RuntimeError(msg)
 
         logger.info(
             "Successfully filtered files from %s",
@@ -234,19 +236,15 @@ def _remove_files_filter_repo(
         )
         return applied
     except subprocess.TimeoutExpired:
-        logger.error(
-            "git filter-repo timed out for %s after %ds",
-            repo_path.name,
-            timeout,
-        )
-        return []
+        msg = f"git filter-repo timed out for {repo_path.name} after {timeout}s"
+        logger.error(msg)
+        raise RuntimeError(msg) from None
+    except RuntimeError:
+        raise
     except Exception as exc:
-        logger.error(
-            "git filter-repo error for %s: %s",
-            repo_path.name,
-            exc,
-        )
-        return []
+        msg = f"git filter-repo error for {repo_path.name}: {exc}"
+        logger.error(msg)
+        raise RuntimeError(msg) from exc
 
 
 def _list_tree_files(repo_path: Path, ref: str) -> list[str]:
@@ -286,7 +284,7 @@ def _remove_files_worktree(
     repo_path: Path,
     patterns: list[str],
     *,
-    timeout: int = 300,  # noqa: ARG001
+    timeout: int = 300,
 ) -> list[str]:
     """Remove files from branch tips using a temporary worktree.
 
@@ -319,7 +317,7 @@ def _remove_files_worktree(
             check=False,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=timeout,
         )
         if result.returncode != 0:
             logger.error(
@@ -378,7 +376,7 @@ def _remove_files_worktree(
                 ],
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=timeout,
                 check=True,
             )
 
@@ -393,12 +391,13 @@ def _remove_files_worktree(
                             worktree_dir,
                             "rm",
                             "-f",
+                            "--",
                             file_path,
                         ],
                         check=False,
                         capture_output=True,
                         text=True,
-                        timeout=30,
+                        timeout=timeout,
                     )
 
             # Commit the removal
@@ -407,6 +406,10 @@ def _remove_files_worktree(
                     "git",
                     "-C",
                     worktree_dir,
+                    "-c",
+                    "user.name=gerrit-clone",
+                    "-c",
+                    "user.email=gerrit-clone@noreply",
                     "commit",
                     "-m",
                     "Remove filtered files for platform sync\n\n"
@@ -418,16 +421,21 @@ def _remove_files_worktree(
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=timeout,
             )
 
-            if result.returncode == 0:
-                all_removed.extend(files_to_remove)
-                logger.debug(
-                    "Committed removal of %d files on branch '%s'",
-                    len(files_to_remove),
-                    branch,
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"git commit failed on branch '{branch}' in "
+                    f"{repo_path.name}: {result.stderr.strip()}"
                 )
+
+            all_removed.extend(files_to_remove)
+            logger.debug(
+                "Committed removal of %d files on branch '%s'",
+                len(files_to_remove),
+                branch,
+            )
 
         except subprocess.CalledProcessError as exc:
             logger.warning(
@@ -451,20 +459,20 @@ def _remove_files_worktree(
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=timeout,
             )
             if Path(worktree_dir).exists():
                 shutil.rmtree(worktree_dir, ignore_errors=True)
 
-    if all_removed:
-        unique_removed = sorted(set(all_removed))
+    unique_removed = sorted(set(all_removed))
+    if unique_removed:
         logger.info(
             "Removed %d unique file(s) from %s across %d branch(es)",
             len(unique_removed),
             repo_path.name,
             len(branches),
         )
-    return all_removed
+    return unique_removed
 
 
 # ---------------------------------------------------------------------------
@@ -477,7 +485,7 @@ def _generate_replacement_string(original: str) -> str:
 
     The replacement is:
     - Deterministic (same input always produces the same output)
-    - A different length from the original (to avoid pattern matching)
+    - A different length from typical token lengths (to avoid pattern matching)
     - Prefixed with ``REDACTED_`` for clarity
     - NOT decodable back to the original value
 
@@ -492,7 +500,7 @@ def _generate_replacement_string(original: str) -> str:
     # Use SHA-256 with a salt to generate a deterministic but
     # non-reversible replacement.  Truncate to 12 hex chars (48 bits)
     # which is enough to be unique within a repo while being a
-    # clearly different length from typical tokens.
+    # clearly different from typical token lengths.
     digest = hashlib.sha256(f"gerrit-clone-redact:{original}".encode()).hexdigest()[:12]
     return f"REDACTED_{digest}"
 
@@ -542,12 +550,29 @@ def replace_tokens_in_history(
             delete=False,
         ) as tmp:
             for token in tokens:
+                # Validate token: reject values that would corrupt
+                # the replacement file format or produce malformed
+                # lines.
+                if "\n" in token or "\r" in token or "\0" in token:
+                    logger.warning(
+                        "Skipping token containing newline/NUL (sha256:%s)",
+                        hashlib.sha256(token.encode()).hexdigest()[:12],
+                    )
+                    continue
+                if "==>" in token:
+                    logger.warning(
+                        "Skipping token containing '==>' delimiter (sha256:%s)",
+                        hashlib.sha256(token.encode()).hexdigest()[:12],
+                    )
+                    continue
+
                 replacement = _generate_replacement_string(token)
                 # git filter-repo format: literal==>replacement
                 tmp.write(f"{token}==>{replacement}\n")
+                fingerprint = hashlib.sha256(token.encode()).hexdigest()[:12]
                 logger.debug(
-                    "Token replacement: %s... → %s",
-                    token[:8] + "..." if len(token) > 8 else token,
+                    "Token replacement: [sha256:%s] → %s",
+                    fingerprint,
                     replacement,
                 )
             replacements_file = tmp.name
@@ -663,27 +688,45 @@ def apply_content_filters(
             errors.append(msg)
 
     # Step 2: Replace tokens if this project matches
+    # Aggregate tokens from all matching patterns so filter-repo runs once.
     if git_filter_projects:
+        aggregated_tokens: list[str] = []
+        matched_patterns: list[str] = []
         for pattern, token_list in git_filter_projects.items():
             if match_project_pattern(project_name, pattern):
-                logger.info(
-                    "Applying token replacement to %s (matched filter pattern '%s')",
-                    project_name,
-                    pattern,
+                matched_patterns.append(pattern)
+                aggregated_tokens.extend(token_list)
+
+        if aggregated_tokens:
+            # Deduplicate while preserving order
+            seen: set[str] = set()
+            unique_tokens: list[str] = []
+            for t in aggregated_tokens:
+                if t not in seen:
+                    seen.add(t)
+                    unique_tokens.append(t)
+
+            logger.info(
+                "Applying token replacement to %s "
+                "(matched %d filter pattern(s): %s, %d unique token(s))",
+                project_name,
+                len(matched_patterns),
+                matched_patterns,
+                len(unique_tokens),
+            )
+            try:
+                success = replace_tokens_in_history(
+                    repo_path,
+                    unique_tokens,
+                    timeout=timeout,
                 )
-                try:
-                    success = replace_tokens_in_history(
-                        repo_path,
-                        token_list,
-                        timeout=timeout,
-                    )
-                    if not success:
-                        msg = f"Token replacement failed for {project_name}"
-                        errors.append(msg)
-                except RuntimeError as exc:
-                    msg = str(exc)
-                    logger.error(msg)
+                if not success:
+                    msg = f"Token replacement failed for {project_name}"
                     errors.append(msg)
+            except RuntimeError as exc:
+                msg = str(exc)
+                logger.error(msg)
+                errors.append(msg)
 
     if errors:
         return False, "; ".join(errors)

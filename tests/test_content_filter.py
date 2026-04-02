@@ -5,14 +5,16 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from gerrit_clone.content_filter import (
     _generate_replacement_string,
+    _remove_files_filter_repo,
     apply_content_filters,
     match_file_pattern,
     normalize_file_patterns,
@@ -425,6 +427,142 @@ class TestReplaceTokensInHistory:
     def test_empty_tokens_succeeds(self, tmp_path: Path) -> None:
         """Empty token list returns True without doing anything."""
         assert replace_tokens_in_history(tmp_path, []) is True
+
+    def test_successful_token_replacement(self, repo_with_token: Path) -> None:
+        """Token is removed from all history when filter-repo is available."""
+        if not shutil.which("git-filter-repo"):
+            pytest.skip("git-filter-repo not installed")
+
+        token = "fake-test-token-abcdefghij1234"
+        result = replace_tokens_in_history(repo_with_token, [token])
+        assert result is True
+
+        # Verify the token no longer appears in any commit content
+        log_result = subprocess.run(
+            ["git", "-C", str(repo_with_token), "log", "--all", "-p"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert token not in log_result.stdout
+        assert "REDACTED_" in log_result.stdout
+
+
+class TestRemoveFilesFilterRepo:
+    """Unit tests for the git filter-repo code path."""
+
+    @patch("gerrit_clone.content_filter._check_git_filter_repo", return_value=True)
+    @patch("gerrit_clone.content_filter.subprocess.run")
+    def test_glob_pattern_builds_path_glob_flag(
+        self,
+        mock_run: MagicMock,
+        _mock_check: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Glob patterns produce --path-glob --invert-paths args."""
+        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        repo = tmp_path / "test.git"
+        repo.mkdir()
+
+        result = _remove_files_filter_repo(repo, ["*.pyc"])
+
+        assert result == ["*.pyc"]
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert "--path-glob" in cmd
+        assert "*.pyc" in cmd
+        assert "--invert-paths" in cmd
+
+    @patch("gerrit_clone.content_filter._check_git_filter_repo", return_value=True)
+    @patch("gerrit_clone.content_filter.subprocess.run")
+    def test_regex_pattern_builds_path_regex_flag(
+        self,
+        mock_run: MagicMock,
+        _mock_check: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Regex patterns produce --path-regex --invert-paths args."""
+        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        repo = tmp_path / "test.git"
+        repo.mkdir()
+
+        result = _remove_files_filter_repo(repo, [r"regex:\.pyc$"])
+
+        assert result == [r"regex:\.pyc$"]
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert "--path-regex" in cmd
+        assert r"\.pyc$" in cmd
+        assert "--invert-paths" in cmd
+
+    @patch("gerrit_clone.content_filter._check_git_filter_repo", return_value=True)
+    @patch("gerrit_clone.content_filter.subprocess.run")
+    def test_exact_path_builds_path_flag(
+        self,
+        mock_run: MagicMock,
+        _mock_check: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Exact path patterns produce --path --invert-paths args."""
+        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        repo = tmp_path / "test.git"
+        repo.mkdir()
+
+        result = _remove_files_filter_repo(
+            repo,
+            [".github/dependabot.yml"],
+        )
+
+        assert result == [".github/dependabot.yml"]
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert "--path" in cmd
+        idx = cmd.index("--path")
+        assert cmd[idx + 1] == ".github/dependabot.yml"
+        assert "--invert-paths" in cmd
+
+    @patch("gerrit_clone.content_filter._check_git_filter_repo", return_value=True)
+    @patch("gerrit_clone.content_filter.subprocess.run")
+    def test_mixed_patterns_combined_in_single_command(
+        self,
+        mock_run: MagicMock,
+        _mock_check: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Multiple pattern types are combined into one command."""
+        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        repo = tmp_path / "test.git"
+        repo.mkdir()
+
+        patterns = ["exact.txt", "*.log", r"regex:\.bak$"]
+        result = _remove_files_filter_repo(repo, patterns)
+
+        assert result == patterns
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert "--path" in cmd
+        assert "--path-glob" in cmd
+        assert "--path-regex" in cmd
+
+    @patch("gerrit_clone.content_filter._check_git_filter_repo", return_value=True)
+    @patch("gerrit_clone.content_filter.subprocess.run")
+    def test_failure_raises_runtime_error(
+        self,
+        mock_run: MagicMock,
+        _mock_check: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Non-zero exit from filter-repo raises RuntimeError."""
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stderr="fatal: error",
+            stdout="",
+        )
+        repo = tmp_path / "test.git"
+        repo.mkdir()
+
+        with pytest.raises(RuntimeError, match="git filter-repo failed"):
+            _remove_files_filter_repo(repo, ["*.pyc"])
 
 
 class TestApplyContentFilters:
