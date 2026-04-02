@@ -24,6 +24,10 @@ from gerrit_clone import __version__
 from gerrit_clone.clone_manager import clone_repositories
 from gerrit_clone.concurrent_utils import handle_sigint_gracefully
 from gerrit_clone.config import ConfigurationError, load_config
+from gerrit_clone.content_filter import (
+    normalize_file_patterns,
+    parse_git_filter_spec,
+)
 from gerrit_clone.error_codes import (
     DiscoveryError,
     ExitCode,
@@ -578,52 +582,52 @@ def clone(
 
         # Prepare CLI arguments for logging
         cli_args = cli_args_to_dict(
-        host=host,
-        source_type=detected_source_type.value,
-        github_token="<redacted>" if github_token else None,
-        github_org=detected_github_org,
-        use_gh_cli=use_gh_cli,
-        no_refresh=no_refresh,
-        force=force,
-        fetch_only=fetch_only,
-        skip_conflicts=skip_conflicts,
-        port=port,
-        base_url=base_url,
-        ssh_user=ssh_user,
-        ssh_identity_file=ssh_identity_file,
-        path=output_path,
-        skip_archived=skip_archived,
-        include_projects=include_projects,
-        exclude_projects=exclude_projects,
-        ssh_debug=ssh_debug,
-        allow_nested_git=allow_nested_git,
-        nested_protection=nested_protection,
-        move_conflicting=move_conflicting,
-        threads=threads,
-        depth=depth,
-        branch=branch,
-        mirror=mirror,
-        use_https=use_https,
-        keep_remote_protocol=keep_remote_protocol,
-        strict_host_checking=strict_host_checking,
-        clone_timeout=clone_timeout,
-        retry_attempts=retry_attempts,
-        retry_base_delay=retry_base_delay,
-        retry_factor=retry_factor,
-        retry_max_delay=retry_max_delay,
-        manifest_filename=manifest_filename,
-        config_file=config_file,
-        verbose=verbose,
-        quiet=quiet,
-        cleanup=cleanup,
-        exit_on_error=exit_on_error,
-        log_file=log_file,
-        disable_log_file=disable_log_file,
-        log_level=log_level,
-        no_netrc=no_netrc,
-        netrc_file=str(netrc_file) if netrc_file else None,
-        netrc_optional=netrc_optional,
-    )
+            host=host,
+            source_type=detected_source_type.value,
+            github_token="<redacted>" if github_token else None,
+            github_org=detected_github_org,
+            use_gh_cli=use_gh_cli,
+            no_refresh=no_refresh,
+            force=force,
+            fetch_only=fetch_only,
+            skip_conflicts=skip_conflicts,
+            port=port,
+            base_url=base_url,
+            ssh_user=ssh_user,
+            ssh_identity_file=ssh_identity_file,
+            path=output_path,
+            skip_archived=skip_archived,
+            include_projects=include_projects,
+            exclude_projects=exclude_projects,
+            ssh_debug=ssh_debug,
+            allow_nested_git=allow_nested_git,
+            nested_protection=nested_protection,
+            move_conflicting=move_conflicting,
+            threads=threads,
+            depth=depth,
+            branch=branch,
+            mirror=mirror,
+            use_https=use_https,
+            keep_remote_protocol=keep_remote_protocol,
+            strict_host_checking=strict_host_checking,
+            clone_timeout=clone_timeout,
+            retry_attempts=retry_attempts,
+            retry_base_delay=retry_base_delay,
+            retry_factor=retry_factor,
+            retry_max_delay=retry_max_delay,
+            manifest_filename=manifest_filename,
+            config_file=config_file,
+            verbose=verbose,
+            quiet=quiet,
+            cleanup=cleanup,
+            exit_on_error=exit_on_error,
+            log_file=log_file,
+            disable_log_file=disable_log_file,
+            log_level=log_level,
+            no_netrc=no_netrc,
+            netrc_file=str(netrc_file) if netrc_file else None,
+            netrc_optional=netrc_optional,
+        )
 
         # Set up unified logging system (file + console)
         file_logger, error_collector = init_logging(
@@ -641,7 +645,11 @@ def clone(
         # Set log_file_path for error handling compatibility
         from gerrit_clone.file_logging import get_default_log_path  # noqa: PLC0415
 
-        log_file_path = log_file if log_file else get_default_log_path(host, Path(output_path) if output_path else None)
+        log_file_path = (
+            log_file
+            if log_file
+            else get_default_log_path(host, Path(output_path) if output_path else None)
+        )
 
         # Handle credential resolution for HTTP authentication
         # Priority: 1. CLI arguments (--http-user/--http-password)
@@ -711,7 +719,10 @@ def clone(
             raise typer.Exit(ExitCode.CONFIGURATION_ERROR) from None
 
         # Auto-adjust discovery method for GitHub
-        if detected_source_type == SourceType.GITHUB and discovery_method_enum not in [DiscoveryMethod.GITHUB_API, DiscoveryMethod.HTTP]:
+        if detected_source_type == SourceType.GITHUB and discovery_method_enum not in [
+            DiscoveryMethod.GITHUB_API,
+            DiscoveryMethod.HTTP,
+        ]:
             discovery_method_enum = DiscoveryMethod.GITHUB_API
             if not quiet:
                 console.print(
@@ -1146,15 +1157,14 @@ def refresh(
 
     # Validate mutually exclusive options
     if verbose and quiet:
-        console.print(
-            "[red]Error:[/red] --verbose and --quiet cannot "
-            "be used together"
-        )
+        console.print("[red]Error:[/red] --verbose and --quiet cannot be used together")
         raise typer.Exit(ExitCode.CONFIGURATION_ERROR)
 
     # Validate strategy
     if strategy not in ("merge", "rebase"):
-        console.print(f"[red]❌ Invalid pull strategy: {strategy}. Must be 'merge' or 'rebase'.[/red]")
+        console.print(
+            f"[red]❌ Invalid pull strategy: {strategy}. Must be 'merge' or 'rebase'.[/red]"
+        )
         raise typer.Exit(ExitCode.VALIDATION_ERROR.value)
 
     # Display version
@@ -1189,16 +1199,28 @@ def refresh(
         console.print("[bold blue]Refresh Configuration[/bold blue]")
         console.print(f"Base Path: [cyan]{output_path}[/cyan]")
         console.print(f"Threads: [cyan]{threads or 'auto-detect'}[/cyan]")
-        console.print(f"Mode: [cyan]{'Fetch Only' if fetch_only else f'Pull ({strategy})'}[/cyan]")
+        console.print(
+            f"Mode: [cyan]{'Fetch Only' if fetch_only else f'Pull ({strategy})'}[/cyan]"
+        )
         console.print(f"Prune: [cyan]{prune}[/cyan]")
         console.print(f"Timeout: [cyan]{timeout}s[/cyan]")
         console.print(f"Skip Conflicts: [cyan]{skip_conflicts}[/cyan]")
         console.print(f"Auto Stash: [cyan]{auto_stash}[/cyan]")
-        console.print(f"Filter: [cyan]{'Gerrit only' if filter_gerrit_only else 'All repos'}[/cyan]")
-        inc_display = normalize_project_list(list(include_projects)) if include_projects else []
-        exc_display = normalize_project_list(list(exclude_projects)) if exclude_projects else []
-        console.print(f"Include Filter: [cyan]{', '.join(inc_display) if inc_display else '—'}[/cyan]")
-        console.print(f"Exclude Filter: [cyan]{', '.join(exc_display) if exc_display else '—'}[/cyan]")
+        console.print(
+            f"Filter: [cyan]{'Gerrit only' if filter_gerrit_only else 'All repos'}[/cyan]"
+        )
+        inc_display = (
+            normalize_project_list(list(include_projects)) if include_projects else []
+        )
+        exc_display = (
+            normalize_project_list(list(exclude_projects)) if exclude_projects else []
+        )
+        console.print(
+            f"Include Filter: [cyan]{', '.join(inc_display) if inc_display else '—'}[/cyan]"
+        )
+        console.print(
+            f"Exclude Filter: [cyan]{', '.join(exc_display) if exc_display else '—'}[/cyan]"
+        )
         console.print(f"Dry Run: [cyan]{dry_run}[/cyan]")
         console.print(f"Force: [cyan]{force}[/cyan]")
         console.print(f"Recursive: [cyan]{recursive}[/cyan]")
@@ -1242,15 +1264,21 @@ def refresh(
         # Determine exit code
         if result.failed_count > 0:
             if not quiet:
-                console.print(f"[yellow]⚠️  {result.failed_count} repositories failed to refresh[/yellow]")
+                console.print(
+                    f"[yellow]⚠️  {result.failed_count} repositories failed to refresh[/yellow]"
+                )
             raise typer.Exit(ExitCode.GENERAL_ERROR.value)
         elif result.conflicts_count > 0:
             if not quiet:
-                console.print(f"[yellow]⚠️  {result.conflicts_count} repositories have conflicts[/yellow]")
+                console.print(
+                    f"[yellow]⚠️  {result.conflicts_count} repositories have conflicts[/yellow]"
+                )
             raise typer.Exit(ExitCode.GENERAL_ERROR.value)
         else:
             if not quiet:
-                console.print("[green]✅ All repositories refreshed successfully![/green]")
+                console.print(
+                    "[green]✅ All repositories refreshed successfully![/green]"
+                )
             raise typer.Exit(ExitCode.SUCCESS.value)
 
     except KeyboardInterrupt:
@@ -1269,7 +1297,9 @@ def refresh(
         raise typer.Exit(ExitCode.GENERAL_ERROR.value) from e
 
 
-def _show_refresh_results(console: Console, result: RefreshBatchResult, dry_run: bool) -> None:
+def _show_refresh_results(
+    console: Console, result: RefreshBatchResult, dry_run: bool
+) -> None:
     """Display refresh results summary.
 
     Args:
@@ -1301,7 +1331,9 @@ def _show_refresh_results(console: Console, result: RefreshBatchResult, dry_run:
     console.print()
 
     if not dry_run and result.total_commits_pulled > 0:
-        console.print(f"Repositories Updated: [cyan]{result.total_commits_pulled}[/cyan]")
+        console.print(
+            f"Repositories Updated: [cyan]{result.total_commits_pulled}[/cyan]"
+        )
         console.print(f"Total Files Changed: [cyan]{result.total_files_changed}[/cyan]")
         console.print()
 
@@ -1311,10 +1343,14 @@ def _show_refresh_results(console: Console, result: RefreshBatchResult, dry_run:
         console.print("[bold yellow]Issues:[/bold yellow]")
         for r in failed_results[:10]:  # Show first 10
             status_emoji = "❌" if r.failed else "⚠️"
-            console.print(f"  {status_emoji} {r.project_name}: {r.error_message or r.status.value}")
+            console.print(
+                f"  {status_emoji} {r.project_name}: {r.error_message or r.status.value}"
+            )
 
         if len(failed_results) > 10:
-            console.print(f"  ... and {len(failed_results) - 10} more (see manifest for details)")
+            console.print(
+                f"  ... and {len(failed_results) - 10} more (see manifest for details)"
+            )
         console.print()
 
 
@@ -1431,8 +1467,7 @@ def mirror(
         None,
         "--github-token",
         help=(
-            "GitHub personal access token "
-            "(default: GITHUB_TOKEN environment variable)"
+            "GitHub personal access token (default: GITHUB_TOKEN environment variable)"
         ),
         envvar="GITHUB_TOKEN",
     ),
@@ -1543,6 +1578,29 @@ def mirror(
         ),
         envvar="GERRIT_FIX_DEFAULT_BRANCH",
     ),
+    remove_files: str | None = typer.Option(
+        None,
+        "--remove-files",
+        help=(
+            "Remove files matching patterns from cloned repositories "
+            "before pushing to GitHub. Supports shell-style globs "
+            "(e.g. '.github/dependabot.yml', '.github/**'), "
+            "regex (prefix with 'regex:'), and comma-separated lists."
+        ),
+        envvar="GERRIT_REMOVE_FILES",
+    ),
+    git_filter: str | None = typer.Option(
+        None,
+        "--git-filter",
+        help=(
+            "Replace tokens in git history for matching projects. "
+            "Format: 'project_pattern:token1,token2;project2:token3'. "
+            "Semicolons separate project entries. Colons separate "
+            "project patterns from comma-separated tokens. "
+            "Supports wildcards in project patterns."
+        ),
+        envvar="GERRIT_GIT_FILTER",
+    ),
 ) -> None:
     """Mirror repositories from a Gerrit server to GitHub.
 
@@ -1610,8 +1668,7 @@ def mirror(
         # Validate mutually exclusive options
         if verbose and quiet:
             console.print(
-                "[red]Error:[/red] --verbose and --quiet cannot "
-                "be used together"
+                "[red]Error:[/red] --verbose and --quiet cannot be used together"
             )
             raise typer.Exit(ExitCode.CONFIGURATION_ERROR)
 
@@ -1709,7 +1766,7 @@ def mirror(
         if org is None:
             if not quiet:
                 console.print(
-                    "ℹ\uFE0F No organization specified, "  # noqa: RUF001
+                    "ℹ\ufe0f No organization specified, "  # noqa: RUF001
                     "using default from GitHub token..."
                 )
             org, is_org = get_default_org_or_user(github_api)
@@ -1717,9 +1774,7 @@ def mirror(
                 org_type = "organization" if is_org else "user account"
                 console.print(f"✓ Using {org_type}: [cyan]{org}[/cyan]")
         elif not quiet:
-            console.print(
-                f"✓ Using specified organization: [cyan]{org}[/cyan]"
-            )
+            console.print(f"✓ Using specified organization: [cyan]{org}[/cyan]")
 
         # Parse project filters (include)
         project_filters = normalize_project_list(
@@ -1727,8 +1782,7 @@ def mirror(
         )
         if project_filters and not quiet:
             console.print(
-                f"📋 Include filters: "
-                f"[cyan]{', '.join(project_filters)}[/cyan]"
+                f"📋 Include filters: [cyan]{', '.join(project_filters)}[/cyan]"
             )
 
         # Parse project filters (exclude)
@@ -1737,9 +1791,14 @@ def mirror(
         )
         if exclude_filters and not quiet:
             console.print(
-                f"🚫 Exclude filters: "
-                f"[cyan]{', '.join(exclude_filters)}[/cyan]"
+                f"🚫 Exclude filters: [cyan]{', '.join(exclude_filters)}[/cyan]"
             )
+
+        # Parse content filters
+        remove_file_patterns = (
+            normalize_file_patterns([remove_files]) if remove_files else None
+        )
+        git_filter_projects = parse_git_filter_spec(git_filter) if git_filter else None
 
         # Build Gerrit configuration
         from gerrit_clone.models import Config  # noqa: PLC0415
@@ -1776,9 +1835,7 @@ def mirror(
         )
 
         if not quiet:
-            console.print(
-                f"🌐 Connecting to Gerrit: [cyan]{server}[/cyan]"
-            )
+            console.print(f"🌐 Connecting to Gerrit: [cyan]{server}[/cyan]")
 
         # Discover projects
         all_projects, discovery_stats = discover_projects(config)
@@ -1798,15 +1855,12 @@ def mirror(
             projects_to_mirror = all_projects
 
         if not projects_to_mirror:
-            console.print(
-                "[yellow]No projects matched the specified filters[/yellow]"
-            )
+            console.print("[yellow]No projects matched the specified filters[/yellow]")
             raise typer.Exit(0)
 
         if not quiet:
             console.print(
-                f"📦 Found [cyan]{len(projects_to_mirror)}[/cyan] "
-                f"projects to mirror"
+                f"📦 Found [cyan]{len(projects_to_mirror)}[/cyan] projects to mirror"
             )
 
         # Create mirror manager
@@ -1819,6 +1873,8 @@ def mirror(
             github_token=github_token,
             set_default_branch=set_default_branch,
             fix_default_branch=fix_default_branch,
+            remove_file_patterns=remove_file_patterns,
+            git_filter_projects=git_filter_projects,
         )
 
         # Start mirroring
@@ -1846,30 +1902,26 @@ def mirror(
             json.dump(batch_result.to_dict(), f, indent=2)
 
         if not quiet:
-            console.print(
-                f"✓ Manifest written to: [cyan]{manifest_path}[/cyan]"
-            )
+            console.print(f"✓ Manifest written to: [cyan]{manifest_path}[/cyan]")
 
         # Show summary
         if not quiet:
             console.print("[bold]Mirror Summary[/bold]")
-            console.print(f"  Discovery Method: [cyan]{discovery_enum.value.upper()}[/cyan]")
-            console.print(f"  Clone Protocol: [cyan]{'HTTPS' if use_https else 'SSH'}[/cyan]")
+            console.print(
+                f"  Discovery Method: [cyan]{discovery_enum.value.upper()}[/cyan]"
+            )
+            console.print(
+                f"  Clone Protocol: [cyan]{'HTTPS' if use_https else 'SSH'}[/cyan]"
+            )
             console.print(f"  Skip Archived: [cyan]{skip_archived}[/cyan]")
             console.print(f"  Total: {batch_result.total_count}")
-            console.print(
-                f"  [green]Succeeded: {batch_result.success_count}[/green]"
-            )
+            console.print(f"  [green]Succeeded: {batch_result.success_count}[/green]")
             if batch_result.total_count != batch_result.success_count:
-                console.print(
-                    f"  [red]Failed: {batch_result.failed_count}[/red]"
-                )
+                console.print(f"  [red]Failed: {batch_result.failed_count}[/red]")
                 console.print(
                     f"  [yellow]Skipped: {batch_result.skipped_count}[/yellow]"
                 )
-            console.print(
-                f"  Duration: {batch_result.duration_seconds:.1f}s"
-            )
+            console.print(f"  Duration: {batch_result.duration_seconds:.1f}s")
 
         # Close GitHub API client
         github_api.close()
@@ -1946,9 +1998,7 @@ def mirror(
     except Exception as e:
         console.print(f"[red]Unexpected Error:[/red] {e}")
         if file_logger:
-            file_logger.critical(
-                "Mirror crashed: %s", str(e), exc_info=True
-            )
+            file_logger.critical("Mirror crashed: %s", str(e), exc_info=True)
         if error_collector:
             error_collector.add_critical_error(
                 f"Mirror crashed: {type(e).__name__}: {e!s}",
@@ -2055,8 +2105,7 @@ def reset(
         # Validate mutually exclusive options
         if verbose and quiet:
             console.print(
-                "[red]Error:[/red] --verbose and --quiet cannot "
-                "be used together"
+                "[red]Error:[/red] --verbose and --quiet cannot be used together"
             )
             raise typer.Exit(ExitCode.CONFIGURATION_ERROR)
 
@@ -2140,9 +2189,7 @@ def reset(
                 )
 
                 if result.failed_deletions:
-                    console.print(
-                        f"⚠️  {len(result.failed_deletions)} deletions failed"
-                    )
+                    console.print(f"⚠️  {len(result.failed_deletions)} deletions failed")
 
                 if result.had_unsynchronized and compare:
                     console.print(
@@ -2198,9 +2245,7 @@ def reset(
     except Exception as e:
         console.print(f"\n[red]Error:[/red] {e}")
         if file_logger:
-            file_logger.critical(
-                "Reset crashed: %s", str(e), exc_info=True
-            )
+            file_logger.critical("Reset crashed: %s", str(e), exc_info=True)
         if error_collector:
             error_collector.add_critical_error(
                 f"Reset crashed: {type(e).__name__}: {e!s}",

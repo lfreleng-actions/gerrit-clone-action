@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from gerrit_clone.clone_manager import CloneManager
+from gerrit_clone.content_filter import apply_content_filters
 from gerrit_clone.git_utils import (
     get_current_branch,
     get_head_ref,
@@ -82,9 +83,7 @@ class MirrorResult:
             "local_path": str(self.local_path),
             "duration_s": round(self.duration_seconds, 3),
             "error": self.error_message,
-            "started_at": self.started_at.isoformat()
-            if self.started_at
-            else None,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat()
             if self.completed_at
             else None,
@@ -133,9 +132,7 @@ class MirrorBatchResult:
         """Convert to dictionary for JSON serialization."""
         return {
             "version": "1.0",
-            "generated_at": (
-                self.completed_at or datetime.now(UTC)
-            ).isoformat(),
+            "generated_at": (self.completed_at or datetime.now(UTC)).isoformat(),
             "github_org": self.github_org,
             "gerrit_host": self.gerrit_host,
             "total": self.total_count,
@@ -161,6 +158,8 @@ class MirrorManager:
         github_token: str | None = None,
         set_default_branch: bool = True,
         fix_default_branch: bool = True,
+        remove_file_patterns: list[str] | None = None,
+        git_filter_projects: dict[str, list[str]] | None = None,
     ) -> None:
         """Initialize mirror manager.
 
@@ -187,6 +186,12 @@ class MirrorManager:
                 candidate is set as the GitHub default.  Gerrit parent
                 projects (HEAD → ``refs/meta/config``, no branches) are
                 skipped with an informational message.
+            remove_file_patterns: Optional list of file glob patterns to
+                remove from all cloned repositories before pushing to
+                GitHub (e.g. ``["*.jar", "*.bin"]``).
+            git_filter_projects: Optional mapping of project names to
+                lists of token strings for ``git filter-repo`` replacement.
+                Only the specified projects are filtered.
         """
         self.config = config
         self.github_api = github_api
@@ -197,6 +202,8 @@ class MirrorManager:
         self.github_token = github_token
         self.set_default_branch = set_default_branch
         self.fix_default_branch = fix_default_branch
+        self.remove_file_patterns = remove_file_patterns
+        self.git_filter_projects = git_filter_projects
         self.clone_manager = CloneManager(config, progress_tracker)
 
     def _build_push_url(self, github_repo: GitHubRepo) -> str:
@@ -230,15 +237,11 @@ class MirrorManager:
                 )
             # Return the plain HTTPS URL — credentials are passed via
             # GIT_CONFIG_* environment variables in _push_to_github().
-            logger.debug(
-                f"Using HTTPS token auth for push to {github_repo.full_name}"
-            )
+            logger.debug(f"Using HTTPS token auth for push to {github_repo.full_name}")
             return github_repo.clone_url
         else:
             # Fall back to SSH URL
-            logger.debug(
-                f"Using SSH for push to {github_repo.full_name}"
-            )
+            logger.debug(f"Using SSH for push to {github_repo.full_name}")
             return github_repo.ssh_url
 
     def _sanitize_token(self, text: str) -> str:
@@ -294,9 +297,7 @@ class MirrorManager:
                 ).decode()
                 env["GIT_CONFIG_COUNT"] = "1"
                 env["GIT_CONFIG_KEY_0"] = "http.extraheader"
-                env["GIT_CONFIG_VALUE_0"] = (
-                    f"AUTHORIZATION: basic {credentials}"
-                )
+                env["GIT_CONFIG_VALUE_0"] = f"AUTHORIZATION: basic {credentials}"
             elif self.config.git_ssh_command:
                 # Only set GIT_SSH_COMMAND when using SSH push
                 env["GIT_SSH_COMMAND"] = self.config.git_ssh_command
@@ -318,7 +319,8 @@ class MirrorManager:
             # which is extremely verbose for repos with many branches.
             stderr_lines = stderr.strip().splitlines()
             ref_count = sum(
-                1 for line in stderr_lines
+                1
+                for line in stderr_lines
                 if line.strip().startswith("*") or "->" in line
             )
             if ref_count:
@@ -407,7 +409,7 @@ class MirrorManager:
             # ``git symbolic-ref`` might fail in unusual layouts.
             head_ref = get_head_ref(local_path)
             if head_ref and head_ref.startswith("refs/heads/"):
-                branch = head_ref[len("refs/heads/"):]
+                branch = head_ref[len("refs/heads/") :]
 
         # --- Step 2: if HEAD isn't a branch, classify and try fallback ----
         if not branch:
@@ -503,9 +505,7 @@ class MirrorManager:
                 successful_clones,
             )
             try:
-                rest_repos = self.github_api.list_repos(
-                    org=self.github_org
-                )
+                rest_repos = self.github_api.list_repos(org=self.github_org)
                 fallback: dict[str, dict[str, Any]] = {}
                 for repo in rest_repos:
                     fallback[repo.name] = {
@@ -526,9 +526,7 @@ class MirrorManager:
                 )
                 return fallback
             except Exception as exc:
-                logger.error(
-                    "REST API fallback also failed: %s", exc
-                )
+                logger.error("REST API fallback also failed: %s", exc)
                 # Both GraphQL and REST failed — proceeding with an
                 # empty existence set would recreate the original
                 # cascade failure (mass POST → 422 → rate-limit
@@ -577,24 +575,56 @@ class MirrorManager:
 
         # Step 0b: Pre-flight rate-limit budget check (synchronous)
         logger.info("📊 Checking rate-limit budget before batch operations...")
-        self.github_api.budget.preflight_check_sync(
-            self.github_api.client
-        )
+        self.github_api.budget.preflight_check_sync(self.github_api.client)
 
         # Step 1: Clone from Gerrit using existing CloneManager
         # This handles all the dependency ordering and safe parallel operations
         logger.info("📥 Cloning repositories from Gerrit...")
         clone_results = self.clone_manager.clone_projects(projects)
 
-        successful_clones = sum(
-            1 for cr in clone_results if cr.success
-        )
+        successful_clones = sum(1 for cr in clone_results if cr.success)
+
+        # Step 1b: Apply content filters to cloned repositories
+        filter_failed_projects: set[str] = set()
+        if self.remove_file_patterns or self.git_filter_projects:
+            logger.info("🔧 Applying content filters to cloned repositories...")
+            filter_success = filter_fail = 0
+            for cr in clone_results:
+                if not cr.success or not cr.path:
+                    continue
+                success, error = apply_content_filters(
+                    cr.path,
+                    cr.project.name,
+                    remove_patterns=self.remove_file_patterns,
+                    git_filter_projects=self.git_filter_projects,
+                )
+                if success:
+                    filter_success += 1
+                else:
+                    filter_fail += 1
+                    filter_failed_projects.add(cr.project.name)
+                    logger.warning(
+                        "Content filter failed for %s: %s",
+                        cr.project.name,
+                        error,
+                    )
+            logger.info(
+                "Content filtering complete: %d succeeded, %d failed",
+                filter_success,
+                filter_fail,
+            )
+
+        # Abort the batch if any content filters failed — silently
+        # dropping projects would make them disappear from the manifest.
+        if filter_failed_projects:
+            raise RuntimeError(
+                f"Content filtering failed for {filter_fail} project(s), "
+                f"aborting batch: {sorted(filter_failed_projects)}"
+            )
 
         # Step 2: Batch fetch existing GitHub repos (GraphQL with retry)
         logger.info("🔍 Fetching existing GitHub repositories (GraphQL)...")
-        existing_repos = self.github_api.list_all_repos_graphql(
-            self.github_org
-        )
+        existing_repos = self.github_api.list_all_repos_graphql(self.github_org)
 
         # Validate: if GraphQL returned nothing suspicious, try REST
         existing_repos = self._validate_graphql_results(
@@ -612,26 +642,28 @@ class MirrorManager:
             if not clone_result.success:
                 continue
 
-            github_name = transform_gerrit_name_to_github(
-                clone_result.project.name
-            )
+            github_name = transform_gerrit_name_to_github(clone_result.project.name)
             exists = github_name in existing_repos
 
             if exists and self.recreate:
                 repos_to_delete.append(github_name)
-                repos_to_create.append({
-                    "name": github_name,
-                    "description": clone_result.project.description
-                    or f"Mirror of Gerrit project {clone_result.project.name}",
-                    "private": False,
-                })
+                repos_to_create.append(
+                    {
+                        "name": github_name,
+                        "description": clone_result.project.description
+                        or f"Mirror of Gerrit project {clone_result.project.name}",
+                        "private": False,
+                    }
+                )
             elif not exists:
-                repos_to_create.append({
-                    "name": github_name,
-                    "description": clone_result.project.description
-                    or f"Mirror of Gerrit project {clone_result.project.name}",
-                    "private": False,
-                })
+                repos_to_create.append(
+                    {
+                        "name": github_name,
+                        "description": clone_result.project.description
+                        or f"Mirror of Gerrit project {clone_result.project.name}",
+                        "private": False,
+                    }
+                )
             else:
                 # Exists and not recreating - create GitHubRepo from existing data
                 repo_data = existing_repos[github_name]
@@ -682,8 +714,7 @@ class MirrorManager:
                 )
             )
             failed_deletes = [
-                name for name, (success, _) in delete_results.items()
-                if not success
+                name for name, (success, _) in delete_results.items() if not success
             ]
             if failed_deletes:
                 logger.error(
@@ -692,8 +723,7 @@ class MirrorManager:
                 )
                 # Remove failed deletes from create list to avoid 422 errors
                 repos_to_create = [
-                    cfg for cfg in repos_to_create
-                    if cfg["name"] not in failed_deletes
+                    cfg for cfg in repos_to_create if cfg["name"] not in failed_deletes
                 ]
                 logger.info(
                     f"Adjusted create list: {len(repos_to_create)} repos "
@@ -792,7 +822,9 @@ class MirrorManager:
         # Step 6: Repair pass — fix repos with no default branch
         if self.fix_default_branch:
             self._fix_default_branches(
-                clone_results, existing_repos, repos_lookup,
+                clone_results,
+                existing_repos,
+                repos_lookup,
                 mirror_results,
             )
 
@@ -865,8 +897,7 @@ class MirrorManager:
                 ", ".join(sorted(repos_to_skip)),
             )
             repos_needing_fix = [
-                name for name in repos_needing_fix
-                if name not in push_failed_names
+                name for name in repos_needing_fix if name not in push_failed_names
             ]
 
         if not repos_needing_fix:
@@ -963,9 +994,7 @@ class MirrorManager:
         # Summary
         parts: list[str] = []
         if skip_push_failed_count:
-            parts.append(
-                f"{skip_push_failed_count} skipped (push failed, repo empty)"
-            )
+            parts.append(f"{skip_push_failed_count} skipped (push failed, repo empty)")
         if parent_count:
             parts.append(
                 f"{parent_count} Gerrit parent project(s) (expected, no action needed)"
@@ -1002,9 +1031,7 @@ class MirrorManager:
             MirrorResult with GitHub push status
         """
         started_at = datetime.now(UTC)
-        github_name = transform_gerrit_name_to_github(
-            clone_result.project.name
-        )
+        github_name = transform_gerrit_name_to_github(clone_result.project.name)
         local_path = clone_result.path
 
         # If clone failed, return failed mirror result
@@ -1031,9 +1058,7 @@ class MirrorManager:
             )
             completed_at = datetime.now(UTC)
             duration = (completed_at - started_at).total_seconds()
-            github_url = (
-                f"https://github.com/{self.github_org}/{github_name}"
-            )
+            github_url = f"https://github.com/{self.github_org}/{github_name}"
             return MirrorResult(
                 project=clone_result.project,
                 github_name=github_name,
@@ -1070,9 +1095,7 @@ class MirrorManager:
                 )
 
             # Push to GitHub
-            push_success, push_error = self._push_to_github(
-                local_path, github_repo
-            )
+            push_success, push_error = self._push_to_github(local_path, github_repo)
             if not push_success:
                 completed_at = datetime.now(UTC)
                 duration = (completed_at - started_at).total_seconds()
@@ -1104,9 +1127,7 @@ class MirrorManager:
         except Exception as e:
             completed_at = datetime.now(UTC)
             duration = (completed_at - started_at).total_seconds()
-            logger.error(
-                f"Mirror failed for {clone_result.project.name}: {e}"
-            )
+            logger.error(f"Mirror failed for {clone_result.project.name}: {e}")
             return MirrorResult(
                 project=clone_result.project,
                 github_name=github_name,
@@ -1212,7 +1233,6 @@ def filter_projects_by_hierarchy(
     if exclude:
         parts.append(f"exclude={exclude_patterns}")
     logger.info(
-        f"Filtered {len(projects)} projects to {len(filtered)} "
-        f"({', '.join(parts)})"
+        f"Filtered {len(projects)} projects to {len(filtered)} ({', '.join(parts)})"
     )
     return filtered
