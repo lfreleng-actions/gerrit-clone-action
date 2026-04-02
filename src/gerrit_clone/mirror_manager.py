@@ -190,7 +190,7 @@ class MirrorManager:
                 remove from all cloned repositories before pushing to
                 GitHub (e.g. ``["*.jar", "*.bin"]``).
             git_filter_projects: Optional mapping of project names to
-                lists of paths/patterns for ``git filter-repo`` removal.
+                lists of token strings for ``git filter-repo`` replacement.
                 Only the specified projects are filtered.
         """
         self.config = config
@@ -585,6 +585,7 @@ class MirrorManager:
         successful_clones = sum(1 for cr in clone_results if cr.success)
 
         # Step 1b: Apply content filters to cloned repositories
+        filter_failed_projects: set[str] = set()
         if self.remove_file_patterns or self.git_filter_projects:
             logger.info("🔧 Applying content filters to cloned repositories...")
             filter_success = filter_fail = 0
@@ -601,6 +602,7 @@ class MirrorManager:
                     filter_success += 1
                 else:
                     filter_fail += 1
+                    filter_failed_projects.add(cr.project.name)
                     logger.warning(
                         "Content filter failed for %s: %s",
                         cr.project.name,
@@ -610,6 +612,14 @@ class MirrorManager:
                 "Content filtering complete: %d succeeded, %d failed",
                 filter_success,
                 filter_fail,
+            )
+
+        # Abort the batch if any content filters failed — silently
+        # dropping projects would make them disappear from the manifest.
+        if filter_failed_projects:
+            raise RuntimeError(
+                f"Content filtering failed for {filter_fail} project(s), "
+                f"aborting batch: {sorted(filter_failed_projects)}"
             )
 
         # Step 2: Batch fetch existing GitHub repos (GraphQL with retry)
