@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
+import pytest
+
 from gerrit_clone.github_api import GitHubRepo, transform_gerrit_name_to_github
 from gerrit_clone.mirror_manager import (
     MirrorBatchResult,
@@ -1096,6 +1098,239 @@ class TestMirrorManager:
         failed_count = sum(1 for r in result if not r.success)
         assert success_count == 2
         assert failed_count == 1
+
+    @patch("gerrit_clone.mirror_manager.apply_content_filters")
+    def test_mirror_projects_calls_content_filters_remove_patterns(
+        self,
+        mock_apply_filters: Mock,
+    ) -> None:
+        """Content filters are invoked when remove_file_patterns is set."""
+        config = Config(
+            host="gerrit.example.org",
+            port=29418,
+            path=Path("/tmp/test"),
+        )
+        github_api = Mock()
+        github_api.list_all_repos_graphql = Mock(return_value={})
+        github_api.list_repos = Mock(return_value=[])
+        github_api.batch_delete_repos = AsyncMock(return_value={})
+
+        test_repo = GitHubRepo(
+            name="test-repo",
+            full_name="test-org/test-repo",
+            ssh_url="git@github.com:test-org/test-repo.git",
+            clone_url="https://github.com/test-org/test-repo.git",
+            html_url="https://github.com/test-org/test-repo",
+            private=False,
+        )
+        github_api.batch_create_repos = AsyncMock(
+            return_value={"test-repo": (test_repo, None)}
+        )
+        github_api.ensure_repo = AsyncMock(return_value=test_repo)
+
+        mock_apply_filters.return_value = (True, None)
+
+        manager = MirrorManager(
+            config=config,
+            github_api=github_api,
+            github_org="test-org",
+            remove_file_patterns=[".github/dependabot.yml"],
+        )
+
+        projects = [Project("test-repo", ProjectState.ACTIVE)]
+        clone_path = Path("/tmp/test/test-repo")
+        mock_clone_result = CloneResult(
+            project=projects[0],
+            status=CloneStatus.SUCCESS,
+            path=clone_path,
+            duration_seconds=5.0,
+        )
+
+        with (
+            patch.object(
+                manager.clone_manager,
+                "clone_projects",
+                return_value=[mock_clone_result],
+            ),
+            patch.object(manager, "_push_to_github", return_value=(True, None)),
+        ):
+            result = manager.mirror_projects(projects)
+
+        mock_apply_filters.assert_called_once_with(
+            clone_path,
+            "test-repo",
+            remove_patterns=[".github/dependabot.yml"],
+            git_filter_projects=None,
+        )
+        assert len(result) == 1
+        assert result[0].status == MirrorStatus.SUCCESS
+
+    @patch("gerrit_clone.mirror_manager.apply_content_filters")
+    def test_mirror_projects_calls_content_filters_git_filter(
+        self,
+        mock_apply_filters: Mock,
+    ) -> None:
+        """Content filters are invoked when git_filter_projects is set."""
+        config = Config(
+            host="gerrit.example.org",
+            port=29418,
+            path=Path("/tmp/test"),
+        )
+        github_api = Mock()
+        github_api.list_all_repos_graphql = Mock(return_value={})
+        github_api.list_repos = Mock(return_value=[])
+        github_api.batch_delete_repos = AsyncMock(return_value={})
+
+        test_repo = GitHubRepo(
+            name="my-project",
+            full_name="test-org/my-project",
+            ssh_url="git@github.com:test-org/my-project.git",
+            clone_url="https://github.com/test-org/my-project.git",
+            html_url="https://github.com/test-org/my-project",
+            private=False,
+        )
+        github_api.batch_create_repos = AsyncMock(
+            return_value={"my-project": (test_repo, None)}
+        )
+        github_api.ensure_repo = AsyncMock(return_value=test_repo)
+
+        mock_apply_filters.return_value = (True, None)
+
+        git_filters = {"my-project": ["secret-token-value"]}
+        manager = MirrorManager(
+            config=config,
+            github_api=github_api,
+            github_org="test-org",
+            git_filter_projects=git_filters,
+        )
+
+        projects = [Project("my-project", ProjectState.ACTIVE)]
+        clone_path = Path("/tmp/test/my-project")
+        mock_clone_result = CloneResult(
+            project=projects[0],
+            status=CloneStatus.SUCCESS,
+            path=clone_path,
+            duration_seconds=3.0,
+        )
+
+        with (
+            patch.object(
+                manager.clone_manager,
+                "clone_projects",
+                return_value=[mock_clone_result],
+            ),
+            patch.object(manager, "_push_to_github", return_value=(True, None)),
+        ):
+            result = manager.mirror_projects(projects)
+
+        mock_apply_filters.assert_called_once_with(
+            clone_path,
+            "my-project",
+            remove_patterns=None,
+            git_filter_projects=git_filters,
+        )
+        assert len(result) == 1
+        assert result[0].status == MirrorStatus.SUCCESS
+
+    @patch("gerrit_clone.mirror_manager.apply_content_filters")
+    def test_mirror_projects_filter_failure_raises(
+        self,
+        mock_apply_filters: Mock,
+    ) -> None:
+        """A content-filter failure aborts the batch with RuntimeError."""
+        config = Config(
+            host="gerrit.example.org",
+            port=29418,
+            path=Path("/tmp/test"),
+        )
+        github_api = Mock()
+        github_api.list_all_repos_graphql = Mock(return_value={})
+        github_api.list_repos = Mock(return_value=[])
+        github_api.batch_delete_repos = AsyncMock(return_value={})
+        github_api.batch_create_repos = AsyncMock(return_value={})
+
+        mock_apply_filters.return_value = (False, "git filter-repo failed")
+
+        manager = MirrorManager(
+            config=config,
+            github_api=github_api,
+            github_org="test-org",
+            remove_file_patterns=["*.jar"],
+        )
+
+        projects = [Project("bad-repo", ProjectState.ACTIVE)]
+        mock_clone_result = CloneResult(
+            project=projects[0],
+            status=CloneStatus.SUCCESS,
+            path=Path("/tmp/test/bad-repo"),
+            duration_seconds=2.0,
+        )
+
+        with (
+            patch.object(
+                manager.clone_manager,
+                "clone_projects",
+                return_value=[mock_clone_result],
+            ),
+            pytest.raises(RuntimeError, match="Content filtering failed"),
+        ):
+            manager.mirror_projects(projects)
+
+    @patch("gerrit_clone.mirror_manager.apply_content_filters")
+    def test_mirror_projects_no_filters_skips_content_filtering(
+        self,
+        mock_apply_filters: Mock,
+    ) -> None:
+        """Content filters are NOT called when no patterns are configured."""
+        config = Config(
+            host="gerrit.example.org",
+            port=29418,
+            path=Path("/tmp/test"),
+        )
+        github_api = Mock()
+        github_api.list_all_repos_graphql = Mock(return_value={})
+        github_api.list_repos = Mock(return_value=[])
+        github_api.batch_delete_repos = AsyncMock(return_value={})
+
+        test_repo = GitHubRepo(
+            name="test-repo",
+            full_name="test-org/test-repo",
+            ssh_url="git@github.com:test-org/test-repo.git",
+            clone_url="https://github.com/test-org/test-repo.git",
+            html_url="https://github.com/test-org/test-repo",
+            private=False,
+        )
+        github_api.batch_create_repos = AsyncMock(
+            return_value={"test-repo": (test_repo, None)}
+        )
+        github_api.ensure_repo = AsyncMock(return_value=test_repo)
+
+        manager = MirrorManager(
+            config=config,
+            github_api=github_api,
+            github_org="test-org",
+            # No remove_file_patterns or git_filter_projects
+        )
+
+        projects = [Project("test-repo", ProjectState.ACTIVE)]
+        mock_clone_result = CloneResult(
+            project=projects[0],
+            status=CloneStatus.SUCCESS,
+            path=Path("/tmp/test/test-repo"),
+            duration_seconds=5.0,
+        )
+
+        with (
+            patch.object(
+                manager.clone_manager,
+                "clone_projects",
+                return_value=[mock_clone_result],
+            ),
+            patch.object(manager, "_push_to_github", return_value=(True, None)),
+        ):
+            manager.mirror_projects(projects)
+
+        mock_apply_filters.assert_not_called()
 
     @patch("gerrit_clone.mirror_manager.get_current_branch", return_value="main")
     def test_set_default_branch_from_local_success(self, mock_get_branch: Mock) -> None:
