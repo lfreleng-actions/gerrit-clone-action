@@ -229,6 +229,21 @@ inputs:
     description: "File logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)"
     required: false
     default: "DEBUG"
+  remove-files:
+    description: >-
+      Comma-separated list of file path patterns to remove
+      from cloned repositories. Supports shell-style globs
+      (e.g. '.github/**', '*.jar') and regex patterns
+      (prefix with 'regex:'). Uses git filter-repo when
+      available, falls back to worktree-based removal.
+    required: false
+  git-filter:
+    description: >-
+      Replace tokens in git history for matching projects.
+      Format: 'project:token1,token2;project2:token3'.
+      Semicolons separate project entries. Colons separate
+      project patterns from comma-separated tokens.
+    required: false
   build-from-source:
     description: >-
       Build CLI from the action's own source instead of
@@ -394,6 +409,8 @@ runs:
       env:
         INPUT_INCLUDE_PROJECTS: ${{ inputs.include-projects }}
         INPUT_EXCLUDE_PROJECTS: ${{ inputs.exclude-projects }}
+        INPUT_REMOVE_FILES: ${{ inputs.remove-files }}
+        INPUT_GIT_FILTER: ${{ inputs.git-filter }}
       run: |
         # WARNING: Do NOT use literal empty expression syntax (dollar
         # brace-brace with nothing inside) anywhere in this run block,
@@ -572,6 +589,15 @@ runs:
 
         if [ -n "${{ inputs.config-file }}" ]; then
           cmd+=(--config-file "${{ inputs.config-file }}")
+        fi
+
+        # Content filtering options
+        if [ -n "$INPUT_REMOVE_FILES" ]; then
+          cmd+=(--remove-files "$INPUT_REMOVE_FILES")
+        fi
+
+        if [ -n "$INPUT_GIT_FILTER" ]; then
+          cmd+=(--git-filter "$INPUT_GIT_FILTER")
         fi
 
         # Add include-projects options (supports multiple)

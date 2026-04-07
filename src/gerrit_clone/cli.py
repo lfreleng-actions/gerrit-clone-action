@@ -25,6 +25,7 @@ from gerrit_clone.clone_manager import clone_repositories
 from gerrit_clone.concurrent_utils import handle_sigint_gracefully
 from gerrit_clone.config import ConfigurationError, load_config
 from gerrit_clone.content_filter import (
+    apply_content_filters,
     normalize_file_patterns,
     parse_git_filter_spec,
 )
@@ -485,6 +486,27 @@ def clone(
         help="Whether to fail if .netrc file is not found (default: optional)",
         envvar="GERRIT_NETRC_OPTIONAL",
     ),
+    remove_files: str | None = typer.Option(
+        None,
+        "--remove-files",
+        help=(
+            "Remove files matching patterns from cloned repositories. "
+            "Supports shell-style globs (e.g. '.github/**', '*.jar'), "
+            "regex (prefix with 'regex:'), and comma-separated lists."
+        ),
+        envvar="GERRIT_REMOVE_FILES",
+    ),
+    git_filter: str | None = typer.Option(
+        None,
+        "--git-filter",
+        help=(
+            "Replace tokens in git history for matching projects. "
+            "Format: 'project:token1,token2;project2:token3'. "
+            "Semicolons separate project entries, colons separate "
+            "project patterns from comma-separated tokens."
+        ),
+        envvar="GERRIT_GIT_FILTER",
+    ),
 ) -> None:
     """Clone all repositories from a Gerrit server or GitHub organization.
 
@@ -808,6 +830,39 @@ def clone(
             )
             raise typer.Exit(ExitCode.DISCOVERY_ERROR) from e
 
+        # Apply content filters if requested
+        remove_file_patterns = (
+            normalize_file_patterns([remove_files]) if remove_files else None
+        )
+        git_filter_projects = (
+            parse_git_filter_spec(git_filter) if git_filter else None
+        )
+        if remove_file_patterns or git_filter_projects:
+            if not quiet:
+                console.print("[cyan]🔧 Applying content filters...[/cyan]")
+            filter_success = filter_fail = 0
+            for cr in batch_result.results:
+                if not cr.success or not cr.path:
+                    continue
+                success, error = apply_content_filters(
+                    cr.path,
+                    cr.project.name,
+                    remove_patterns=remove_file_patterns,
+                    git_filter_projects=git_filter_projects,
+                )
+                if success:
+                    filter_success += 1
+                else:
+                    filter_fail += 1
+                    if not quiet:
+                        console.print(
+                            f"[yellow]⚠️  Filter failed for {cr.project.name}: {error}[/yellow]"
+                        )
+            if not quiet:
+                console.print(
+                    f"[cyan]Content filtering: {filter_success} succeeded, {filter_fail} failed[/cyan]"
+                )
+
         # Show final results summary using Rich
         if not quiet:
             show_final_results(
@@ -1117,6 +1172,27 @@ def refresh(
         "--manifest-filename",
         help="Output manifest filename (default: refresh-manifest-TIMESTAMP.json)",
     ),
+    remove_files: str | None = typer.Option(
+        None,
+        "--remove-files",
+        help=(
+            "Remove files matching patterns from refreshed repositories. "
+            "Supports shell-style globs (e.g. '.github/**', '*.jar'), "
+            "regex (prefix with 'regex:'), and comma-separated lists."
+        ),
+        envvar="GERRIT_REMOVE_FILES",
+    ),
+    git_filter: str | None = typer.Option(
+        None,
+        "--git-filter",
+        help=(
+            "Replace tokens in git history for matching projects. "
+            "Format: 'project:token1,token2;project2:token3'. "
+            "Semicolons separate project entries, colons separate "
+            "project patterns from comma-separated tokens."
+        ),
+        envvar="GERRIT_GIT_FILTER",
+    ),
 ) -> None:
     """Refresh local content cloned from a Gerrit server.
 
@@ -1246,6 +1322,39 @@ def refresh(
             include_projects=include_projects if include_projects else None,
             exclude_projects=exclude_projects if exclude_projects else None,
         )
+
+        # Apply content filters if requested
+        remove_file_patterns = (
+            normalize_file_patterns([remove_files]) if remove_files else None
+        )
+        git_filter_projects = (
+            parse_git_filter_spec(git_filter) if git_filter else None
+        )
+        if remove_file_patterns or git_filter_projects:
+            if not quiet:
+                console.print("[cyan]🔧 Applying content filters...[/cyan]")
+            filter_success = filter_fail = 0
+            for rr in result.results:
+                if rr.status.value == "failed":
+                    continue
+                success, error = apply_content_filters(
+                    rr.path,
+                    rr.project_name,
+                    remove_patterns=remove_file_patterns,
+                    git_filter_projects=git_filter_projects,
+                )
+                if success:
+                    filter_success += 1
+                else:
+                    filter_fail += 1
+                    if not quiet:
+                        console.print(
+                            f"[yellow]⚠️  Filter failed for {rr.project_name}: {error}[/yellow]"
+                        )
+            if not quiet:
+                console.print(
+                    f"[cyan]Content filtering: {filter_success} succeeded, {filter_fail} failed[/cyan]"
+                )
 
         # Display results
         _show_refresh_results(console, result, dry_run)
