@@ -511,11 +511,9 @@ class TestTokenBucketLimiter:
     @pytest.mark.asyncio
     async def test_global_retry_after_blocks_acquire(self) -> None:
         """Acquire should wait when global retry-after is active."""
-        limiter = TokenBucketLimiter(rate=100.0, burst=100)
-
-        # Stateful monotonic: starts at 1000.0, jumps to 1011.0
-        # after the first real sleep so the limiter sees the
-        # deadline as passed on the next loop iteration.
+        # Stateful monotonic: starts at 1000.0, advances by the
+        # sleep duration so the limiter sees the retry-after
+        # deadline as passed after the first sleep.
         current_time = 1000.0
         sleep_durations: list[float] = []
 
@@ -533,6 +531,9 @@ class TestTokenBucketLimiter:
             ),
             patch("asyncio.sleep", side_effect=fake_sleep),
         ):
+            # Create limiter INSIDE the patch so _last_refill uses
+            # the fake clock (1000.0) instead of the real monotonic.
+            limiter = TokenBucketLimiter(rate=100.0, burst=100)
             await limiter.set_global_retry_after(10.0)
             await limiter.acquire(tokens=1.0)
 
@@ -779,8 +780,6 @@ class TestTokenBucketLimiterIntegration:
     @pytest.mark.asyncio
     async def test_retry_after_pauses_all_tasks(self) -> None:
         """Global retry-after should pause all tasks."""
-        limiter = TokenBucketLimiter(rate=100.0, burst=100)
-
         # Stateful monotonic: starts at 1000.0, advances by the
         # sleep duration each time fake_sleep is called.
         current_time = 1000.0
@@ -800,6 +799,9 @@ class TestTokenBucketLimiterIntegration:
             ),
             patch("asyncio.sleep", side_effect=fake_sleep),
         ):
+            # Create limiter INSIDE the patch so _last_refill uses
+            # the fake clock (1000.0) instead of the real monotonic.
+            limiter = TokenBucketLimiter(rate=100.0, burst=100)
             await limiter.record_rate_limit(retry_after=10.0)
 
             await asyncio.gather(
