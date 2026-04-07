@@ -1161,6 +1161,7 @@ class TestMirrorManager:
             "test-repo",
             remove_patterns=[".github/dependabot.yml"],
             git_filter_projects=None,
+            redact_secrets=False,
         )
         assert len(result) == 1
         assert result[0].status == MirrorStatus.SUCCESS
@@ -1228,6 +1229,7 @@ class TestMirrorManager:
             "my-project",
             remove_patterns=None,
             git_filter_projects=git_filters,
+            redact_secrets=False,
         )
         assert len(result) == 1
         assert result[0].status == MirrorStatus.SUCCESS

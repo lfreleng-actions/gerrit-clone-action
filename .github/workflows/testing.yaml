@@ -185,3 +185,295 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
+
+  ### Integration tests: content filtering with real Gerrit repo ###
+  content-filter-tests:
+    name: "Test Content Filtering"
+    needs: tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    steps:
+      - name: "Check for pull request context"
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "::warning::Secrets unavailable in PR context"
+          fi
+
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d # v2.16.1
+        with:
+          egress-policy: 'audit'
+
+      - name: "Checkout repository"
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: "Set up Python"
+        # yamllint disable-line rule:line-length
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+
+      - name: "Install gerrit-clone CLI and git-filter-repo"
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install git-filter-repo
+
+      # ---------------------------------------------------------------
+      # Test 1: Clone with --git-filter (explicit token replacement)
+      # ---------------------------------------------------------------
+
+      - name: "Test clone with --git-filter (explicit token)"
+        shell: bash
+        env:
+          FILTER_TOKEN: ${{ secrets.ONAP_TEST_FILTER_TOKEN }}
+        run: |
+          if [ -z "$FILTER_TOKEN" ]; then
+            echo "::warning::ONAP_TEST_FILTER_TOKEN not set; skip"
+            exit 0
+          fi
+
+          SPEC="testsuite/pythonsdk-tests:${FILTER_TOKEN}"
+
+          gerrit-clone clone \
+            --host "gerrit.onap.org" \
+            --output-path "onap-git-filter" \
+            --threads "1" \
+            --https \
+            --include-projects "testsuite/pythonsdk-tests" \
+            --git-filter "$SPEC"
+
+      - name: "Validate --git-filter clone results"
+        shell: bash
+        env:
+          FILTER_TOKEN: ${{ secrets.ONAP_TEST_FILTER_TOKEN }}
+        run: |
+          if [ -z "$FILTER_TOKEN" ]; then
+            echo "::warning::Skipped (no secret)" ; exit 0
+          fi
+
+          REPO="onap-git-filter/testsuite/pythonsdk-tests.git"
+          if [ ! -d "$REPO" ]; then
+            echo "::error::Repo not found: $REPO" ; exit 1
+          fi
+
+          # Token must NOT appear in any history
+          if git -C "$REPO" log --all -p \
+            | grep -qF "$FILTER_TOKEN"; then
+            echo "::error::Token still in history after filter"
+            exit 1
+          fi
+
+          # REDACTED_ placeholder must be present
+          if ! git -C "$REPO" log --all -p \
+            | grep -q "REDACTED_"; then
+            echo "::error::No REDACTED_ placeholder found"
+            exit 1
+          fi
+
+          {
+            echo "### ✅ --git-filter clone: token redacted"
+            echo "- Repo: \`$REPO\`"
+            SIZE=$(du -sh "$REPO" | awk '{print $1}')
+            echo "- Size: $SIZE"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ---------------------------------------------------------------
+      # Test 2: Clone with --redact-secrets (auto-detection)
+      # ---------------------------------------------------------------
+
+      - name: "Test clone with --redact-secrets (auto-detect)"
+        shell: bash
+        run: |
+          gerrit-clone clone \
+            --host "gerrit.onap.org" \
+            --output-path "onap-redact-secrets" \
+            --threads "1" \
+            --https \
+            --include-projects "testsuite/pythonsdk-tests" \
+            --redact-secrets
+
+      - name: "Validate --redact-secrets clone results"
+        shell: bash
+        env:
+          FILTER_TOKEN: ${{ secrets.ONAP_TEST_FILTER_TOKEN }}
+        run: |
+          REPO="onap-redact-secrets/testsuite/pythonsdk-tests.git"
+          if [ ! -d "$REPO" ]; then
+            echo "::error::Repo not found: $REPO" ; exit 1
+          fi
+
+          # When we have the secret, verify it is NOT present
+          if [ -n "$FILTER_TOKEN" ]; then
+            if git -C "$REPO" log --all -p \
+              | grep -qF "$FILTER_TOKEN"; then
+              echo "::error::Token still present after redact"
+              exit 1
+            fi
+          fi
+
+          # REDACTED_ placeholder must be present
+          if ! git -C "$REPO" log --all -p \
+            | grep -q "REDACTED_"; then
+            echo "::error::No REDACTED_ placeholder found"
+            exit 1
+          fi
+
+          {
+            echo "### ✅ --redact-secrets clone: secrets redacted"
+            echo "- Repo: \`$REPO\`"
+            SIZE=$(du -sh "$REPO" | awk '{print $1}')
+            echo "- Size: $SIZE"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ---------------------------------------------------------------
+      # Test 3: Clone WITHOUT filtering, then refresh with --git-filter
+      # ---------------------------------------------------------------
+
+      - name: "Clone without filtering (for refresh test)"
+        shell: bash
+        run: |
+          gerrit-clone clone \
+            --host "gerrit.onap.org" \
+            --output-path "onap-refresh-test" \
+            --threads "1" \
+            --https \
+            --include-projects "testsuite/pythonsdk-tests"
+
+      - name: "Verify token exists before refresh"
+        shell: bash
+        env:
+          FILTER_TOKEN: ${{ secrets.ONAP_TEST_FILTER_TOKEN }}
+        run: |
+          if [ -z "$FILTER_TOKEN" ]; then
+            echo "::warning::Skipped (no secret)" ; exit 0
+          fi
+
+          REPO="onap-refresh-test/testsuite/pythonsdk-tests.git"
+          if [ ! -d "$REPO" ]; then
+            echo "::error::Repo not found: $REPO" ; exit 1
+          fi
+
+          # Token MUST still be present (no filtering applied yet)
+          if ! git -C "$REPO" log --all -p \
+            | grep -qF "$FILTER_TOKEN"; then
+            echo "::error::Token should exist before refresh"
+            exit 1
+          fi
+          echo "✅ Token confirmed present before refresh"
+
+      - name: "Refresh with --git-filter (explicit token)"
+        shell: bash
+        env:
+          FILTER_TOKEN: ${{ secrets.ONAP_TEST_FILTER_TOKEN }}
+        run: |
+          if [ -z "$FILTER_TOKEN" ]; then
+            echo "::warning::Skipped (no secret)" ; exit 0
+          fi
+
+          SPEC="testsuite/pythonsdk-tests:${FILTER_TOKEN}"
+
+          gerrit-clone refresh \
+            --output-path "onap-refresh-test" \
+            --threads "1" \
+            --git-filter "$SPEC"
+
+      - name: "Validate refresh --git-filter results"
+        shell: bash
+        env:
+          FILTER_TOKEN: ${{ secrets.ONAP_TEST_FILTER_TOKEN }}
+        run: |
+          if [ -z "$FILTER_TOKEN" ]; then
+            echo "::warning::Skipped (no secret)" ; exit 0
+          fi
+
+          REPO="onap-refresh-test/testsuite/pythonsdk-tests.git"
+
+          # Token must NOT appear after refresh
+          if git -C "$REPO" log --all -p \
+            | grep -qF "$FILTER_TOKEN"; then
+            echo "::error::Token still present after refresh"
+            exit 1
+          fi
+
+          # REDACTED_ placeholder must be present
+          if ! git -C "$REPO" log --all -p \
+            | grep -q "REDACTED_"; then
+            echo "::error::No REDACTED_ placeholder found"
+            exit 1
+          fi
+
+          {
+            echo "### ✅ refresh --git-filter: token redacted"
+            echo "- Repo: \`$REPO\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ---------------------------------------------------------------
+      # Test 4: Clone WITHOUT filtering, then refresh --redact-secrets
+      # ---------------------------------------------------------------
+
+      - name: "Clone without filtering (for redact refresh test)"
+        shell: bash
+        run: |
+          gerrit-clone clone \
+            --host "gerrit.onap.org" \
+            --output-path "onap-refresh-redact" \
+            --threads "1" \
+            --https \
+            --include-projects "testsuite/pythonsdk-tests"
+
+      - name: "Refresh with --redact-secrets (auto-detect)"
+        shell: bash
+        run: |
+          gerrit-clone refresh \
+            --output-path "onap-refresh-redact" \
+            --threads "1" \
+            --redact-secrets
+
+      - name: "Validate refresh --redact-secrets results"
+        shell: bash
+        env:
+          FILTER_TOKEN: ${{ secrets.ONAP_TEST_FILTER_TOKEN }}
+        run: |
+          REPO="onap-refresh-redact/testsuite/pythonsdk-tests.git"
+          if [ ! -d "$REPO" ]; then
+            echo "::error::Repo not found: $REPO" ; exit 1
+          fi
+
+          if [ -n "$FILTER_TOKEN" ]; then
+            if git -C "$REPO" log --all -p \
+              | grep -qF "$FILTER_TOKEN"; then
+              echo "::error::Token present after redact refresh"
+              exit 1
+            fi
+          fi
+
+          if ! git -C "$REPO" log --all -p \
+            | grep -q "REDACTED_"; then
+            echo "::error::No REDACTED_ placeholder found"
+            exit 1
+          fi
+
+          {
+            echo "### ✅ refresh --redact-secrets: auto-redacted"
+            echo "- Repo: \`$REPO\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ---------------------------------------------------------------
+      # Summary
+      # ---------------------------------------------------------------
+
+      - name: "Content filter test summary"
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "---"
+            echo "### Content Filter Integration Tests"
+            echo "All 4 test scenarios completed."
+          } >> "$GITHUB_STEP_SUMMARY"

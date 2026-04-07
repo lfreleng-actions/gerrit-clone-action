@@ -244,6 +244,14 @@ inputs:
       Semicolons separate project entries. Colons separate
       project patterns from comma-separated tokens.
     required: false
+  redact-secrets:
+    description: >-
+      Scan repository content for well-known credential
+      patterns (e.g. GitLab PATs, GitHub PATs, AWS keys)
+      and replace them with safe placeholder values.
+      Uses git filter-repo to rewrite history.
+    required: false
+    default: "false"
   build-from-source:
     description: >-
       Build CLI from the action's own source instead of
@@ -411,6 +419,7 @@ runs:
         INPUT_EXCLUDE_PROJECTS: ${{ inputs.exclude-projects }}
         INPUT_REMOVE_FILES: ${{ inputs.remove-files }}
         INPUT_GIT_FILTER: ${{ inputs.git-filter }}
+        INPUT_REDACT_SECRETS: ${{ inputs.redact-secrets }}
       run: |
         # WARNING: Do NOT use literal empty expression syntax (dollar
         # brace-brace with nothing inside) anywhere in this run block,
@@ -598,6 +607,10 @@ runs:
 
         if [ -n "$INPUT_GIT_FILTER" ]; then
           cmd+=(--git-filter "$INPUT_GIT_FILTER")
+        fi
+
+        if [ "$INPUT_REDACT_SECRETS" = "true" ]; then
+          cmd+=(--redact-secrets)
         fi
 
         # Add include-projects options (supports multiple)

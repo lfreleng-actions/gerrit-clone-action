@@ -3,7 +3,7 @@
 
 """Content filtering utilities for repository operations.
 
-Provides two main capabilities:
+Provides three main capabilities:
 
 1. **File removal** — Remove files/folders matching glob patterns from
    bare git repositories before pushing to a target platform.  This
@@ -14,6 +14,10 @@ Provides two main capabilities:
    strings with safe placeholder values, allowing repositories that
    contain accidentally committed secrets to be mirrored without
    triggering secret-scanning blocks.
+
+3. **Secret scanning** — Automatically detect well-known credential
+   patterns (e.g. GitLab PATs, GitHub PATs, AWS keys) in repository
+   content and replace them with safe placeholder values.
 """
 
 from __future__ import annotations
@@ -30,6 +34,165 @@ from gerrit_clone.logging import get_logger
 from gerrit_clone.models import match_project_pattern
 
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Well-known credential patterns for automatic secret detection
+# ---------------------------------------------------------------------------
+
+#: Compiled regex patterns for well-known credential formats.
+#: Each pattern is designed to match the token value itself (no
+#: surrounding context required) so it can be used as a literal
+#: replacement target for ``git filter-repo --replace-text``.
+SECRET_PATTERNS: dict[str, re.Pattern[str]] = {
+    # GitLab Personal Access Tokens (glpat-XXXX...)
+    "gitlab_pat": re.compile(r"glpat-[A-Za-z0-9_\-]{20,}"),
+    # GitHub classic Personal Access Tokens (ghp_XXXX...)
+    "github_pat_classic": re.compile(r"ghp_[A-Za-z0-9]{36,}"),
+    # GitHub fine-grained Personal Access Tokens
+    "github_pat_fine_grained": re.compile(
+        r"github_pat_[A-Za-z0-9_]{22,}"
+    ),
+    # GitHub OAuth access tokens (gho_XXXX...)
+    "github_oauth": re.compile(r"gho_[A-Za-z0-9]{36,}"),
+    # GitHub user-to-server tokens (ghu_XXXX...)
+    "github_app_user": re.compile(r"ghu_[A-Za-z0-9]{36,}"),
+    # GitHub server-to-server tokens (ghs_XXXX...)
+    "github_app_server": re.compile(r"ghs_[A-Za-z0-9]{36,}"),
+    # GitHub app refresh tokens (ghr_XXXX...)
+    "github_app_refresh": re.compile(r"ghr_[A-Za-z0-9]{36,}"),
+    # AWS Access Key IDs (AKIA...)
+    "aws_access_key_id": re.compile(r"AKIA[0-9A-Z]{16}"),
+    # Slack bot/user/workspace tokens (xoxb-, xoxp-, xoxa-, xoxr-, xoxs-)
+    "slack_token": re.compile(r"xox[bpars]-[A-Za-z0-9\-]{10,}"),
+    # Slack webhook URLs
+    "slack_webhook": re.compile(
+        r"https://hooks\.slack\.com/services/T[A-Za-z0-9]+/"
+        r"B[A-Za-z0-9]+/[A-Za-z0-9]+"
+    ),
+    # Stripe API keys (sk_live_/sk_test_/pk_live_/pk_test_)
+    "stripe_api_key": re.compile(
+        r"(?:sk|pk)_(?:live|test)_[A-Za-z0-9]{20,}"
+    ),
+    # Twilio API keys
+    "twilio_api_key": re.compile(r"SK[a-f0-9]{32}"),
+    # SendGrid API keys
+    "sendgrid_api_key": re.compile(r"SG\.[A-Za-z0-9_\-]{22,}\.[A-Za-z0-9_\-]{22,}"),
+    # Google API keys
+    "google_api_key": re.compile(r"AIza[A-Za-z0-9_\-]{35}"),
+    # Heroku API keys
+    "heroku_api_key": re.compile(
+        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+        r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    ),
+    # npm tokens
+    "npm_token": re.compile(r"npm_[A-Za-z0-9]{36}"),
+    # PyPI API tokens
+    "pypi_token": re.compile(r"pypi-[A-Za-z0-9_\-]{50,}"),
+    # Mailchimp API keys
+    "mailchimp_api_key": re.compile(
+        r"[0-9a-f]{32}-us[0-9]{1,2}"
+    ),
+}
+
+
+def scan_repo_for_secrets(
+    repo_path: Path,
+    *,
+    timeout: int = 300,
+) -> list[str]:
+    """Scan repository content for well-known credential patterns.
+
+    Iterates over all blob content in the repository using
+    ``git log --all -p`` and matches each line against the
+    built-in :data:`SECRET_PATTERNS` dictionary.
+
+    Args:
+        repo_path: Path to the git repository (bare or regular).
+        timeout: Timeout in seconds for the git log operation.
+
+    Returns:
+        Deduplicated list of discovered credential strings,
+        in the order they were first encountered.
+    """
+    if not repo_path.exists():
+        return []
+
+    cmd = [
+        "git",
+        "-C",
+        str(repo_path),
+        "log",
+        "--all",
+        "--diff-filter=ACMR",
+        "-p",
+        "--no-color",
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "Secret scan timed out for %s after %ds",
+            repo_path.name,
+            timeout,
+        )
+        return []
+
+    if result.returncode != 0:
+        logger.warning(
+            "Secret scan git log failed for %s: %s",
+            repo_path.name,
+            result.stderr.strip(),
+        )
+        return []
+
+    # Scan output line by line for known patterns
+    seen: set[str] = set()
+    discovered: list[str] = []
+
+    for line in result.stdout.splitlines():
+        # Only scan diff addition lines (lines starting with +)
+        # and context lines, skip diff headers
+        stripped = line.lstrip("+")
+        if not stripped or line.startswith("---") or line.startswith("+++"):
+            continue
+
+        for pattern_name, pattern in SECRET_PATTERNS.items():
+            for match in pattern.finditer(stripped):
+                token = match.group(0)
+                if token not in seen:
+                    seen.add(token)
+                    discovered.append(token)
+                    logger.info(
+                        "Secret scan: found %s pattern "
+                        "(sha256:%s) in %s",
+                        pattern_name,
+                        hashlib.sha256(
+                            token.encode()
+                        ).hexdigest()[:12],
+                        repo_path.name,
+                    )
+
+    if discovered:
+        logger.info(
+            "Secret scan: found %d unique credential(s) in %s",
+            len(discovered),
+            repo_path.name,
+        )
+    else:
+        logger.debug(
+            "Secret scan: no credentials found in %s",
+            repo_path.name,
+        )
+
+    return discovered
 
 
 # ---------------------------------------------------------------------------
@@ -653,6 +816,7 @@ def apply_content_filters(
     remove_patterns: list[str] | None = None,
     git_filter_projects: dict[str, list[str]] | None = None,
     *,
+    redact_secrets: bool = False,
     timeout: int = 600,
 ) -> tuple[bool, str | None]:
     """Apply content filters to a cloned repository before push.
@@ -670,6 +834,11 @@ def apply_content_filters(
             of token strings to replace.  Project names support the
             same wildcard/hierarchical matching as
             ``--include-projects``.
+        redact_secrets: When ``True``, scan repository content for
+            well-known credential patterns and replace any discovered
+            tokens with safe placeholder values.  This runs after
+            explicit token replacement (Step 2) so that any tokens
+            already handled are not double-processed.
         timeout: Timeout in seconds for filtering operations.
 
     Returns:
@@ -734,6 +903,40 @@ def apply_content_filters(
                 msg = str(exc)
                 logger.error(msg)
                 errors.append(msg)
+
+    # Step 3: Auto-detect and redact secrets if requested
+    if redact_secrets:
+        try:
+            discovered = scan_repo_for_secrets(
+                repo_path, timeout=timeout
+            )
+            if discovered:
+                logger.info(
+                    "Redacting %d auto-discovered secret(s) "
+                    "from %s",
+                    len(discovered),
+                    project_name,
+                )
+                success = replace_tokens_in_history(
+                    repo_path,
+                    discovered,
+                    timeout=timeout,
+                )
+                if not success:
+                    msg = (
+                        f"Auto-redaction failed for "
+                        f"{project_name}"
+                    )
+                    errors.append(msg)
+            else:
+                logger.debug(
+                    "No secrets found to redact in %s",
+                    project_name,
+                )
+        except RuntimeError as exc:
+            msg = str(exc)
+            logger.error(msg)
+            errors.append(msg)
 
     if errors:
         return False, "; ".join(errors)

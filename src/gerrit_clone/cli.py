@@ -507,6 +507,16 @@ def clone(
         ),
         envvar="GERRIT_GIT_FILTER",
     ),
+    redact_secrets: bool = typer.Option(
+        False,
+        "--redact-secrets/--no-redact-secrets",
+        help=(
+            "Scan repository content for well-known credential "
+            "patterns (e.g. GitLab PATs, GitHub PATs, AWS keys) "
+            "and replace them with safe placeholder values."
+        ),
+        envvar="GERRIT_REDACT_SECRETS",
+    ),
 ) -> None:
     """Clone all repositories from a Gerrit server or GitHub organization.
 
@@ -837,7 +847,7 @@ def clone(
         git_filter_projects = (
             parse_git_filter_spec(git_filter) if git_filter else None
         )
-        if remove_file_patterns or git_filter_projects:
+        if remove_file_patterns or git_filter_projects or redact_secrets:
             if not quiet:
                 console.print("[cyan]🔧 Applying content filters...[/cyan]")
             filter_success = filter_fail = 0
@@ -849,6 +859,7 @@ def clone(
                     cr.project.name,
                     remove_patterns=remove_file_patterns,
                     git_filter_projects=git_filter_projects,
+                    redact_secrets=redact_secrets,
                 )
                 if success:
                     filter_success += 1
@@ -1193,6 +1204,16 @@ def refresh(
         ),
         envvar="GERRIT_GIT_FILTER",
     ),
+    redact_secrets: bool = typer.Option(
+        False,
+        "--redact-secrets/--no-redact-secrets",
+        help=(
+            "Scan repository content for well-known credential "
+            "patterns (e.g. GitLab PATs, GitHub PATs, AWS keys) "
+            "and replace them with safe placeholder values."
+        ),
+        envvar="GERRIT_REDACT_SECRETS",
+    ),
 ) -> None:
     """Refresh local content cloned from a Gerrit server.
 
@@ -1330,7 +1351,7 @@ def refresh(
         git_filter_projects = (
             parse_git_filter_spec(git_filter) if git_filter else None
         )
-        if remove_file_patterns or git_filter_projects:
+        if remove_file_patterns or git_filter_projects or redact_secrets:
             if not quiet:
                 console.print("[cyan]🔧 Applying content filters...[/cyan]")
             filter_success = filter_fail = 0
@@ -1342,6 +1363,7 @@ def refresh(
                     rr.project_name,
                     remove_patterns=remove_file_patterns,
                     git_filter_projects=git_filter_projects,
+                    redact_secrets=redact_secrets,
                 )
                 if success:
                     filter_success += 1
@@ -1710,6 +1732,16 @@ def mirror(
         ),
         envvar="GERRIT_GIT_FILTER",
     ),
+    redact_secrets: bool = typer.Option(
+        False,
+        "--redact-secrets/--no-redact-secrets",
+        help=(
+            "Scan repository content for well-known credential "
+            "patterns (e.g. GitLab PATs, GitHub PATs, AWS keys) "
+            "and replace them with safe placeholder values."
+        ),
+        envvar="GERRIT_REDACT_SECRETS",
+    ),
 ) -> None:
     """Mirror repositories from a Gerrit server to GitHub.
 
@@ -1984,6 +2016,7 @@ def mirror(
             fix_default_branch=fix_default_branch,
             remove_file_patterns=remove_file_patterns,
             git_filter_projects=git_filter_projects,
+            redact_secrets=redact_secrets,
         )
 
         # Start mirroring
