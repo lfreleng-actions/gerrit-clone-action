@@ -384,7 +384,7 @@ def _remove_files_worktree(
             for file_path in files_to_remove:
                 full_path = Path(worktree_dir) / file_path
                 if full_path.exists():
-                    subprocess.run(
+                    rm_result = subprocess.run(
                         [
                             "git",
                             "-C",
@@ -399,6 +399,13 @@ def _remove_files_worktree(
                         text=True,
                         timeout=timeout,
                     )
+                    if rm_result.returncode != 0:
+                        raise RuntimeError(
+                            f"git rm failed for '{file_path}' on "
+                            f"branch '{branch}' in "
+                            f"{repo_path.name}: "
+                            f"{rm_result.stderr.strip()}"
+                        )
 
             # Commit the removal
             result = subprocess.run(
