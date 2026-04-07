@@ -873,6 +873,8 @@ def clone(
                 console.print(
                     f"[cyan]Content filtering: {filter_success} succeeded, {filter_fail} failed[/cyan]"
                 )
+            if filter_fail > 0:
+                raise typer.Exit(ExitCode.GENERAL_ERROR)
 
         # Show final results summary using Rich
         if not quiet:
@@ -1377,6 +1379,8 @@ def refresh(
                 console.print(
                     f"[cyan]Content filtering: {filter_success} succeeded, {filter_fail} failed[/cyan]"
                 )
+            if filter_fail > 0:
+                raise typer.Exit(ExitCode.GENERAL_ERROR)
 
         # Display results
         _show_refresh_results(console, result, dry_run)

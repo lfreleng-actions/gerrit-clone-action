@@ -158,8 +158,9 @@ def scan_repo_for_secrets(
     discovered: list[str] = []
 
     for line in result.stdout.splitlines():
-        # Only scan diff addition lines (lines starting with +)
-        # and context lines, skip diff headers
+        # Scan diff content lines while skipping file header markers.
+        # Leading "+" is stripped from added lines; deleted lines are
+        # also scanned as-is.
         stripped = line.lstrip("+")
         if not stripped or line.startswith("---") or line.startswith("+++"):
             continue
@@ -659,7 +660,8 @@ def _generate_replacement_string(original: str) -> str:
     - Prefixed with ``REDACTED_`` for clarity
     - NOT decodable back to the original value
 
-    Uses a keyed hash to produce a fixed-length hex string.
+    Uses a SHA-256 hash with a fixed namespace prefix to produce
+    a fixed-length hex string.
 
     Args:
         original: The original credential string to replace.
@@ -719,6 +721,7 @@ def replace_tokens_in_history(
             suffix=".txt",
             delete=False,
         ) as tmp:
+            valid_count = 0
             for token in tokens:
                 # Validate token: reject values that would corrupt
                 # the replacement file format or produce malformed
@@ -739,6 +742,7 @@ def replace_tokens_in_history(
                 replacement = _generate_replacement_string(token)
                 # git filter-repo format: literal==>replacement
                 tmp.write(f"{token}==>{replacement}\n")
+                valid_count += 1
                 fingerprint = hashlib.sha256(token.encode()).hexdigest()[:12]
                 logger.debug(
                     "Token replacement: [sha256:%s] → %s",
@@ -746,6 +750,15 @@ def replace_tokens_in_history(
                     replacement,
                 )
             replacements_file = tmp.name
+
+        if valid_count == 0:
+            logger.warning(
+                "No valid tokens to replace in %s "
+                "(all %d were skipped during validation)",
+                repo_path.name,
+                len(tokens),
+            )
+            return True
 
         cmd = [
             "git",
@@ -759,7 +772,7 @@ def replace_tokens_in_history(
 
         logger.info(
             "Replacing %d token(s) in history of %s",
-            len(tokens),
+            valid_count,
             repo_path.name,
         )
 
@@ -781,7 +794,7 @@ def replace_tokens_in_history(
 
         logger.info(
             "Successfully replaced %d token(s) in %s",
-            len(tokens),
+            valid_count,
             repo_path.name,
         )
         return True
@@ -969,9 +982,14 @@ def parse_git_filter_spec(raw: str) -> dict[str, list[str]]:
         if not entry:
             continue
         if ":" not in entry:
+            entry_fp = hashlib.sha256(
+                entry.encode("utf-8")
+            ).hexdigest()
             logger.warning(
-                "Invalid git-filter spec entry (no colon): '%s'",
-                entry,
+                "Invalid git-filter spec entry "
+                "(no colon). sha256=%s length=%d",
+                entry_fp,
+                len(entry),
             )
             continue
         # Split on first colon only (tokens might contain colons)

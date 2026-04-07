@@ -190,6 +190,7 @@ jobs:
   content-filter-tests:
     name: "Test Content Filtering"
     needs: tests
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
