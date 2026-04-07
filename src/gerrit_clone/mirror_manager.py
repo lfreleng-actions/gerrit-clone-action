@@ -160,6 +160,7 @@ class MirrorManager:
         fix_default_branch: bool = True,
         remove_file_patterns: list[str] | None = None,
         git_filter_projects: dict[str, list[str]] | None = None,
+        redact_secrets: bool = False,
     ) -> None:
         """Initialize mirror manager.
 
@@ -192,6 +193,9 @@ class MirrorManager:
             git_filter_projects: Optional mapping of project names to
                 lists of token strings for ``git filter-repo`` replacement.
                 Only the specified projects are filtered.
+            redact_secrets: When ``True``, automatically scan repository
+                content for well-known credential patterns and replace
+                them with safe placeholder values.
         """
         self.config = config
         self.github_api = github_api
@@ -204,6 +208,7 @@ class MirrorManager:
         self.fix_default_branch = fix_default_branch
         self.remove_file_patterns = remove_file_patterns
         self.git_filter_projects = git_filter_projects
+        self.redact_secrets = redact_secrets
         self.clone_manager = CloneManager(config, progress_tracker)
 
     def _build_push_url(self, github_repo: GitHubRepo) -> str:
@@ -586,7 +591,7 @@ class MirrorManager:
 
         # Step 1b: Apply content filters to cloned repositories
         filter_failed_projects: set[str] = set()
-        if self.remove_file_patterns or self.git_filter_projects:
+        if self.remove_file_patterns or self.git_filter_projects or self.redact_secrets:
             logger.info("🔧 Applying content filters to cloned repositories...")
             filter_success = filter_fail = 0
             for cr in clone_results:
@@ -597,6 +602,7 @@ class MirrorManager:
                     cr.project.name,
                     remove_patterns=self.remove_file_patterns,
                     git_filter_projects=self.git_filter_projects,
+                    redact_secrets=self.redact_secrets,
                 )
                 if success:
                     filter_success += 1

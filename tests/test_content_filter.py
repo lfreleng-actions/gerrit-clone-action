@@ -5,7 +5,10 @@
 
 from __future__ import annotations
 
+import random
+import re as re_mod
 import shutil
+import string
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -13,6 +16,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gerrit_clone.content_filter import (
+    SECRET_PATTERNS,
     _generate_replacement_string,
     _remove_files_filter_repo,
     apply_content_filters,
@@ -21,6 +25,7 @@ from gerrit_clone.content_filter import (
     parse_git_filter_spec,
     remove_files_from_bare_repo,
     replace_tokens_in_history,
+    scan_repo_for_secrets,
 )
 
 # ---------------------------------------------------------------------------
@@ -608,3 +613,380 @@ class TestApplyContentFilters:
             )
             assert success is True
             mock_replace.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Runtime token generation for tests
+# ---------------------------------------------------------------------------
+#
+# Tokens are built dynamically so that no real credential literals
+# appear in the source file.  This avoids triggering GitHub push
+# protection while still exercising the actual regex patterns.
+# ---------------------------------------------------------------------------
+
+
+def _make_fake_token(
+    prefix: str,
+    suffix_len: int,
+    *,
+    chars: str | None = None,
+) -> str:
+    """Build a deterministic fake credential string at runtime.
+
+    Args:
+        prefix: Fixed prefix for the token (e.g. ``"glpat-"``).
+        suffix_len: Number of random characters after the prefix.
+        chars: Character pool for the suffix.  Defaults to
+            ASCII letters + digits.
+
+    Returns:
+        A string like ``prefix + <suffix_len random chars>``.
+    """
+    pool = chars or (string.ascii_letters + string.digits)
+    rng = random.Random(f"test-seed-{prefix}-{suffix_len}")
+    return prefix + "".join(rng.choices(pool, k=suffix_len))
+
+
+#: Pre-built fake tokens keyed by SECRET_PATTERNS name.
+#: Every value is guaranteed to match the corresponding pattern.
+_TEST_TOKENS: dict[str, str] = {
+    "gitlab_pat": _make_fake_token(
+        "glpat-", 22, chars=string.ascii_letters + string.digits + "_-"
+    ),
+    "github_pat_classic": _make_fake_token("ghp_", 36),
+    "github_pat_fine_grained": _make_fake_token(
+        "github_pat_", 30, chars=string.ascii_letters + string.digits + "_"
+    ),
+    "github_oauth": _make_fake_token("gho_", 36),
+    "github_app_user": _make_fake_token("ghu_", 36),
+    "github_app_server": _make_fake_token("ghs_", 36),
+    "github_app_refresh": _make_fake_token("ghr_", 36),
+    "aws_access_key_id": _make_fake_token(
+        "AKIA", 16, chars=string.ascii_uppercase + string.digits
+    ),
+    "slack_token": _make_fake_token(
+        "xoxb-", 40, chars=string.ascii_letters + string.digits + "-"
+    ),
+    "stripe_api_key": _make_fake_token(
+        "sk_test_", 24, chars=string.ascii_letters + string.digits
+    ),
+    "sendgrid_api_key": (
+        "SG."
+        + _make_fake_token("", 22, chars=string.ascii_letters + string.digits + "_-")
+        + "."
+        + _make_fake_token("", 22, chars=string.ascii_letters + string.digits + "_-")
+    ),
+    "google_api_key": _make_fake_token(
+        "AIza", 35, chars=string.ascii_letters + string.digits + "_-"
+    ),
+    "npm_token": _make_fake_token("npm_", 36),
+    "pypi_token": _make_fake_token(
+        "pypi-", 55, chars=string.ascii_letters + string.digits + "_-"
+    ),
+}
+
+
+# ---------------------------------------------------------------------------
+# SECRET_PATTERNS tests
+# ---------------------------------------------------------------------------
+
+
+class TestSecretPatterns:
+    """Tests for the built-in credential pattern library."""
+
+    @pytest.mark.parametrize(
+        ("pattern_name", "sample"),
+        list(_TEST_TOKENS.items()),
+    )
+    def test_pattern_matches_sample(self, pattern_name: str, sample: str) -> None:
+        """Each dynamically generated token matches its pattern."""
+        pattern = SECRET_PATTERNS[pattern_name]
+        assert pattern.search(sample), (
+            f"Pattern '{pattern_name}' did not match: {sample}"
+        )
+
+    @pytest.mark.parametrize(
+        ("pattern_name", "non_match"),
+        [
+            ("gitlab_pat", "not-a-token"),
+            ("gitlab_pat", "glpat-short"),
+            ("github_pat_classic", "ghp_tooshort"),
+            ("aws_access_key_id", "AKIA1234"),
+            ("slack_token", "xoxb-short"),
+        ],
+    )
+    def test_pattern_rejects_non_match(self, pattern_name: str, non_match: str) -> None:
+        """Patterns do not match non-credential strings."""
+        pattern = SECRET_PATTERNS[pattern_name]
+        assert not pattern.search(non_match), (
+            f"Pattern '{pattern_name}' should not match: {non_match}"
+        )
+
+    def test_all_patterns_are_compiled(self) -> None:
+        """All entries in SECRET_PATTERNS are compiled regexes."""
+        for name, pat in SECRET_PATTERNS.items():
+            assert isinstance(pat, re_mod.Pattern), f"{name} is not a compiled pattern"
+
+
+# ---------------------------------------------------------------------------
+# scan_repo_for_secrets tests
+# ---------------------------------------------------------------------------
+
+# Use the dynamically generated GitLab PAT for repo fixtures
+_FAKE_GITLAB_PAT = _TEST_TOKENS["gitlab_pat"]
+
+
+class TestScanRepoForSecrets:
+    """Tests for automatic secret scanning."""
+
+    @pytest.fixture()
+    def repo_with_gitlab_pat(self, tmp_path: Path) -> Path:
+        """Create a repo with a fake GitLab PAT in history."""
+        repo = tmp_path / "secret-repo"
+        repo.mkdir()
+        subprocess.run(
+            ["git", "init", str(repo)],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "config",
+                "user.email",
+                "test@test.com",
+            ],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "config",
+                "user.name",
+                "Test",
+            ],
+            capture_output=True,
+            check=True,
+        )
+
+        # Commit a file containing a dynamically generated GitLab PAT
+        config_file = repo / "settings.py"
+        config_file.write_text(f'GITLAB_TOKEN = "{_FAKE_GITLAB_PAT}"\n')
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "Add settings"],
+            capture_output=True,
+            check=True,
+        )
+
+        # Remove the token in a second commit
+        config_file.write_text('GITLAB_TOKEN = ""\n')
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "commit",
+                "-m",
+                "Remove token",
+            ],
+            capture_output=True,
+            check=True,
+        )
+
+        return repo
+
+    def test_discovers_gitlab_pat(self, repo_with_gitlab_pat: Path) -> None:
+        """Scan finds a GitLab PAT in repository history."""
+        found = scan_repo_for_secrets(repo_with_gitlab_pat)
+        assert len(found) >= 1
+        assert _FAKE_GITLAB_PAT in found
+
+    def test_returns_empty_for_clean_repo(self, tmp_path: Path) -> None:
+        """Scan returns empty list for repo without secrets."""
+        repo = tmp_path / "clean-repo"
+        repo.mkdir()
+        subprocess.run(
+            ["git", "init", str(repo)],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "config",
+                "user.email",
+                "test@test.com",
+            ],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "config",
+                "user.name",
+                "Test",
+            ],
+            capture_output=True,
+            check=True,
+        )
+        readme = repo / "README.md"
+        readme.write_text("# Clean project\n")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "Init"],
+            capture_output=True,
+            check=True,
+        )
+
+        found = scan_repo_for_secrets(repo)
+        assert found == []
+
+    def test_returns_empty_for_nonexistent_path(self, tmp_path: Path) -> None:
+        """Scan returns empty list for nonexistent repo path."""
+        found = scan_repo_for_secrets(tmp_path / "does-not-exist")
+        assert found == []
+
+    def test_deduplicates_tokens(self, repo_with_gitlab_pat: Path) -> None:
+        """Same token appearing multiple times is deduplicated."""
+        found = scan_repo_for_secrets(repo_with_gitlab_pat)
+        # The token appears in add and delete commits but
+        # should only appear once in the results
+        token_count = found.count(_FAKE_GITLAB_PAT)
+        assert token_count == 1
+
+
+# ---------------------------------------------------------------------------
+# apply_content_filters with redact_secrets tests
+# ---------------------------------------------------------------------------
+
+
+class TestApplyContentFiltersRedactSecrets:
+    """Tests for apply_content_filters with redact_secrets=True."""
+
+    def test_redact_secrets_calls_scan(self) -> None:
+        """When redact_secrets=True, scan_repo_for_secrets is called."""
+        with (
+            patch(
+                "gerrit_clone.content_filter.scan_repo_for_secrets",
+                return_value=["fake-token-123"],
+            ) as mock_scan,
+            patch(
+                "gerrit_clone.content_filter.replace_tokens_in_history",
+                return_value=True,
+            ) as mock_replace,
+        ):
+            success, error = apply_content_filters(
+                Path("/fake/repo"),
+                "test/project",
+                redact_secrets=True,
+            )
+            assert success is True
+            assert error is None
+            mock_scan.assert_called_once()
+            mock_replace.assert_called_once_with(
+                Path("/fake/repo"),
+                ["fake-token-123"],
+                timeout=600,
+            )
+
+    def test_redact_secrets_no_findings(self) -> None:
+        """No error when scan finds nothing."""
+        with patch(
+            "gerrit_clone.content_filter.scan_repo_for_secrets",
+            return_value=[],
+        ) as mock_scan:
+            success, error = apply_content_filters(
+                Path("/fake/repo"),
+                "test/project",
+                redact_secrets=True,
+            )
+            assert success is True
+            assert error is None
+            mock_scan.assert_called_once()
+
+    def test_redact_secrets_false_skips_scan(self) -> None:
+        """When redact_secrets=False (default), no scan runs."""
+        with patch(
+            "gerrit_clone.content_filter.scan_repo_for_secrets",
+        ) as mock_scan:
+            success, error = apply_content_filters(
+                Path("/fake/repo"),
+                "test/project",
+                redact_secrets=False,
+            )
+            assert success is True
+            assert error is None
+            mock_scan.assert_not_called()
+
+    def test_redact_secrets_combined_with_git_filter(
+        self,
+    ) -> None:
+        """Explicit git-filter and redact-secrets can run together."""
+        git_filters: dict[str, list[str]] = {
+            "test/*": ["explicit-token"],
+        }
+        with (
+            patch(
+                "gerrit_clone.content_filter.replace_tokens_in_history",
+                return_value=True,
+            ) as mock_replace,
+            patch(
+                "gerrit_clone.content_filter.scan_repo_for_secrets",
+                return_value=["auto-discovered-token"],
+            ),
+        ):
+            success, error = apply_content_filters(
+                Path("/fake/repo"),
+                "test/project",
+                git_filter_projects=git_filters,
+                redact_secrets=True,
+            )
+            assert success is True
+            assert error is None
+            # Should be called twice: once for explicit, once for auto
+            assert mock_replace.call_count == 2
+
+    def test_redact_secrets_failure_reports_error(self) -> None:
+        """Failure during auto-redaction is reported."""
+        with (
+            patch(
+                "gerrit_clone.content_filter.scan_repo_for_secrets",
+                return_value=["leaked-token"],
+            ),
+            patch(
+                "gerrit_clone.content_filter.replace_tokens_in_history",
+                return_value=False,
+            ),
+        ):
+            success, error = apply_content_filters(
+                Path("/fake/repo"),
+                "test/project",
+                redact_secrets=True,
+            )
+            assert success is False
+            assert error is not None
+            assert "Auto-redaction failed" in error
