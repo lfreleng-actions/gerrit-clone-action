@@ -262,7 +262,7 @@ asyncio_default_fixture_loop_scope = "function"
 
 # Coverage configuration
 [tool.coverage.run]
-source = ["src"]
+source = ["gerrit_clone"]
 branch = true
 omit = [
     "*/tests/*",
