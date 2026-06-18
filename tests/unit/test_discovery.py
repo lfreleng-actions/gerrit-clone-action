@@ -232,11 +232,12 @@ class TestGerritAPIDiscovery:
             # First call for redirect, then multiple API test failures
             mock_get.side_effect = [normal_response] + [api_not_found] * 5
 
+            host = "gerrit.example.org"
             with pytest.raises(GerritDiscoveryError) as exc_info:
-                discovery.discover_base_url("gerrit.example.org")
+                discovery.discover_base_url(host)
 
         assert "Could not discover Gerrit API endpoint" in str(exc_info.value)
-        assert "gerrit.example.org" in str(exc_info.value)
+        assert host in str(exc_info.value)
 
     def test_discover_multiple_hosts_success(self, discovery):
         """Test discovering multiple hosts successfully."""
@@ -270,7 +271,7 @@ class TestGerritAPIDiscovery:
                 discovery.discover_multiple_hosts(hosts)
 
         assert "Failed to discover API for some hosts" in str(exc_info.value)
-        assert "host2.example.org" in str(exc_info.value)
+        assert hosts[1] in str(exc_info.value)
 
 
 class TestConvenienceFunctions:

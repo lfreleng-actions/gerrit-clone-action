@@ -788,10 +788,11 @@ def resolve_gerrit_credentials(
     env_pass = os.getenv(env_password_var, "").strip()
 
     if env_user and env_pass:
+        # Log only the username variable name; naming the password
+        # variable risks leaking sensitive identifiers into logs.
         log.debug(
-            "Using credentials from environment variables %s/%s",
+            "Using credentials from environment variables (username var: %s)",
             env_username_var,
-            env_password_var,
         )
         return GerritCredentials(
             username=env_user,
@@ -806,10 +807,12 @@ def resolve_gerrit_credentials(
         fallback_pass = os.getenv(fallback_env_password_var, "").strip()
 
         if fallback_user and fallback_pass:
+            # Log only the username variable name; naming the password
+            # variable risks leaking sensitive identifiers into logs.
             log.debug(
-                "Using credentials from fallback environment variables %s/%s",
+                "Using credentials from fallback environment variables "
+                "(username var: %s)",
                 fallback_env_username_var,
-                fallback_env_password_var,
             )
             return GerritCredentials(
                 username=fallback_user,
