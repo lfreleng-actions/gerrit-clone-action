@@ -647,3 +647,19 @@ class TestGitHubBaseUrl:
         """A lookalike host is treated as enterprise, not api.github.com."""
         config = Config(host="github.com.evil.example", source_type=SourceType.GITHUB)
         assert config.base_url == "https://github.com.evil.example/api/v3"
+
+    def test_enterprise_host_preserves_http_scheme(self) -> None:
+        """An http:// scheme on an enterprise host is preserved."""
+        config = Config(
+            host="http://ghe.internal",
+            source_type=SourceType.GITHUB,
+        )
+        assert config.base_url == "http://ghe.internal/api/v3"
+
+    def test_enterprise_host_preserves_https_scheme_with_org(self) -> None:
+        """An explicit https:// scheme with an org suffix is preserved."""
+        config = Config(
+            host="https://ghe.internal/engineering",
+            source_type=SourceType.GITHUB,
+        )
+        assert config.base_url == "https://ghe.internal/api/v3"

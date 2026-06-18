@@ -17,7 +17,10 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from gerrit_clone.clone_manager import CloneManager
-from gerrit_clone.content_filter import apply_content_filters
+from gerrit_clone.content_filter import (
+    apply_content_filters,
+    is_shallow_repository,
+)
 from gerrit_clone.git_utils import (
     get_current_branch,
     get_head_ref,
@@ -591,20 +594,65 @@ class MirrorManager:
 
         # Step 1b: Apply content filters to cloned repositories
         filter_failed_projects: set[str] = set()
+        filter_success = filter_fail = 0
         if self.remove_file_patterns or self.git_filter_projects or self.redact_secrets:
             logger.info("🔧 Applying content filters to cloned repositories...")
-            filter_success = filter_fail = 0
             for cr in clone_results:
                 if not cr.success or not cr.path:
                     continue
+                # Fail closed on shallow repositories when history-
+                # dependent filters are requested: --git-filter /
+                # --redact-secrets rely on full commit history, so a
+                # shallow repo (e.g. created by a prior clone --depth)
+                # can hide older secrets and give a false sense of
+                # safety.  --remove-files targets file paths present at
+                # the branch tips and does not depend on full history
+                # being available (though it may still rewrite history
+                # via git filter-repo when that tool is present), so it
+                # remains safe on a shallow repo and still runs; only
+                # the unsafe history-scanning filters are dropped for
+                # the repo.
+                repo_git_filter = self.git_filter_projects
+                repo_redact = self.redact_secrets
+                history_filters_skipped = False
+                if (self.git_filter_projects or self.redact_secrets) and (
+                    is_shallow_repository(cr.path)
+                ):
+                    logger.warning(
+                        "Refusing to run --git-filter / --redact-secrets "
+                        "on shallow repo %s: truncated history can hide "
+                        "older secrets. Re-clone without --depth.",
+                        cr.project.name,
+                    )
+                    # The requested redaction/rewrite did not run, so
+                    # this repo counts as a filtering failure even if
+                    # the safe --remove-files step below succeeds.
+                    filter_fail += 1
+                    filter_failed_projects.add(cr.project.name)
+                    history_filters_skipped = True
+                    repo_git_filter = None
+                    repo_redact = False
+                    if not self.remove_file_patterns:
+                        # Nothing history-independent left to do.
+                        continue
                 success, error = apply_content_filters(
                     cr.path,
                     cr.project.name,
                     remove_patterns=self.remove_file_patterns,
-                    git_filter_projects=self.git_filter_projects,
-                    redact_secrets=self.redact_secrets,
+                    git_filter_projects=repo_git_filter,
+                    redact_secrets=repo_redact,
+                    timeout=self.config.clone_timeout,
                 )
-                if success:
+                if history_filters_skipped:
+                    # Already counted as a failure above; don't also
+                    # count the safe --remove-files step as a success.
+                    if not success:
+                        logger.warning(
+                            "Content filter failed for %s: %s",
+                            cr.project.name,
+                            error,
+                        )
+                elif success:
                     filter_success += 1
                 else:
                     filter_fail += 1

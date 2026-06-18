@@ -22,12 +22,13 @@ Provides three main capabilities:
 
 from __future__ import annotations
 
-import fnmatch
 import hashlib
 import re
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 from gerrit_clone.logging import get_logger
@@ -80,11 +81,6 @@ SECRET_PATTERNS: dict[str, re.Pattern[str]] = {
     "sendgrid_api_key": re.compile(r"SG\.[A-Za-z0-9_\-]{22,}\.[A-Za-z0-9_\-]{22,}"),
     # Google API keys
     "google_api_key": re.compile(r"AIza[A-Za-z0-9_\-]{35}"),
-    # Heroku API keys
-    "heroku_api_key": re.compile(
-        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
-        r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-    ),
     # npm tokens
     "npm_token": re.compile(r"npm_[A-Za-z0-9]{36}"),
     # PyPI API tokens
@@ -94,6 +90,41 @@ SECRET_PATTERNS: dict[str, re.Pattern[str]] = {
         r"[0-9a-f]{32}-us[0-9]{1,2}"
     ),
 }
+
+
+def is_shallow_repository(repo_path: Path, *, timeout: int = 30) -> bool:
+    """Return ``True`` if the git repo at *repo_path* is a shallow clone.
+
+    Used to fail closed before running history-dependent filters
+    (``--git-filter`` / ``--redact-secrets``): a shallow repository has a
+    truncated history, so secret scanning / history rewriting could miss
+    older leaked secrets (and a later unshallow fetch might reintroduce
+    blocked content), giving a false sense of safety.
+
+    Fails closed: if shallowness cannot be determined (``git`` missing,
+    not a repository, or a timeout) the repo is treated as shallow so the
+    caller refuses to run history-dependent filters against a repo whose
+    full history could not be verified.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo_path),
+                "rev-parse",
+                "--is-shallow-repository",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True
+    if result.returncode != 0:
+        return True
+    return result.stdout.strip() == "true"
 
 
 def scan_repo_for_secrets(
@@ -107,6 +138,10 @@ def scan_repo_for_secrets(
     ``git log --all -p`` and matches each line against the
     built-in :data:`SECRET_PATTERNS` dictionary.
 
+    The git output is streamed line-by-line rather than buffered
+    in full, so repositories with very large histories do not
+    require the entire diff to be held in memory at once.
+
     Args:
         repo_path: Path to the git repository (bare or regular).
         timeout: Timeout in seconds for the git log operation.
@@ -114,6 +149,11 @@ def scan_repo_for_secrets(
     Returns:
         Deduplicated list of discovered credential strings,
         in the order they were first encountered.
+
+    Raises:
+        RuntimeError: If the scan cannot complete (git log times
+            out or exits non-zero).  Failing closed ensures callers
+            never mistake an incomplete scan for a clean repository.
     """
     if not repo_path.exists():
         return []
@@ -124,62 +164,159 @@ def scan_repo_for_secrets(
         str(repo_path),
         "log",
         "--all",
-        "--diff-filter=ACMR",
+        "--diff-filter=ACMRD",
         "-p",
+        # By default ``git log -p`` emits no patch for merge commits,
+        # so a secret introduced (or removed) only in a merge's
+        # conflict-resolution would be invisible to the scan.
+        # ``--diff-merges=first-parent`` makes each merge show its
+        # diff against the first parent, surfacing content that the
+        # merge brought onto the mainline so it can be redacted.
+        "--diff-merges=first-parent",
         "--no-color",
     ]
 
-    try:
-        result = subprocess.run(
-            cmd,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        logger.warning(
-            "Secret scan timed out for %s after %ds",
-            repo_path.name,
-            timeout,
-        )
-        return []
-
-    if result.returncode != 0:
-        logger.warning(
-            "Secret scan git log failed for %s: %s",
-            repo_path.name,
-            result.stderr.strip(),
-        )
-        return []
-
-    # Scan output line by line for known patterns
     seen: set[str] = set()
     discovered: list[str] = []
 
-    for line in result.stdout.splitlines():
-        # Scan diff content lines while skipping file header markers.
-        # Leading "+" is stripped from added lines; deleted lines are
-        # also scanned as-is.
-        stripped = line.lstrip("+")
-        if not stripped or line.startswith("---") or line.startswith("+++"):
-            continue
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+    except OSError as exc:
+        # subprocess.Popen raises OSError (e.g. FileNotFoundError when
+        # the git binary is missing) before the process even starts.
+        # Re-raise as RuntimeError so the function honours its
+        # documented fail-closed contract: callers (apply_content_
+        # filters) treat RuntimeError as a filtering failure rather
+        # than mistaking an unstarted scan for a clean repository.
+        raise RuntimeError(
+            f"Failed to start git log for secret scan in {repo_path.name}: {exc}"
+        ) from exc
+    deadline = time.monotonic() + timeout
+    timed_out = threading.Event()
 
-        for pattern_name, pattern in SECRET_PATTERNS.items():
-            for match in pattern.finditer(stripped):
-                token = match.group(0)
-                if token not in seen:
-                    seen.add(token)
-                    discovered.append(token)
-                    logger.info(
-                        "Secret scan: found %s pattern "
-                        "(sha256:%s) in %s",
-                        pattern_name,
-                        hashlib.sha256(
-                            token.encode()
-                        ).hexdigest()[:12],
-                        repo_path.name,
-                    )
+    # Drain stderr concurrently in a background thread.  ``git log``
+    # can write to stderr (e.g. warnings) while we are still reading
+    # stdout; if stderr were left unread until after the stdout loop
+    # finished, a child that filled the OS stderr pipe buffer would
+    # block on its write, stop producing stdout, and deadlock the
+    # scan until the watchdog killed it.  Reading both pipes in
+    # parallel keeps the child unblocked.
+    stderr_chunks: list[str] = []
+
+    def _drain_stderr() -> None:
+        if proc.stderr is not None:
+            for err_line in proc.stderr:
+                stderr_chunks.append(err_line)
+
+    stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+    stderr_thread.start()
+
+    def _on_timeout() -> None:
+        # Fires unconditionally once ``timeout`` seconds have elapsed
+        # since the watchdog started — the Timer is not reset by
+        # output activity.  Killing the process unblocks the ``for
+        # line in stdout`` iterator, which otherwise only re-checks
+        # the deadline when a new line arrives and so could block
+        # indefinitely if git stalls without producing output.  A
+        # threading.Timer is used instead of select() so the timeout
+        # is enforced portably, including on Windows where select()
+        # does not support pipe handles.
+        timed_out.set()
+        proc.kill()
+
+    watchdog = threading.Timer(timeout, _on_timeout)
+    watchdog.start()
+
+    # Track position within the ``git log -p`` stream so file-header
+    # markers are distinguished structurally rather than by a fragile
+    # textual heuristic.  A unified diff file header ("--- a/..." /
+    # "+++ b/...") only appears after a "diff --git" line and before
+    # the first "@@" hunk of that file; once inside a hunk every
+    # "+"/"-"/" " line is content.  This avoids skipping a genuine
+    # added/removed line whose own text begins with "++"/"--" (which
+    # renders as "+++ "/"--- " once the diff marker is prepended) and
+    # also keeps commit metadata / message bodies out of the scan.
+    in_hunk = False
+
+    try:
+        if proc.stdout is not None:
+            for line in proc.stdout:
+                # Also re-check the deadline on each line so a scan
+                # that keeps producing output but runs long still
+                # stops promptly.
+                if time.monotonic() > deadline:
+                    timed_out.set()
+                    proc.kill()
+                    break
+
+                # A new commit or a new file resets hunk state; the
+                # intervening lines (commit/Author/Date, index/mode
+                # lines and the ---/+++ file headers) are never
+                # scannable content.
+                if line.startswith("commit ") or line.startswith("diff --"):
+                    in_hunk = False
+                    continue
+                if line.startswith("@@"):
+                    in_hunk = True
+                    continue
+                if not in_hunk:
+                    continue
+                # Inside a hunk: added ("+"), removed ("-") or context
+                # (" ").  Anything else (e.g. "\ No newline at end of
+                # file") is not content.  The single leading diff
+                # marker is stripped before matching.
+                if not line or line[0] not in ("+", "-", " "):
+                    continue
+                stripped = line[1:].rstrip("\n")
+                if not stripped:
+                    continue
+
+                for pattern_name, pattern in SECRET_PATTERNS.items():
+                    for match in pattern.finditer(stripped):
+                        token = match.group(0)
+                        if token not in seen:
+                            seen.add(token)
+                            discovered.append(token)
+                            logger.info(
+                                "Secret scan: found %s pattern "
+                                "(sha256:%s) in %s",
+                                pattern_name,
+                                hashlib.sha256(
+                                    token.encode()
+                                ).hexdigest()[:12],
+                                repo_path.name,
+                            )
+    finally:
+        watchdog.cancel()
+        returncode = proc.wait()
+        # The stderr drain thread exits once the pipe reaches EOF
+        # (which happens when the process terminates).
+        stderr_thread.join()
+        stderr_output = "".join(stderr_chunks)
+
+    if timed_out.is_set():
+        msg = (
+            f"Secret scan timed out for "
+            f"{repo_path.name} after {timeout}s"
+        )
+        logger.error(msg)
+        raise RuntimeError(msg)
+
+    if returncode != 0:
+        msg = (
+            f"Secret scan git log failed for "
+            f"{repo_path.name}: {stderr_output.strip()}"
+        )
+        logger.error(msg)
+        raise RuntimeError(msg)
 
     if discovered:
         logger.info(
@@ -201,12 +338,83 @@ def scan_repo_for_secrets(
 # ---------------------------------------------------------------------------
 
 
+def _glob_to_regex(pat: str) -> str:
+    """Translate a path-segment-aware glob into a regex fragment.
+
+    The returned fragment is **not** anchored; callers anchor it by
+    matching with :func:`re.fullmatch` (which requires the pattern to
+    cover the whole string).
+
+    Unlike :func:`fnmatch.translate`, ``*`` and ``?`` do **not** match
+    across directory separators.  Recursive matching requires the
+    explicit ``**`` token.
+
+    Semantics:
+    - ``*``    matches any run of characters except ``/``
+    - ``?``    matches a single character except ``/``
+    - ``**``   matches any run of characters including ``/``
+    - ``**/``  optionally matches a leading directory prefix
+    - ``[seq]`` matches one character in the set (``!`` negates)
+
+    Args:
+        pat: Glob pattern with ``/`` separators.
+
+    Returns:
+        A regex string (not anchored) suitable for :func:`re.fullmatch`.
+    """
+    i = 0
+    n = len(pat)
+    out: list[str] = []
+    while i < n:
+        c = pat[i]
+        if c == "*":
+            if i + 1 < n and pat[i + 1] == "*":
+                i += 2
+                if i < n and pat[i] == "/":
+                    # ``**/`` matches zero or more leading segments
+                    out.append("(?:.*/)?")
+                    i += 1
+                else:
+                    out.append(".*")
+            else:
+                out.append("[^/]*")
+                i += 1
+        elif c == "?":
+            out.append("[^/]")
+            i += 1
+        elif c == "[":
+            j = i + 1
+            if j < n and pat[j] in ("!", "^"):
+                j += 1
+            if j < n and pat[j] == "]":
+                j += 1
+            while j < n and pat[j] != "]":
+                j += 1
+            if j >= n:
+                # No closing bracket: treat '[' as a literal.
+                out.append(re.escape(c))
+                i += 1
+            else:
+                inner = pat[i + 1 : j]
+                if inner.startswith("!"):
+                    inner = "^" + inner[1:]
+                out.append("[" + inner + "]")
+                i = j + 1
+        else:
+            out.append(re.escape(c))
+            i += 1
+    return "".join(out)
+
+
 def match_file_pattern(file_path: str, pattern: str) -> bool:
     """Match a file path against a glob or regex pattern.
 
     Supports:
     - Shell-style globs: ``*``, ``?``, ``[seq]``, ``**`` (recursive)
     - Regex patterns: prefixed with ``regex:`` (e.g. ``regex:\\.pyc$``)
+
+    Glob wildcards are path-segment aware: ``*`` and ``?`` do not
+    match across ``/`` separators.  Use ``**`` for recursive matching.
 
     Args:
         file_path: Relative file path within the repository.
@@ -215,41 +423,54 @@ def match_file_pattern(file_path: str, pattern: str) -> bool:
     Returns:
         ``True`` if *file_path* matches *pattern*.
     """
+    # Normalize separators up front so both regex and glob matching
+    # see a consistent forward-slash path representation regardless
+    # of the platform that produced *file_path*.
+    normalized = file_path.replace("\\", "/")
+
     if pattern.startswith("regex:"):
         regex = pattern[len("regex:") :]
+        if not regex:
+            # An empty regex (bare ``regex:``) would match every
+            # path via ``re.search("", ...)``, which could silently
+            # remove all files.  Reject it explicitly.
+            logger.warning("Empty regex pattern (bare 'regex:') ignored")
+            return False
         try:
-            return bool(re.search(regex, file_path))
+            return bool(re.search(regex, normalized))
         except re.error as exc:
             logger.warning("Invalid regex pattern %r: %s", regex, exc)
             return False
 
-    # Normalize separators for matching
-    normalized = file_path.replace("\\", "/")
+    # Normalize the pattern's separators to match.
     pat = pattern.replace("\\", "/")
 
-    # Support ** for recursive matching
-    if "**" in pat:
-        # Convert ** glob to regex
-        regex_pat = fnmatch.translate(pat).replace(r"(?s:.*)", ".*")
-        return bool(re.match(regex_pat, normalized))
+    if not normalized or not pat:
+        return False
 
-    # Try matching against full path and basename
-    if fnmatch.fnmatchcase(normalized, pat):
-        return True
+    regex = _glob_to_regex(pat)
 
-    # Also try matching just the filename or relative segments
-    # e.g., pattern ".github/dependabot.yml" should match
-    # "some/prefix/.github/dependabot.yml"
-    matched = False
-    if "/" in pat:
-        # Multi-component pattern: check if path ends with pattern
-        matched = normalized.endswith("/" + pat) or normalized == pat
-    else:
-        # Single-component: match against any path segment
-        parts = normalized.split("/")
-        matched = any(fnmatch.fnmatchcase(part, pat) for part in parts)
+    try:
+        # Anchored full-path match.
+        if re.fullmatch(regex, normalized):
+            return True
 
-    return matched
+        if "/" in pat:
+            # Multi-component pattern: allow it to match as a path
+            # suffix, e.g. ".github/dependabot.yml" matches
+            # "some/prefix/.github/dependabot.yml".
+            return bool(re.fullmatch(r"(?:.*/)?" + regex, normalized))
+
+        # Single-component pattern: match against any path segment.
+        return any(re.fullmatch(regex, part) for part in normalized.split("/"))
+    except re.error as exc:
+        # A malformed glob (e.g. an unterminated bracket class that
+        # ``_glob_to_regex`` turns into an invalid regex) must not
+        # crash filtering.  Mirror the guarded ``regex:`` path: warn
+        # and treat the pattern as non-matching so --remove-files
+        # fails gracefully rather than raising.
+        logger.warning("Invalid glob pattern %r: %s", pattern, exc)
+        return False
 
 
 def normalize_file_patterns(raw: list[str]) -> list[str]:
@@ -360,11 +581,25 @@ def _remove_files_filter_repo(
         if pattern.startswith("regex:"):
             # Use --path-regex with --invert-paths
             regex = pattern[len("regex:") :]
+            if not regex:
+                # A bare ``regex:`` is an empty regex, which matches
+                # every path. Combined with ``--invert-paths`` that
+                # would wipe the entire repository history. Reject it
+                # explicitly, mirroring ``match_file_pattern``.
+                logger.warning(
+                    "Empty regex pattern (bare 'regex:') ignored"
+                )
+                continue
             cmd.extend(["--path-regex", regex, "--invert-paths"])
             applied.append(pattern)
         elif any(c in pattern for c in ("*", "?", "[", "]")):
             cmd.extend(["--path-glob", pattern, "--invert-paths"])
             applied.append(pattern)
+        elif not pattern:
+            # An empty exact path is meaningless; skip it rather than
+            # passing an empty ``--path`` to git filter-repo.
+            logger.warning("Empty file pattern ignored")
+            continue
         else:
             # Exact path — use --path with --invert-paths
             cmd.extend(["--path", pattern, "--invert-paths"])
@@ -411,12 +646,18 @@ def _remove_files_filter_repo(
         raise RuntimeError(msg) from exc
 
 
-def _list_tree_files(repo_path: Path, ref: str) -> list[str]:
+def _list_tree_files(
+    repo_path: Path,
+    ref: str,
+    *,
+    timeout: int = 300,
+) -> list[str]:
     """List all files in a bare repo at a given ref.
 
     Args:
         repo_path: Path to the bare git repository.
         ref: Git ref to list files from.
+        timeout: Timeout in seconds for the ls-tree operation.
 
     Returns:
         List of file paths relative to the repo root.
@@ -435,13 +676,50 @@ def _list_tree_files(repo_path: Path, ref: str) -> list[str]:
             check=False,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=timeout,
         )
         if result.returncode != 0:
             return []
         return [line for line in result.stdout.strip().splitlines() if line]
-    except (subprocess.TimeoutExpired, Exception):
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "git ls-tree timed out for %s (ref %s) after %ds",
+            repo_path.name,
+            ref,
+            timeout,
+        )
         return []
+    except OSError as exc:
+        logger.warning(
+            "git ls-tree failed for %s (ref %s): %s",
+            repo_path.name,
+            ref,
+            exc,
+        )
+        return []
+
+
+def _matches_for_removal(file_path: str, pattern: str) -> bool:
+    """Match a file for removal, including directory-prefix matches.
+
+    Extends :func:`match_file_pattern` so that a plain (non-glob,
+    non-``regex:``) path pattern that names a directory also matches
+    every file nested under it.  This mirrors ``git filter-repo``'s
+    ``--path`` prefix semantics (used by the preferred removal path)
+    so the worktree fallback removes folders consistently rather than
+    only matching a file whose whole path equals the pattern.
+    """
+    if match_file_pattern(file_path, pattern):
+        return True
+    # Directory-prefix matching only applies to plain path patterns;
+    # ``regex:`` and glob patterns already express their own scope.
+    if pattern.startswith("regex:"):
+        return False
+    if any(c in pattern for c in ("*", "?", "[", "]")):
+        return False
+    normalized = file_path.replace("\\", "/")
+    prefix = pattern.replace("\\", "/").rstrip("/")
+    return bool(prefix) and normalized.startswith(prefix + "/")
 
 
 def _remove_files_worktree(
@@ -505,13 +783,19 @@ def _remove_files_worktree(
 
     for branch in branches:
         # List files on this branch
-        files = _list_tree_files(repo_path, branch)
+        files = _list_tree_files(repo_path, branch, timeout=timeout)
         if not files:
             continue
 
-        # Find files matching any pattern
+        # Find files matching any pattern.  ``_matches_for_removal``
+        # adds directory-prefix matching for plain path patterns so a
+        # pattern like ``.github/workflows`` removes everything under
+        # that directory — matching ``git filter-repo``'s ``--path``
+        # prefix semantics used by the preferred code path.
         files_to_remove = [
-            f for f in files if any(match_file_pattern(f, pat) for pat in patterns)
+            f
+            for f in files
+            if any(_matches_for_removal(f, pat) for pat in patterns)
         ]
 
         if not files_to_remove:
@@ -535,6 +819,15 @@ def _remove_files_worktree(
                     str(repo_path),
                     "worktree",
                     "add",
+                    # ``--force`` is required for non-bare repos: git
+                    # otherwise refuses to add a worktree for a branch
+                    # that is already checked out in the repo's main
+                    # working tree (the common case for a normal
+                    # clone), which would make --remove-files a silent
+                    # no-op on that branch.  The branch ref is updated
+                    # by the commit below regardless of the now-stale
+                    # primary checkout.
+                    "--force",
                     worktree_dir,
                     branch,
                 ],
@@ -609,12 +902,15 @@ def _remove_files_worktree(
             )
 
         except subprocess.CalledProcessError as exc:
-            logger.warning(
-                "Failed to create worktree for branch '%s' in %s: %s",
-                branch,
-                repo_path.name,
-                exc.stderr,
-            )
+            # Surface the failure instead of silently skipping the
+            # branch: a swallowed worktree error would make
+            # --remove-files a no-op for this branch while still
+            # reporting overall success.  apply_content_filters
+            # treats RuntimeError as a filtering failure.
+            raise RuntimeError(
+                f"Failed to create worktree for branch '{branch}' in "
+                f"{repo_path.name}: {exc.stderr}"
+            ) from exc
         finally:
             # Clean up worktree
             subprocess.run(
@@ -720,6 +1016,13 @@ def replace_tokens_in_history(
             prefix="gerrit-clone-replacements-",
             suffix=".txt",
             delete=False,
+            # Pin the encoding and newline so the mapping file is
+            # written identically regardless of the ambient locale:
+            # git filter-repo reads --replace-text as UTF-8, and a
+            # deterministic "\n" avoids platform newline translation
+            # that could corrupt an entry.
+            encoding="utf-8",
+            newline="\n",
         ) as tmp:
             valid_count = 0
             for token in tokens:
@@ -946,7 +1249,12 @@ def apply_content_filters(
                     "No secrets found to redact in %s",
                     project_name,
                 )
-        except RuntimeError as exc:
+        except (RuntimeError, OSError) as exc:
+            # RuntimeError covers the scan/redaction fail-closed
+            # paths; OSError (e.g. FileNotFoundError when git is
+            # missing) can surface from subprocess.Popen.  Both are
+            # reported as filter failures so the (success, error)
+            # contract always holds.
             msg = str(exc)
             logger.error(msg)
             errors.append(msg)

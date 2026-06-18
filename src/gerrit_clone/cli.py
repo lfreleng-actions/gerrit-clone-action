@@ -26,6 +26,7 @@ from gerrit_clone.concurrent_utils import handle_sigint_gracefully
 from gerrit_clone.config import ConfigurationError, load_config
 from gerrit_clone.content_filter import (
     apply_content_filters,
+    is_shallow_repository,
     normalize_file_patterns,
     parse_git_filter_spec,
 )
@@ -664,6 +665,9 @@ def clone(
             no_netrc=no_netrc,
             netrc_file=str(netrc_file) if netrc_file else None,
             netrc_optional=netrc_optional,
+            remove_files=remove_files,
+            git_filter=git_filter,
+            redact_secrets=redact_secrets,
         )
 
         # Set up unified logging system (file + console)
@@ -867,14 +871,61 @@ def clone(
             for cr in batch_result.results:
                 if not cr.success or not cr.path:
                     continue
+                # Fail closed on shallow repositories when history-
+                # dependent filters are requested: --git-filter /
+                # --redact-secrets rely on the full commit history, so
+                # a shallow repo can hide older secrets (and a later
+                # unshallow fetch could reintroduce blocked content),
+                # giving a false sense of safety.  Probe each repo
+                # individually rather than only checking config.depth:
+                # a repo that already existed locally (e.g. cloned
+                # earlier with --depth) is shallow even when this run
+                # sets no --depth.  --remove-files targets file paths
+                # present at the branch tips and does not depend on
+                # full history being available (though it may still
+                # rewrite history via git filter-repo when that tool
+                # is present), so it is still applied; only the unsafe
+                # history-scanning filters are dropped for the shallow
+                # repo.
+                repo_git_filter = git_filter_projects
+                repo_redact = redact_secrets
+                history_filters_skipped = False
+                if (git_filter_projects or redact_secrets) and (
+                    is_shallow_repository(cr.path)
+                ):
+                    if not quiet:
+                        console.print(
+                            "[red]❌ Refusing to run --git-filter / "
+                            "--redact-secrets on shallow repo "
+                            f"{cr.project.name}: truncated history can hide "
+                            "older secrets. Re-clone without --depth.[/red]"
+                        )
+                    # The requested redaction/rewrite did not run, so
+                    # this repo counts as a filtering failure even if
+                    # the safe --remove-files step below succeeds.
+                    filter_fail += 1
+                    history_filters_skipped = True
+                    repo_git_filter = None
+                    repo_redact = False
+                    if not remove_file_patterns:
+                        # Nothing history-independent left to do.
+                        continue
                 success, error = apply_content_filters(
                     cr.path,
                     cr.project.name,
                     remove_patterns=remove_file_patterns,
-                    git_filter_projects=git_filter_projects,
-                    redact_secrets=redact_secrets,
+                    git_filter_projects=repo_git_filter,
+                    redact_secrets=repo_redact,
+                    timeout=clone_timeout,
                 )
-                if success:
+                if history_filters_skipped:
+                    # Already counted as a failure above; don't also count
+                    # the safe --remove-files step as a success.
+                    if not success and not quiet:
+                        console.print(
+                            f"[yellow]⚠️  Filter failed for {cr.project.name}: {error}[/yellow]"
+                        )
+                elif success:
                     filter_success += 1
                 else:
                     filter_fail += 1
@@ -1372,16 +1423,70 @@ def refresh(
                 console.print("[cyan]🔧 Applying content filters...[/cyan]")
             filter_success = filter_fail = 0
             for rr in result.results:
-                if rr.status.value == "failed":
+                # Only apply content filters to repositories that
+                # refreshed cleanly (SUCCESS / UP_TO_DATE).  Skipping
+                # merely FAILED results is not enough: statuses like
+                # SKIPPED, CONFLICTS, NOT_GIT_REPO, NOT_GERRIT_REPO,
+                # UNCOMMITTED_CHANGES and DETACHED_HEAD also leave the
+                # worktree in a state where rewriting history or
+                # removing files would be unsafe or raise.  The
+                # ``RefreshResult.success`` property captures exactly
+                # the SUCCESS / UP_TO_DATE set.
+                if not rr.success:
                     continue
+                # Fail closed on shallow repositories when history-
+                # dependent filters are requested: --git-filter /
+                # --redact-secrets rely on full history, so a shallow
+                # repo can hide older secrets (and a later unshallow
+                # fetch could reintroduce blocked content), giving a
+                # false sense of safety.  --remove-files targets file
+                # paths present at the branch tips and does not depend
+                # on full history being available (though it may still
+                # rewrite history via git filter-repo when that tool is
+                # present), so it is still applied below — we only drop
+                # the unsafe history-scanning filters for this repo.
+                # (clone applies the same guard up-front via
+                # config.depth; refresh operates on pre-existing local
+                # repos, so it must probe each repo for shallowness.)
+                repo_git_filter = git_filter_projects
+                repo_redact = redact_secrets
+                history_filters_skipped = False
+                if (git_filter_projects or redact_secrets) and (
+                    is_shallow_repository(rr.path)
+                ):
+                    if not quiet:
+                        console.print(
+                            "[red]❌ Refusing to run --git-filter / "
+                            "--redact-secrets on shallow repo "
+                            f"{rr.project_name}: truncated history can hide "
+                            "older secrets. Re-clone without --depth.[/red]"
+                        )
+                    # The requested redaction/rewrite did not run, so
+                    # this repo counts as a filtering failure even if
+                    # the safe --remove-files step below succeeds.
+                    filter_fail += 1
+                    history_filters_skipped = True
+                    repo_git_filter = None
+                    repo_redact = False
+                    if not remove_file_patterns:
+                        # Nothing history-independent left to do.
+                        continue
                 success, error = apply_content_filters(
                     rr.path,
                     rr.project_name,
                     remove_patterns=remove_file_patterns,
-                    git_filter_projects=git_filter_projects,
-                    redact_secrets=redact_secrets,
+                    git_filter_projects=repo_git_filter,
+                    redact_secrets=repo_redact,
+                    timeout=timeout,
                 )
-                if success:
+                if history_filters_skipped:
+                    # Already counted as a failure above; don't also count
+                    # the safe --remove-files step as a success.
+                    if not success and not quiet:
+                        console.print(
+                            f"[yellow]⚠️  Filter failed for {rr.project_name}: {error}[/yellow]"
+                        )
+                elif success:
                     filter_success += 1
                 else:
                     filter_fail += 1

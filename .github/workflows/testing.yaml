@@ -241,15 +241,18 @@ jobs:
             exit 0
           fi
 
-          SPEC="testsuite/pythonsdk-tests:${FILTER_TOKEN}"
+          # Pass the (secret-bearing) filter spec via the
+          # GERRIT_GIT_FILTER environment variable rather than the
+          # --git-filter CLI flag so the token never appears in the
+          # invoked command line.
+          export GERRIT_GIT_FILTER="testsuite/pythonsdk-tests:${FILTER_TOKEN}"
 
           gerrit-clone clone \
             --host "gerrit.onap.org" \
             --output-path "onap-git-filter" \
             --threads "1" \
             --https \
-            --include-projects "testsuite/pythonsdk-tests" \
-            --git-filter "$SPEC"
+            --include-projects "testsuite/pythonsdk-tests"
 
       - name: "Validate --git-filter clone results"
         shell: bash
@@ -379,12 +382,15 @@ jobs:
             echo "::warning::Skipped (no secret)" ; exit 0
           fi
 
-          SPEC="testsuite/pythonsdk-tests:${FILTER_TOKEN}"
+          # Pass the (secret-bearing) filter spec via the
+          # GERRIT_GIT_FILTER environment variable rather than the
+          # --git-filter CLI flag so the token never appears in the
+          # invoked command line.
+          export GERRIT_GIT_FILTER="testsuite/pythonsdk-tests:${FILTER_TOKEN}"
 
           gerrit-clone refresh \
             --output-path "onap-refresh-test" \
-            --threads "1" \
-            --git-filter "$SPEC"
+            --threads "1"
 
       - name: "Validate refresh --git-filter results"
         shell: bash

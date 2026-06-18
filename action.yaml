@@ -484,7 +484,11 @@ runs:
         INPUT_DISABLE_LOG_FILE: ${{ inputs.disable-log-file }}
         INPUT_LOG_LEVEL: ${{ inputs.log-level }}
         INPUT_REMOVE_FILES: ${{ inputs.remove-files }}
-        INPUT_GIT_FILTER: ${{ inputs.git-filter }}
+        # Passed straight to the CLI via its GERRIT_GIT_FILTER envvar
+        # rather than as a --git-filter argument, so the value (which
+        # may embed credential tokens) is never echoed in the command
+        # line logged below.
+        GERRIT_GIT_FILTER: ${{ inputs.git-filter }}
         INPUT_REDACT_SECRETS: ${{ inputs.redact-secrets }}
       run: |
         # WARNING: Do NOT use literal empty expression syntax (dollar
@@ -669,9 +673,9 @@ runs:
           cmd+=(--remove-files "$INPUT_REMOVE_FILES")
         fi
 
-        if [ -n "$INPUT_GIT_FILTER" ]; then
-          cmd+=(--git-filter "$INPUT_GIT_FILTER")
-        fi
+        # The git filter value is supplied to the CLI through the
+        # GERRIT_GIT_FILTER environment variable (set in the step env
+        # above) so it never appears in the echoed command line.
 
         if [ "$INPUT_REDACT_SECRETS" = "true" ]; then
           cmd+=(--redact-secrets)

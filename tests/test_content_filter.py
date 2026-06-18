@@ -18,8 +18,10 @@ import pytest
 from gerrit_clone.content_filter import (
     SECRET_PATTERNS,
     _generate_replacement_string,
+    _matches_for_removal,
     _remove_files_filter_repo,
     apply_content_filters,
+    is_shallow_repository,
     match_file_pattern,
     normalize_file_patterns,
     parse_git_filter_spec,
@@ -52,9 +54,9 @@ class TestMatchFilePattern:
         """Star wildcard matches within a directory."""
         assert match_file_pattern(".github/dependabot.yml", ".github/*.yml")
 
-    def test_glob_star_crosses_dirs(self) -> None:
-        """fnmatch * matches across directory separators."""
-        assert match_file_pattern(".github/workflows/ci.yml", ".github/*.yml")
+    def test_glob_star_does_not_cross_dirs(self) -> None:
+        """Star wildcard does not match across directory separators."""
+        assert not match_file_pattern(".github/workflows/ci.yml", ".github/*.yml")
 
     def test_glob_double_star(self) -> None:
         """Double star matches recursively."""
@@ -95,6 +97,16 @@ class TestMatchFilePattern:
     def test_regex_no_match(self) -> None:
         """Regex that does not match."""
         assert not match_file_pattern("README.md", r"regex:\.py$")
+
+    def test_regex_normalizes_windows_separators(self) -> None:
+        """Regex matching sees forward-slash paths on every platform."""
+        # A backslash-separated path (as Windows git may emit) must
+        # match a forward-slash regex, consistent with glob matching.
+        assert match_file_pattern(r".github\dependabot.yml", r"regex:^\.github/")
+
+    def test_empty_regex_rejected(self) -> None:
+        """A bare 'regex:' must not match every path."""
+        assert not match_file_pattern("any/path/file.txt", "regex:")
 
     # -- edge cases ---------------------------------------------------------
 
@@ -569,6 +581,53 @@ class TestRemoveFilesFilterRepo:
         with pytest.raises(RuntimeError, match="git filter-repo failed"):
             _remove_files_filter_repo(repo, ["*.pyc"])
 
+    @patch("gerrit_clone.content_filter._check_git_filter_repo", return_value=True)
+    @patch("gerrit_clone.content_filter.subprocess.run")
+    def test_empty_regex_pattern_is_skipped(
+        self,
+        mock_run: MagicMock,
+        _mock_check: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A bare 'regex:' must never reach filter-repo as --path-regex.
+
+        An empty regex matches every path, so combined with
+        --invert-paths it would wipe the entire repository history.
+        It must be dropped before the command is built.
+        """
+        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        repo = tmp_path / "test.git"
+        repo.mkdir()
+
+        # A bare 'regex:' on its own yields no applied patterns, so
+        # filter-repo is never invoked.
+        result = _remove_files_filter_repo(repo, ["regex:"])
+
+        assert result == []
+        mock_run.assert_not_called()
+
+    @patch("gerrit_clone.content_filter._check_git_filter_repo", return_value=True)
+    @patch("gerrit_clone.content_filter.subprocess.run")
+    def test_empty_regex_dropped_from_mixed_patterns(
+        self,
+        mock_run: MagicMock,
+        _mock_check: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A bare 'regex:' is dropped while valid patterns are kept."""
+        mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+        repo = tmp_path / "test.git"
+        repo.mkdir()
+
+        result = _remove_files_filter_repo(repo, ["regex:", "*.pyc"])
+
+        assert result == ["*.pyc"]
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        # The empty regex must not appear as a --path-regex argument.
+        assert "--path-regex" not in cmd
+        assert "--path-glob" in cmd
+
 
 class TestApplyContentFilters:
     """Tests for the high-level apply_content_filters function."""
@@ -667,9 +726,18 @@ _TEST_TOKENS: dict[str, str] = {
     "slack_token": _make_fake_token(
         "xoxb-", 40, chars=string.ascii_letters + string.digits + "-"
     ),
+    "slack_webhook": (
+        "https://hooks.slack.com/services/"
+        + _make_fake_token("T", 10)
+        + "/"
+        + _make_fake_token("B", 10)
+        + "/"
+        + _make_fake_token("", 24)
+    ),
     "stripe_api_key": _make_fake_token(
         "sk_test_", 24, chars=string.ascii_letters + string.digits
     ),
+    "twilio_api_key": _make_fake_token("SK", 32, chars=string.hexdigits.lower()[:16]),
     "sendgrid_api_key": (
         "SG."
         + _make_fake_token("", 22, chars=string.ascii_letters + string.digits + "_-")
@@ -682,6 +750,9 @@ _TEST_TOKENS: dict[str, str] = {
     "npm_token": _make_fake_token("npm_", 36),
     "pypi_token": _make_fake_token(
         "pypi-", 55, chars=string.ascii_letters + string.digits + "_-"
+    ),
+    "mailchimp_api_key": (
+        _make_fake_token("", 32, chars=string.hexdigits.lower()[:16]) + "-us12"
     ),
 }
 
@@ -726,6 +797,16 @@ class TestSecretPatterns:
         """All entries in SECRET_PATTERNS are compiled regexes."""
         for name, pat in SECRET_PATTERNS.items():
             assert isinstance(pat, re_mod.Pattern), f"{name} is not a compiled pattern"
+
+    def test_every_pattern_has_a_sample(self) -> None:
+        """Every SECRET_PATTERNS entry has a matching sample token.
+
+        Guards against new credential patterns being added without a
+        corresponding entry in ``_TEST_TOKENS``, which would otherwise
+        leave that pattern unexercised by ``test_pattern_matches_sample``.
+        """
+        missing = set(SECRET_PATTERNS) - set(_TEST_TOKENS)
+        assert not missing, f"Patterns without a test sample: {sorted(missing)}"
 
 
 # ---------------------------------------------------------------------------
@@ -878,6 +959,76 @@ class TestScanRepoForSecrets:
         token_count = found.count(_FAKE_GITLAB_PAT)
         assert token_count == 1
 
+    def test_scans_content_line_starting_with_plus_plus(self, tmp_path: Path) -> None:
+        """A diff content line whose text begins with "++ "/"-- " is scanned.
+
+        Such a line renders as "+++ "/"--- " once git prepends the
+        single diff marker, which a naive file-header check would skip
+        and thereby miss a secret on that line.  The hunk-aware scanner
+        must still inspect it.
+        """
+        repo = tmp_path / "plus-plus-repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", str(repo)], capture_output=True, check=True)
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.email", "test@test.com"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "user.name", "Test"],
+            capture_output=True,
+            check=True,
+        )
+        # The line's own content starts with "++ " so the added-line
+        # diff marker turns it into "+++ ...".
+        config_file = repo / "notes.txt"
+        config_file.write_text(f'++ token = "{_FAKE_GITLAB_PAT}"\n')
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "."],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "commit", "-m", "Add notes"],
+            capture_output=True,
+            check=True,
+        )
+
+        found = scan_repo_for_secrets(repo)
+        assert _FAKE_GITLAB_PAT in found
+
+    def test_git_log_failure_raises(self, tmp_path: Path) -> None:
+        """A non-zero git log exit fails closed with RuntimeError."""
+        # Directory exists but is not a git repository, so
+        # ``git log`` exits non-zero.  The scan must raise rather
+        # than return an empty list that looks like a clean repo.
+        not_a_repo = tmp_path / "not-a-repo"
+        not_a_repo.mkdir()
+        with pytest.raises(RuntimeError, match="Secret scan git log failed"):
+            scan_repo_for_secrets(not_a_repo)
+
+    def test_timeout_raises(
+        self,
+        repo_with_gitlab_pat: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A scan that exceeds its deadline fails closed."""
+        # First call computes the deadline; subsequent calls report
+        # a time well past it so the first streamed line trips the
+        # timeout guard.
+        calls = iter([1000.0])
+
+        def fake_monotonic() -> float:
+            return next(calls, 1_000_000.0)
+
+        monkeypatch.setattr(
+            "gerrit_clone.content_filter.time.monotonic",
+            fake_monotonic,
+        )
+        with pytest.raises(RuntimeError, match="Secret scan timed out"):
+            scan_repo_for_secrets(repo_with_gitlab_pat, timeout=300)
+
 
 # ---------------------------------------------------------------------------
 # apply_content_filters with redact_secrets tests
@@ -942,6 +1093,22 @@ class TestApplyContentFiltersRedactSecrets:
             assert error is None
             mock_scan.assert_not_called()
 
+    def test_redact_secrets_oserror_is_filter_failure(self) -> None:
+        """An OSError from the scan is reported, not bubbled up."""
+        # e.g. git binary missing -> FileNotFoundError from Popen.
+        with patch(
+            "gerrit_clone.content_filter.scan_repo_for_secrets",
+            side_effect=FileNotFoundError("git not found"),
+        ):
+            success, error = apply_content_filters(
+                Path("/fake/repo"),
+                "test/project",
+                redact_secrets=True,
+            )
+            assert success is False
+            assert error is not None
+            assert "git not found" in error
+
     def test_redact_secrets_combined_with_git_filter(
         self,
     ) -> None:
@@ -990,3 +1157,104 @@ class TestApplyContentFiltersRedactSecrets:
             assert success is False
             assert error is not None
             assert "Auto-redaction failed" in error
+
+
+class TestIsShallowRepository:
+    """Tests for the shallow-repository detector."""
+
+    def _make_repo(self, path: Path) -> None:
+        """Initialise a small repo with two commits at path."""
+        subprocess.run(["git", "init", str(path)], capture_output=True, check=True)
+        subprocess.run(
+            ["git", "-C", str(path), "config", "user.email", "t@t.com"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(path), "config", "user.name", "T"],
+            capture_output=True,
+            check=True,
+        )
+        for i in range(2):
+            (path / f"f{i}.txt").write_text(f"{i}\n")
+            subprocess.run(
+                ["git", "-C", str(path), "add", "."],
+                capture_output=True,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(path), "commit", "-m", f"c{i}"],
+                capture_output=True,
+                check=True,
+            )
+
+    def test_full_clone_is_not_shallow(self, tmp_path: Path) -> None:
+        """A normal repository is reported as non-shallow."""
+        repo = tmp_path / "full"
+        self._make_repo(repo)
+        assert is_shallow_repository(repo) is False
+
+    def test_shallow_clone_is_shallow(self, tmp_path: Path) -> None:
+        """A depth-1 clone is reported as shallow."""
+        origin = tmp_path / "origin"
+        self._make_repo(origin)
+        shallow = tmp_path / "shallow"
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                f"file://{origin}",
+                str(shallow),
+            ],
+            capture_output=True,
+            check=True,
+        )
+        assert is_shallow_repository(shallow) is True
+
+    def test_non_repo_fails_closed(self, tmp_path: Path) -> None:
+        """A non-git directory is treated as shallow (fail closed)."""
+        not_a_repo = tmp_path / "plain"
+        not_a_repo.mkdir()
+        assert is_shallow_repository(not_a_repo) is True
+
+
+class TestMatchesForRemoval:
+    """Tests for the directory-aware removal matcher."""
+
+    def test_exact_file_match(self) -> None:
+        """An exact file path still matches."""
+        assert _matches_for_removal(".github/dependabot.yml", ".github/dependabot.yml")
+
+    def test_directory_prefix_matches_nested(self) -> None:
+        """A plain directory pattern matches files nested under it."""
+        assert _matches_for_removal(".github/workflows/ci.yml", ".github/workflows")
+
+    def test_directory_prefix_boundary(self) -> None:
+        """A directory prefix only matches at a path boundary."""
+        assert not _matches_for_removal(".github/workflowsX/a.yml", ".github/workflows")
+
+    def test_unrelated_path_does_not_match(self) -> None:
+        """An unrelated path does not match."""
+        assert not _matches_for_removal("src/main.py", ".github/workflows")
+
+    def test_glob_pattern_no_prefix_treatment(self) -> None:
+        """Glob patterns keep glob semantics (no directory-prefix)."""
+        # ``a/*`` matches ``a/b`` but not the nested ``a/b/c``.
+        assert _matches_for_removal("a/b", "a/*")
+        assert not _matches_for_removal("a/b/c", "a/*")
+
+
+class TestMatchFilePatternMalformedGlob:
+    """The glob matcher must not crash on a regex-invalid glob."""
+
+    def test_invalid_glob_returns_false(self, monkeypatch) -> None:
+        """A glob that yields an invalid regex is treated as no-match."""
+        # Force _glob_to_regex to emit an invalid regex fragment so the
+        # downstream re.fullmatch raises re.error; the guard must catch
+        # it and return False rather than propagating.
+        monkeypatch.setattr(
+            "gerrit_clone.content_filter._glob_to_regex", lambda _pat: "["
+        )
+        assert match_file_pattern("some/path.txt", "whatever") is False

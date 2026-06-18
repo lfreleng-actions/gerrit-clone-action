@@ -411,8 +411,9 @@ class Config:
                 # as "github.com.evil.example" is not mistaken for
                 # github.com.
                 bare_host = self.host
+                scheme = "https"
                 if "://" in bare_host:
-                    bare_host = bare_host.split("://", 1)[1]
+                    scheme, bare_host = bare_host.split("://", 1)
                 bare_host = bare_host.split("/", 1)[0]
                 host_lower = bare_host.lower()
                 if host_lower == "github.com" or host_lower.endswith(
@@ -420,8 +421,12 @@ class Config:
                 ):
                     self.base_url = "https://api.github.com"
                 else:
-                    # GitHub Enterprise
-                    self.base_url = f"https://{bare_host}/api/v3"
+                    # GitHub Enterprise — preserve the scheme supplied
+                    # on ``host`` (defaulting to https) so installations
+                    # served over plain http or a non-standard scheme
+                    # still receive a correct API base URL rather than a
+                    # forced https:// one.
+                    self.base_url = f"{scheme}://{bare_host}/api/v3"
 
         # Validate GitHub-specific requirements
         # Check for token: explicit config > GERRIT_CLONE_TOKEN > GITHUB_TOKEN

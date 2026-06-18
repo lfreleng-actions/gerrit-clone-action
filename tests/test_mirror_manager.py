@@ -1162,6 +1162,7 @@ class TestMirrorManager:
             remove_patterns=[".github/dependabot.yml"],
             git_filter_projects=None,
             redact_secrets=False,
+            timeout=manager.config.clone_timeout,
         )
         assert len(result) == 1
         assert result[0].status == MirrorStatus.SUCCESS
@@ -1220,6 +1221,10 @@ class TestMirrorManager:
                 "clone_projects",
                 return_value=[mock_clone_result],
             ),
+            patch(
+                "gerrit_clone.mirror_manager.is_shallow_repository",
+                return_value=False,
+            ),
             patch.object(manager, "_push_to_github", return_value=(True, None)),
         ):
             result = manager.mirror_projects(projects)
@@ -1230,6 +1235,7 @@ class TestMirrorManager:
             remove_patterns=None,
             git_filter_projects=git_filters,
             redact_secrets=False,
+            timeout=manager.config.clone_timeout,
         )
         assert len(result) == 1
         assert result[0].status == MirrorStatus.SUCCESS
@@ -1277,6 +1283,55 @@ class TestMirrorManager:
             pytest.raises(RuntimeError, match="Content filtering failed"),
         ):
             manager.mirror_projects(projects)
+
+    @patch("gerrit_clone.mirror_manager.is_shallow_repository", return_value=True)
+    @patch("gerrit_clone.mirror_manager.apply_content_filters")
+    def test_mirror_projects_shallow_repo_refuses_history_filter(
+        self,
+        mock_apply_filters: Mock,
+        _mock_is_shallow: Mock,
+    ) -> None:
+        """History filters are refused (fail closed) on a shallow repo."""
+        config = Config(
+            host="gerrit.example.org",
+            port=29418,
+            path=Path("/tmp/test"),
+        )
+        github_api = Mock()
+        github_api.list_all_repos_graphql = Mock(return_value={})
+        github_api.list_repos = Mock(return_value=[])
+        github_api.batch_delete_repos = AsyncMock(return_value={})
+        github_api.batch_create_repos = AsyncMock(return_value={})
+
+        manager = MirrorManager(
+            config=config,
+            github_api=github_api,
+            github_org="test-org",
+            redact_secrets=True,
+        )
+
+        projects = [Project("shallow-repo", ProjectState.ACTIVE)]
+        mock_clone_result = CloneResult(
+            project=projects[0],
+            status=CloneStatus.SUCCESS,
+            path=Path("/tmp/test/shallow-repo"),
+            duration_seconds=2.0,
+        )
+
+        with (
+            patch.object(
+                manager.clone_manager,
+                "clone_projects",
+                return_value=[mock_clone_result],
+            ),
+            pytest.raises(RuntimeError, match="Content filtering failed"),
+        ):
+            manager.mirror_projects(projects)
+
+        # The unsafe history filter must never be applied on a shallow
+        # repo: apply_content_filters is not reached because no
+        # history-independent --remove-files work remains.
+        mock_apply_filters.assert_not_called()
 
     @patch("gerrit_clone.mirror_manager.apply_content_filters")
     def test_mirror_projects_no_filters_skips_content_filtering(

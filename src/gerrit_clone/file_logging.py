@@ -451,11 +451,17 @@ def cli_args_to_dict(**kwargs: Any) -> dict[str, Any]:
     # Filter out None values and internal parameters
     filtered_args = {}
     skip_keys = {'console', 'logger', 'config_file_content'}
+    # Keys whose values may carry credentials must never be written
+    # verbatim to the log file (e.g. git_filter can embed real
+    # tokens when supplied via GERRIT_GIT_FILTER).
+    sensitive_keys = {'git_filter', 'github_token'}
 
     for key, value in kwargs.items():
         if key not in skip_keys and value is not None:
+            if key in sensitive_keys:
+                filtered_args[key] = '<redacted>'
             # Convert Path objects to strings
-            if isinstance(value, Path):
+            elif isinstance(value, Path):
                 filtered_args[key] = str(value)
             # Convert lists to comma-separated strings for readability
             elif isinstance(value, list):
