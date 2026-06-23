@@ -171,9 +171,12 @@ inputs:
     required: false
     default: "true"
   discovery-method:
-    description: "Discovery method: ssh, http, both, or github_api"
+    description: >-
+      Discovery method: ssh, http, both, or github_api. Leave empty to
+      derive from the clone protocol (http with use-https, otherwise ssh;
+      github_api for GitHub sources).
     required: false
-    default: "ssh"
+    default: ""
   keep-remote-protocol:
     description: "Preserve original protocol for remote (default: SSH)"
     required: false
@@ -606,11 +609,9 @@ runs:
           fi
         fi
 
-        # Discovery method (auto-select http for HTTPS)
-        if [ "${INPUT_USE_HTTPS}" = "true" ] && \
-          [ "${INPUT_DISCOVERY_METHOD}" = "ssh" ]; then
-          cmd+=(--discovery-method http)
-        elif [ "${INPUT_DISCOVERY_METHOD}" != "ssh" ]; then
+        # Discovery method (when empty, the CLI derives it from the clone
+        # protocol, keeping discovery and cloning consistent).
+        if [ -n "${INPUT_DISCOVERY_METHOD}" ]; then
           cmd+=(--discovery-method \
             "${INPUT_DISCOVERY_METHOD}")
         fi

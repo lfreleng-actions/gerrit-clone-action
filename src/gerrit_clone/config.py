@@ -38,7 +38,7 @@ class ConfigManager:
         ssh_identity_file: str | Path | None = None,
         path: str | Path | None = None,
         skip_archived: bool | None = None,
-        discovery_method: str | None = None,
+        discovery_method: str | DiscoveryMethod | None = None,
         allow_nested_git: bool | None = None,
         nested_protection: bool | None = None,
         move_conflicting: bool | None = None,
@@ -376,16 +376,23 @@ class ConfigManager:
         if "ssh_identity_file" in config_dict:
             config_dict["ssh_identity_file"] = Path(config_dict["ssh_identity_file"])
 
-        # Handle discovery_method conversion
+        # Handle discovery_method conversion. An empty or whitespace value is
+        # treated as unset so Config can derive it from the source type and
+        # clone protocol; drop it here rather than failing validation.
         if "discovery_method" in config_dict:
             dm = config_dict["discovery_method"]
             if isinstance(dm, str):
-                try:
-                    config_dict["discovery_method"] = DiscoveryMethod(dm.lower())
-                except ValueError as err:
-                    raise ConfigurationError(
-                        f"Invalid discovery_method '{dm}'. Must be one of: ssh, http, both"
-                    ) from err
+                if dm.strip():
+                    try:
+                        config_dict["discovery_method"] = DiscoveryMethod(
+                            dm.strip().lower()
+                        )
+                    except ValueError as err:
+                        raise ConfigurationError(
+                            f"Invalid discovery_method '{dm}'. Must be one of: ssh, http, both"
+                        ) from err
+                else:
+                    config_dict.pop("discovery_method")
 
         # Handle source_type conversion
         if "source_type" in config_dict:
@@ -398,9 +405,8 @@ class ConfigManager:
                         f"Invalid source_type '{st}'. Must be one of: gerrit, github"
                     ) from err
 
-        # Smart port defaulting based on protocol and source type
+        # Source-type-aware port and path defaulting
         source_type = config_dict.get("source_type", SourceType.GERRIT)
-        use_https = config_dict.get("use_https", False)
 
         # Auto-adjust path to include server/org structure when using default (current directory)
         # This prevents naming conflicts when multiple clone operations run in the same directory
@@ -425,15 +431,14 @@ class ConfigManager:
 
         # For GitHub sources, port should always be None (not used)
         if source_type == SourceType.GITHUB:
-            if "port" in config_dict:
-                # User explicitly set port for GitHub - remove it
-                config_dict.pop("port")
+            # User may have set port for GitHub - remove it (not meaningful)
+            config_dict.pop("port", None)
         elif "port" not in config_dict:
-            # No port specified, use protocol-appropriate default
-            config_dict["port"] = 443 if use_https else 29418
-        elif config_dict["port"] == 29418 and use_https:
-            # SSH port specified but using HTTPS, switch to HTTPS port
-            config_dict["port"] = 443
+            # Default to the Gerrit SSH port. ``port`` is the SSH port only:
+            # HTTPS discovery and cloning use ``base_url``, never this port, so
+            # it is intentionally left unchanged when use_https is set. This
+            # prevents SSH discovery from ever targeting the HTTPS port (443).
+            config_dict["port"] = 29418
 
         # Coerce string include/exclude_projects to single-element lists
         # so Config.__post_init__ can safely iterate and normalize them.

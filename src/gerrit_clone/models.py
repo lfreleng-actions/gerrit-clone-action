@@ -250,7 +250,11 @@ class Config:
 
     # Source type and discovery settings
     source_type: SourceType = SourceType.GERRIT
-    discovery_method: DiscoveryMethod = DiscoveryMethod.SSH
+    # ``None`` means "derive from source type and clone protocol" (resolved in
+    # __post_init__). This keeps discovery and clone protocol consistent and
+    # makes contradictory combinations (e.g. SSH discovery with HTTPS cloning)
+    # impossible to reach silently.
+    discovery_method: DiscoveryMethod | None = None
 
     # GitHub-specific settings
     github_token: str | None = None
@@ -325,6 +329,11 @@ class Config:
             if self.port <= 0 or self.port > 65535:
                 raise ValueError("port must be between 1 and 65535")
 
+        # Resolve discovery method as a single source of truth for protocol
+        # selection. ``port`` is the SSH port only; HTTPS discovery/cloning use
+        # ``base_url``, so SSH-based discovery cannot work in HTTPS mode (no SSH
+        # credentials are configured and the SSH port is not exposed over HTTPS).
+        self._resolve_discovery_method()
 
         if self.threads is not None and self.threads < 1:
             raise ValueError("threads must be at least 1")
@@ -417,6 +426,45 @@ class Config:
                 "Set GERRIT_CLONE_TOKEN, GITHUB_TOKEN, or use "
                 "--github-token when needed."
             )
+
+    def _resolve_discovery_method(self) -> None:
+        """Resolve and validate the project discovery method.
+
+        ``discovery_method`` may be ``None`` to request derivation from the
+        source type and clone protocol. This keeps discovery consistent with
+        cloning and fast-fails on contradictory combinations instead of
+        producing an obscure runtime connection error (for example, attempting
+        SSH discovery against the HTTPS port).
+        """
+        if self.source_type == SourceType.GITHUB:
+            # GitHub only supports API/HTTP discovery; coerce anything else
+            # (including the unset default) to the GitHub API.
+            if self.discovery_method not in (
+                DiscoveryMethod.GITHUB_API,
+                DiscoveryMethod.HTTP,
+            ):
+                self.discovery_method = DiscoveryMethod.GITHUB_API
+            return
+
+        # Gerrit source
+        if self.use_https:
+            if self.discovery_method is None:
+                # HTTPS cloning pairs with HTTP REST discovery.
+                self.discovery_method = DiscoveryMethod.HTTP
+            elif self.discovery_method in (
+                DiscoveryMethod.SSH,
+                DiscoveryMethod.BOTH,
+            ):
+                raise ValueError(
+                    "use_https requires HTTP-based project discovery, but "
+                    f"discovery_method='{self.discovery_method.value}' needs "
+                    "SSH. HTTPS mode configures no SSH credentials and does not "
+                    "expose the SSH port. Use discovery_method='http' (the "
+                    "default with HTTPS) or clone over SSH instead."
+                )
+        elif self.discovery_method is None:
+            # SSH cloning pairs with SSH discovery by default.
+            self.discovery_method = DiscoveryMethod.SSH
 
     @property
     def effective_threads(self) -> int:
@@ -684,7 +732,11 @@ class BatchResult:
                 "use_gh_cli": self.config.use_gh_cli,
                 "depth": self.config.depth,
                 "branch": self.config.branch,
-                "discovery_method": self.config.discovery_method.value,
+                "discovery_method": (
+                    self.config.discovery_method.value
+                    if self.config.discovery_method
+                    else None
+                ),
             },
             "total": self.total_count,
             "succeeded": self.success_count,
