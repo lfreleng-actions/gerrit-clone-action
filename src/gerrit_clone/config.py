@@ -389,7 +389,7 @@ class ConfigManager:
                         )
                     except ValueError as err:
                         raise ConfigurationError(
-                            f"Invalid discovery_method '{dm}'. Must be one of: ssh, http, both"
+                            f"Invalid discovery_method '{dm}'. Must be one of: ssh, http, both, github_api"
                         ) from err
                 else:
                     config_dict.pop("discovery_method")

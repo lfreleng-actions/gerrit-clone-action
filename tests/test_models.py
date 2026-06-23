@@ -355,6 +355,24 @@ class TestDiscoveryMethodResolution:
         )
         assert config.discovery_method == DiscoveryMethod.GITHUB_API
 
+    def test_github_normalizes_http_discovery_to_api(self):
+        """GitHub normalizes HTTP discovery to github_api (no ambiguity)."""
+        config = Config(
+            host="github.com",
+            source_type=SourceType.GITHUB,
+            github_token="x",
+            discovery_method=DiscoveryMethod.HTTP,
+        )
+        assert config.discovery_method == DiscoveryMethod.GITHUB_API
+
+    def test_gerrit_rejects_github_api_discovery(self):
+        """Gerrit sources reject github_api discovery to avoid mis-routing."""
+        with pytest.raises(ValueError, match="only valid for GitHub"):
+            Config(
+                host="gerrit.example.org",
+                discovery_method=DiscoveryMethod.GITHUB_API,
+            )
+
 
 class TestCloneResult:
     """Test CloneResult dataclass."""

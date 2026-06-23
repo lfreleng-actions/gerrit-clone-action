@@ -702,7 +702,6 @@ def clone(
         # type and clone protocol"). Only validate/convert when explicitly set.
         discovery_method_enum: DiscoveryMethod | None = None
         if discovery_method and discovery_method.strip():
-            console = Console()
             try:
                 discovery_method_enum = DiscoveryMethod(
                     discovery_method.strip().lower()
@@ -1773,6 +1772,23 @@ def mirror(
             try:
                 discovery_enum = DiscoveryMethod(discovery_method.strip().lower())
             except ValueError:
+                console.print(
+                    Panel(
+                        Text(
+                            f"Invalid discovery method '{discovery_method}'\nMust be one of: ssh, http, both",
+                            style="bold red",
+                        ),
+                        title="Configuration Error",
+                        border_style="red",
+                    )
+                )
+                raise typer.Exit(ExitCode.CONFIGURATION_ERROR) from None
+
+            # Mirror targets Gerrit only; github_api is a valid enum value but
+            # not a valid Gerrit discovery method. Reject it here so the user
+            # gets a clear configuration error rather than an unexpected error
+            # raised later by Config.
+            if discovery_enum == DiscoveryMethod.GITHUB_API:
                 console.print(
                     Panel(
                         Text(

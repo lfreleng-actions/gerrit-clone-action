@@ -331,8 +331,8 @@ class Config:
 
         # Resolve discovery method as a single source of truth for protocol
         # selection. ``port`` is the SSH port only; HTTPS discovery/cloning use
-        # ``base_url``, so SSH-based discovery cannot work in HTTPS mode (no SSH
-        # credentials are configured and the SSH port is not exposed over HTTPS).
+        # ``base_url``. This tool treats SSH-based discovery as incompatible
+        # with HTTPS clone mode (regardless of whether SSH credentials exist).
         self._resolve_discovery_method()
 
         if self.threads is not None and self.threads < 1:
@@ -437,16 +437,20 @@ class Config:
         SSH discovery against the HTTPS port).
         """
         if self.source_type == SourceType.GITHUB:
-            # GitHub only supports API/HTTP discovery; coerce anything else
-            # (including the unset default) to the GitHub API.
-            if self.discovery_method not in (
-                DiscoveryMethod.GITHUB_API,
-                DiscoveryMethod.HTTP,
-            ):
-                self.discovery_method = DiscoveryMethod.GITHUB_API
+            # GitHub discovery always uses the GitHub API path, regardless of
+            # the requested method. Normalize to GITHUB_API so the resolved
+            # value is unambiguous (HTTP would be misleading here).
+            self.discovery_method = DiscoveryMethod.GITHUB_API
             return
 
-        # Gerrit source
+        # Gerrit source: GitHub API discovery is meaningless and would route
+        # to the GitHub backend, failing in confusing ways. Reject it early.
+        if self.discovery_method == DiscoveryMethod.GITHUB_API:
+            raise ValueError(
+                "discovery_method='github_api' is only valid for GitHub "
+                "sources, not Gerrit. Use 'ssh', 'http', or 'both'."
+            )
+
         if self.use_https:
             if self.discovery_method is None:
                 # HTTPS cloning pairs with HTTP REST discovery.
@@ -458,8 +462,8 @@ class Config:
                 raise ValueError(
                     "use_https requires HTTP-based project discovery, but "
                     f"discovery_method='{self.discovery_method.value}' needs "
-                    "SSH. HTTPS mode configures no SSH credentials and does not "
-                    "expose the SSH port. Use discovery_method='http' (the "
+                    "SSH. SSH-based discovery is incompatible with HTTPS clone "
+                    "mode in this tool. Use discovery_method='http' (the "
                     "default with HTTPS) or clone over SSH instead."
                 )
         elif self.discovery_method is None:
