@@ -273,31 +273,36 @@ runs:
   steps:
     - name: "Validate inputs"
       shell: bash
+      env:
+        INPUT_HOST: ${{ inputs.host }}
+        INPUT_VERBOSE: ${{ inputs.verbose }}
+        INPUT_QUIET: ${{ inputs.quiet }}
+        INPUT_USE_HTTPS: ${{ inputs.use-https }}
       run: |
-        if [ -z "${{ inputs.host }}" ]; then
+        if [ -z "${INPUT_HOST}" ]; then
           echo "::error::host input is required"
           exit 1
         fi
 
         # Validate mutually exclusive options
-        if [ "${{ inputs.verbose }}" = "true" ] && \
-          [ "${{ inputs.quiet }}" = "true" ]; then
+        if [ "${INPUT_VERBOSE}" = "true" ] && \
+          [ "${INPUT_QUIET}" = "true" ]; then
           echo "::error::verbose and quiet options cannot be used together"
           exit 1
         fi
 
-        echo "Gerrit host: ${{ inputs.host }}"
-        echo "DEBUG: use-https input value: '${{ inputs.use-https }}'"
+        echo "Gerrit host: ${INPUT_HOST}"
+        echo "DEBUG: use-https input value: '${INPUT_USE_HTTPS}'"
 
     - name: "Setup SSH authentication"
       if: ${{ inputs.use-https != 'true' }}
       shell: bash
       run: |
         # Extract bare hostname (strip path like /ORG from github.com/ORG)
-        SSH_HOST="${{ inputs.host }}"
+        SSH_HOST="${INPUT_HOST}"
         SSH_HOST="${SSH_HOST%%/*}"
 
-        if [ -n "${{ inputs.ssh-private-key }}" ]; then
+        if [ -n "${INPUT_SSH_PRIVATE_KEY}" ]; then
           echo "Setting up SSH agent with private key"
 
           # Start SSH agent and add key (never touches disk)
@@ -315,7 +320,7 @@ runs:
           }
 
           echo "Adding private key to SSH agent..."
-          echo "${{ inputs.ssh-private-key }}" | ssh-add - || {
+          echo "${INPUT_SSH_PRIVATE_KEY}" | ssh-add - || {
             echo "Failed to add private key to SSH agent"
             exit 1
           }
@@ -328,7 +333,7 @@ runs:
           mkdir -p ~/.ssh
 
           # Try to scan SSH host keys with proper port and timeout
-          PORT="${{ inputs.port }}"
+          PORT="${INPUT_PORT}"
           if [ -z "$PORT" ]; then
             PORT="29418"
           fi
@@ -346,10 +351,20 @@ runs:
         fi
       env:
         SSH_AUTH_SOCK: /tmp/ssh_agent_${{ github.run_id }}.sock
+        INPUT_HOST: ${{ inputs.host }}
+        INPUT_SSH_PRIVATE_KEY: ${{ inputs.ssh-private-key }}
+        INPUT_PORT: ${{ inputs.port }}
 
     - name: "Install and setup gerrit-clone CLI"
       shell: bash
-      run: |
+      env:
+        INPUT_BUILD_FROM_SOURCE: ${{ inputs.build-from-source }}
+      # The only $GITHUB_PATH write below appends a path under the
+      # runner-provided $HOME ("$HOME/.local/bin") so the gerrit-clone
+      # wrapper is on PATH for the subsequent clone step; the value is
+      # not derived from any action input or other user-controllable
+      # source.
+      run: | # zizmor: ignore[github-env]
         # Check if gerrit-clone is already installed (from workflow setup)
         if command -v gerrit-clone &> /dev/null; then
           echo "gerrit-clone CLI is already available"
@@ -362,7 +377,7 @@ runs:
             export PATH="$HOME/.cargo/bin:$PATH"
           fi
 
-          if [ "${{ inputs.build-from-source }}" = "true" ]; then
+          if [ "${INPUT_BUILD_FROM_SOURCE}" = "true" ]; then
             # Build and install from the action's own source tree
             echo "Building gerrit-clone from source..."
             echo "Source path: $GITHUB_ACTION_PATH"
@@ -394,6 +409,54 @@ runs:
       env:
         INPUT_INCLUDE_PROJECTS: ${{ inputs.include-projects }}
         INPUT_EXCLUDE_PROJECTS: ${{ inputs.exclude-projects }}
+        INPUT_HOST: ${{ inputs.host }}
+        INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
+        INPUT_HTTP_PASSWORD: ${{ inputs.http-password }}
+        INPUT_USE_HTTPS: ${{ inputs.use-https }}
+        INPUT_SSH_USER: ${{ inputs.ssh-user }}
+        # Only a boolean is needed here (the key material itself is
+        # consumed by the earlier SSH-agent setup step); avoid placing
+        # the private key in this step's environment.
+        INPUT_SSH_KEY_PROVIDED: ${{ inputs.ssh-private-key != '' }}
+        INPUT_PORT: ${{ inputs.port }}
+        INPUT_SOURCE_TYPE: ${{ inputs.source-type }}
+        INPUT_GITHUB_ORG: ${{ inputs.github-org }}
+        INPUT_USE_GH_CLI: ${{ inputs.use-gh-cli }}
+        INPUT_BASE_URL: ${{ inputs.base-url }}
+        INPUT_OUTPUT_PATH: ${{ inputs.output-path }}
+        INPUT_SKIP_ARCHIVED: ${{ inputs.skip-archived }}
+        INPUT_THREADS: ${{ inputs.threads }}
+        INPUT_DEPTH: ${{ inputs.depth }}
+        INPUT_BRANCH: ${{ inputs.branch }}
+        INPUT_MIRROR: ${{ inputs.mirror }}
+        INPUT_HTTP_USER: ${{ inputs.http-user }}
+        INPUT_NO_NETRC: ${{ inputs.no-netrc }}
+        INPUT_NETRC_FILE: ${{ inputs.netrc-file }}
+        INPUT_NETRC_OPTIONAL: ${{ inputs.netrc-optional }}
+        INPUT_DISCOVERY_METHOD: ${{ inputs.discovery-method }}
+        INPUT_KEEP_REMOTE_PROTOCOL: ${{ inputs.keep-remote-protocol }}
+        INPUT_STRICT_HOST: ${{ inputs.strict-host }}
+        INPUT_CLONE_TIMEOUT: ${{ inputs.clone-timeout }}
+        INPUT_RETRY_ATTEMPTS: ${{ inputs.retry-attempts }}
+        INPUT_RETRY_BASE_DELAY: ${{ inputs.retry-base-delay }}
+        INPUT_CONFIG_FILE: ${{ inputs.config-file }}
+        INPUT_SSH_DEBUG: ${{ inputs.ssh-debug }}
+        INPUT_ALLOW_NESTED_GIT: ${{ inputs.allow-nested-git }}
+        INPUT_NESTED_PROTECTION: ${{ inputs.nested-protection }}
+        INPUT_MOVE_CONFLICTING: ${{ inputs.move-conflicting }}
+        INPUT_EXIT_ON_ERROR: ${{ inputs.exit-on-error }}
+        INPUT_NO_REFRESH: ${{ inputs.no-refresh }}
+        INPUT_FORCE_REFRESH: ${{ inputs.force-refresh }}
+        INPUT_FETCH_ONLY: ${{ inputs.fetch-only }}
+        INPUT_SKIP_CONFLICTS: ${{ inputs.skip-conflicts }}
+        INPUT_RETRY_FACTOR: ${{ inputs.retry-factor }}
+        INPUT_RETRY_MAX_DELAY: ${{ inputs.retry-max-delay }}
+        INPUT_MANIFEST_FILENAME: ${{ inputs.manifest-filename }}
+        INPUT_VERBOSE: ${{ inputs.verbose }}
+        INPUT_QUIET: ${{ inputs.quiet }}
+        INPUT_LOG_FILE: ${{ inputs.log-file }}
+        INPUT_DISABLE_LOG_FILE: ${{ inputs.disable-log-file }}
+        INPUT_LOG_LEVEL: ${{ inputs.log-level }}
       run: |
         # WARNING: Do NOT use literal empty expression syntax (dollar
         # brace-brace with nothing inside) anywhere in this run block,
@@ -410,20 +473,20 @@ runs:
         fi
 
         # Extract bare hostname (strip path like /ORG from github.com/ORG)
-        SSH_HOST="${{ inputs.host }}"
+        SSH_HOST="${INPUT_HOST}"
         SSH_HOST="${SSH_HOST%%/*}"
 
         # Export secrets as env vars (keeps them off the cmd line)
-        if [ -n "${{ inputs.github-token }}" ]; then
-          export GERRIT_CLONE_TOKEN="${{ inputs.github-token }}"
+        if [ -n "${INPUT_GITHUB_TOKEN}" ]; then
+          export GERRIT_CLONE_TOKEN="${INPUT_GITHUB_TOKEN}"
         fi
-        if [ -n "${{ inputs.http-password }}" ]; then
-          export GERRIT_HTTP_PASSWORD="${{ inputs.http-password }}"
+        if [ -n "${INPUT_HTTP_PASSWORD}" ]; then
+          export GERRIT_HTTP_PASSWORD="${INPUT_HTTP_PASSWORD}"
         fi
 
         # Debug protocol selection
-        echo "DEBUG: Protocol selection - use-https: '${{ inputs.use-https }}'"
-        if [ "${{ inputs.use-https }}" = "true" ]; then
+        echo "DEBUG: Protocol selection - use-https: '${INPUT_USE_HTTPS}'"
+        if [ "${INPUT_USE_HTTPS}" = "true" ]; then
           echo "Using HTTPS for cloning"
         else
           echo "Using SSH for cloning"
@@ -442,16 +505,16 @@ runs:
           fi
 
           # Test SSH connection if using SSH authentication
-          if [ -n "${{ inputs.ssh-user }}" ] && \
-            [ -n "${{ inputs.ssh-private-key }}" ]; then
+          if [ -n "${INPUT_SSH_USER}" ] && \
+            [ "${INPUT_SSH_KEY_PROVIDED}" = "true" ]; then
             echo "Testing SSH connection to $SSH_HOST..."
-            PORT="${{ inputs.port }}"
+            PORT="${INPUT_PORT}"
             if [ -z "$PORT" ]; then
               PORT="29418"
             fi
 
             if timeout 10 ssh -o BatchMode=yes -o ConnectTimeout=5 \
-                -p "$PORT" "${{ inputs.ssh-user }}@$SSH_HOST" \
+                -p "$PORT" "${INPUT_SSH_USER}@$SSH_HOST" \
                 gerrit version >/dev/null 2>&1; then
               echo "SSH connection test successful"
             else
@@ -463,115 +526,115 @@ runs:
         # Build gerrit-clone command as a bash array
         # (avoids eval and quoting/injection issues)
         cmd=(gerrit-clone clone)
-        cmd+=(--host "${{ inputs.host }}")
+        cmd+=(--host "${INPUT_HOST}")
 
         # GitHub source options
-        if [ -n "${{ inputs.source-type }}" ]; then
-          cmd+=(--source-type "${{ inputs.source-type }}")
+        if [ -n "${INPUT_SOURCE_TYPE}" ]; then
+          cmd+=(--source-type "${INPUT_SOURCE_TYPE}")
         fi
-        if [ -n "${{ inputs.github-org }}" ]; then
-          cmd+=(--github-org "${{ inputs.github-org }}")
+        if [ -n "${INPUT_GITHUB_ORG}" ]; then
+          cmd+=(--github-org "${INPUT_GITHUB_ORG}")
         fi
         # github-token passed via GERRIT_CLONE_TOKEN env var
-        if [ "${{ inputs.use-gh-cli }}" = "true" ]; then
+        if [ "${INPUT_USE_GH_CLI}" = "true" ]; then
           cmd+=(--use-gh-cli)
         fi
 
         # Port applies to both SSH and HTTPS
         # (CLI auto-adjusts 29418→443 for HTTPS)
-        cmd+=(--port "${{ inputs.port }}")
+        cmd+=(--port "${INPUT_PORT}")
 
         # SSH-specific parameters only when not using HTTPS
-        if [ "${{ inputs.use-https }}" != "true" ]; then
-          if [ -n "${{ inputs.ssh-user }}" ]; then
-            cmd+=(--ssh-user "${{ inputs.ssh-user }}")
+        if [ "${INPUT_USE_HTTPS}" != "true" ]; then
+          if [ -n "${INPUT_SSH_USER}" ]; then
+            cmd+=(--ssh-user "${INPUT_SSH_USER}")
           fi
         fi
 
-        if [ -n "${{ inputs.base-url }}" ]; then
-          cmd+=(--base-url "${{ inputs.base-url }}")
+        if [ -n "${INPUT_BASE_URL}" ]; then
+          cmd+=(--base-url "${INPUT_BASE_URL}")
         fi
 
         # SSH private key handled by SSH agent setup step
 
-        cmd+=(--output-path "${{ inputs.output-path }}")
+        cmd+=(--output-path "${INPUT_OUTPUT_PATH}")
 
-        if [ "${{ inputs.skip-archived }}" = "true" ]; then
+        if [ "${INPUT_SKIP_ARCHIVED}" = "true" ]; then
           cmd+=(--skip-archived)
         else
           cmd+=(--include-archived)
         fi
 
-        if [ -n "${{ inputs.threads }}" ]; then
-          cmd+=(--threads "${{ inputs.threads }}")
+        if [ -n "${INPUT_THREADS}" ]; then
+          cmd+=(--threads "${INPUT_THREADS}")
         fi
 
-        if [ -n "${{ inputs.depth }}" ]; then
-          cmd+=(--depth "${{ inputs.depth }}")
+        if [ -n "${INPUT_DEPTH}" ]; then
+          cmd+=(--depth "${INPUT_DEPTH}")
         fi
 
-        if [ -n "${{ inputs.branch }}" ]; then
-          cmd+=(--branch "${{ inputs.branch }}")
+        if [ -n "${INPUT_BRANCH}" ]; then
+          cmd+=(--branch "${INPUT_BRANCH}")
         fi
 
-        if [ "${{ inputs.mirror }}" = "false" ]; then
+        if [ "${INPUT_MIRROR}" = "false" ]; then
           cmd+=(--no-mirror)
         else
           cmd+=(--mirror)
         fi
 
-        if [ "${{ inputs.use-https }}" = "true" ]; then
+        if [ "${INPUT_USE_HTTPS}" = "true" ]; then
           cmd+=(--https)
         else
           cmd+=(--ssh)
         fi
 
         # HTTPS authentication options
-        if [ "${{ inputs.use-https }}" = "true" ]; then
-          if [ -n "${{ inputs.http-user }}" ]; then
-            cmd+=(--http-user "${{ inputs.http-user }}")
+        if [ "${INPUT_USE_HTTPS}" = "true" ]; then
+          if [ -n "${INPUT_HTTP_USER}" ]; then
+            cmd+=(--http-user "${INPUT_HTTP_USER}")
           fi
           # http-password passed via GERRIT_HTTP_PASSWORD env var
-          if [ "${{ inputs.no-netrc }}" = "true" ]; then
+          if [ "${INPUT_NO_NETRC}" = "true" ]; then
             cmd+=(--no-netrc)
           fi
-          if [ -n "${{ inputs.netrc-file }}" ]; then
-            cmd+=(--netrc-file "${{ inputs.netrc-file }}")
+          if [ -n "${INPUT_NETRC_FILE}" ]; then
+            cmd+=(--netrc-file "${INPUT_NETRC_FILE}")
           fi
-          if [ "${{ inputs.netrc-optional }}" = "false" ]; then
+          if [ "${INPUT_NETRC_OPTIONAL}" = "false" ]; then
             cmd+=(--netrc-required)
           fi
         fi
 
         # Discovery method (auto-select http for HTTPS)
-        if [ "${{ inputs.use-https }}" = "true" ] && \
-          [ "${{ inputs.discovery-method }}" = "ssh" ]; then
+        if [ "${INPUT_USE_HTTPS}" = "true" ] && \
+          [ "${INPUT_DISCOVERY_METHOD}" = "ssh" ]; then
           cmd+=(--discovery-method http)
-        elif [ "${{ inputs.discovery-method }}" != "ssh" ]; then
+        elif [ "${INPUT_DISCOVERY_METHOD}" != "ssh" ]; then
           cmd+=(--discovery-method \
-            "${{ inputs.discovery-method }}")
+            "${INPUT_DISCOVERY_METHOD}")
         fi
 
-        if [ "${{ inputs.keep-remote-protocol }}" = "true" ]; then
+        if [ "${INPUT_KEEP_REMOTE_PROTOCOL}" = "true" ]; then
           cmd+=(--keep-remote-protocol)
         fi
 
         # SSH host checking only applies when using SSH
-        if [ "${{ inputs.use-https }}" != "true" ]; then
-          if [ "${{ inputs.strict-host }}" = "true" ]; then
+        if [ "${INPUT_USE_HTTPS}" != "true" ]; then
+          if [ "${INPUT_STRICT_HOST}" = "true" ]; then
             cmd+=(--strict-host)
           else
             cmd+=(--accept-unknown-host)
           fi
         fi
 
-        cmd+=(--clone-timeout "${{ inputs.clone-timeout }}")
-        cmd+=(--retry-attempts "${{ inputs.retry-attempts }}")
+        cmd+=(--clone-timeout "${INPUT_CLONE_TIMEOUT}")
+        cmd+=(--retry-attempts "${INPUT_RETRY_ATTEMPTS}")
         cmd+=(--retry-base-delay \
-          "${{ inputs.retry-base-delay }}")
+          "${INPUT_RETRY_BASE_DELAY}")
 
-        if [ -n "${{ inputs.config-file }}" ]; then
-          cmd+=(--config-file "${{ inputs.config-file }}")
+        if [ -n "${INPUT_CONFIG_FILE}" ]; then
+          cmd+=(--config-file "${INPUT_CONFIG_FILE}")
         fi
 
         # Add include-projects options (supports multiple)
@@ -602,72 +665,72 @@ runs:
           done
         fi
 
-        if [ "${{ inputs.ssh-debug }}" = "true" ]; then
+        if [ "${INPUT_SSH_DEBUG}" = "true" ]; then
           cmd+=(--ssh-debug)
         fi
 
-        if [ "${{ inputs.allow-nested-git }}" = "true" ]; then
+        if [ "${INPUT_ALLOW_NESTED_GIT}" = "true" ]; then
           cmd+=(--allow-nested-git)
         else
           cmd+=(--no-allow-nested-git)
         fi
 
-        if [ "${{ inputs.nested-protection }}" = "true" ]; then
+        if [ "${INPUT_NESTED_PROTECTION}" = "true" ]; then
           cmd+=(--nested-protection)
         else
           cmd+=(--no-nested-protection)
         fi
 
-        if [ "${{ inputs.move-conflicting }}" = "true" ]; then
+        if [ "${INPUT_MOVE_CONFLICTING}" = "true" ]; then
           cmd+=(--move-conflicting)
         else
           cmd+=(--no-move-conflicting)
         fi
 
-        if [ "${{ inputs.exit-on-error }}" = "true" ]; then
+        if [ "${INPUT_EXIT_ON_ERROR}" = "true" ]; then
           cmd+=(--exit-on-error)
         fi
 
         # Refresh controls for existing repositories
-        if [ "${{ inputs.no-refresh }}" = "true" ]; then
+        if [ "${INPUT_NO_REFRESH}" = "true" ]; then
           cmd+=(--no-refresh)
         fi
-        if [ "${{ inputs.force-refresh }}" = "true" ]; then
+        if [ "${INPUT_FORCE_REFRESH}" = "true" ]; then
           cmd+=(--force)
         fi
-        if [ "${{ inputs.fetch-only }}" = "true" ]; then
+        if [ "${INPUT_FETCH_ONLY}" = "true" ]; then
           cmd+=(--fetch-only)
         fi
-        if [ "${{ inputs.skip-conflicts }}" = "true" ]; then
+        if [ "${INPUT_SKIP_CONFLICTS}" = "true" ]; then
           cmd+=(--skip-conflicts)
         else
           cmd+=(--no-skip-conflicts)
         fi
 
-        cmd+=(--retry-factor "${{ inputs.retry-factor }}")
+        cmd+=(--retry-factor "${INPUT_RETRY_FACTOR}")
         cmd+=(--retry-max-delay \
-          "${{ inputs.retry-max-delay }}")
+          "${INPUT_RETRY_MAX_DELAY}")
         cmd+=(--manifest-filename \
-          "${{ inputs.manifest-filename }}")
+          "${INPUT_MANIFEST_FILENAME}")
 
-        if [ "${{ inputs.verbose }}" = "true" ]; then
+        if [ "${INPUT_VERBOSE}" = "true" ]; then
           cmd+=(--verbose)
         fi
 
-        if [ "${{ inputs.quiet }}" = "true" ]; then
+        if [ "${INPUT_QUIET}" = "true" ]; then
           cmd+=(--quiet)
         fi
 
         # Log file options
-        if [ -n "${{ inputs.log-file }}" ]; then
-          cmd+=(--log-file "${{ inputs.log-file }}")
+        if [ -n "${INPUT_LOG_FILE}" ]; then
+          cmd+=(--log-file "${INPUT_LOG_FILE}")
         fi
 
-        if [ "${{ inputs.disable-log-file }}" = "true" ]; then
+        if [ "${INPUT_DISABLE_LOG_FILE}" = "true" ]; then
           cmd+=(--disable-log-file)
         fi
 
-        cmd+=(--log-level "${{ inputs.log-level }}")
+        cmd+=(--log-level "${INPUT_LOG_LEVEL}")
 
         echo "Executing: ${cmd[*]}"
 
@@ -683,15 +746,15 @@ runs:
         # The CLI auto-adjusts the output path
         # (e.g. "./" becomes "./{HOST}/"), so search
         # for the manifest by name within the tree.
-        manifest_name="${{ inputs.manifest-filename }}"
+        manifest_name="${INPUT_MANIFEST_FILENAME}"
         # Use a slightly higher max depth to handle adjusted paths
         # such as "./github.com/{ORG}/{manifest}".
-        manifest_path=$(find "${{ inputs.output-path }}" -maxdepth 4 \
+        manifest_path=$(find "${INPUT_OUTPUT_PATH}" -maxdepth 4 \
           -name "$manifest_name" -type f 2>/dev/null | head -1)
 
         # Fallback: try the literal path in case find missed it
         if [ -z "$manifest_path" ]; then
-          manifest_path="${{ inputs.output-path }}/$manifest_name"
+          manifest_path="${INPUT_OUTPUT_PATH}/$manifest_name"
         fi
 
         if [ -f "$manifest_path" ]; then

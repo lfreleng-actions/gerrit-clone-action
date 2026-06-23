@@ -48,6 +48,7 @@ jobs:
       # yamllint disable-line rule:line-length
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: "Gather repository metadata"
@@ -164,6 +165,8 @@ jobs:
 
       # yamllint disable-line rule:line-length
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: 'Build Python project'
         id: python-build
@@ -191,6 +194,8 @@ jobs:
 
       # yamllint disable-line rule:line-length
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: "Python tests [pytest] ${{ matrix.python-version }}"
         # yamllint disable-line rule:line-length
@@ -219,6 +224,8 @@ jobs:
 
       # yamllint disable-line rule:line-length
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: "Audit dependencies ${{ matrix.python-version }}"
         # yamllint disable-line rule:line-length
@@ -244,6 +251,8 @@ jobs:
 
       # yamllint disable-line rule:line-length
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: "Generate SBOM"
         id: sbom
