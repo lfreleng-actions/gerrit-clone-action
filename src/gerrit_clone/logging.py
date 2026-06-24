@@ -21,7 +21,7 @@ from rich.logging import RichHandler
 from rich.theme import Theme
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Generator
 
 # Minimal theme (can be expanded later if reused elsewhere)
 GERRIT_THEME = Theme(
@@ -175,7 +175,7 @@ class _SuppressConsoleFilter(logging.Filter):
 
 
 @contextmanager
-def suppress_console_logging(verbose: bool = False) -> Iterator[None]:
+def suppress_console_logging(verbose: bool = False) -> Generator[None, None, None]:
     """Context manager to temporarily suppress console logging handlers.
 
     This is used during Rich Live display to prevent log messages from
