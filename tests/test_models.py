@@ -15,6 +15,7 @@ from gerrit_clone.models import (
     CloneResult,
     CloneStatus,
     Config,
+    DiscoveryMethod,
     Project,
     ProjectState,
     RetryPolicy,
@@ -275,6 +276,102 @@ class TestConfig:
             config.git_ssh_command
             == "ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 -o ConnectionAttempts=2 -o StrictHostKeyChecking=accept-new"
         )
+
+
+class TestDiscoveryMethodResolution:
+    """Test discovery method derivation and protocol consistency.
+
+    ``port`` is the SSH port only; HTTPS discovery/cloning use ``base_url``.
+    These tests guard against the regression where HTTPS mode silently ran
+    SSH discovery against the HTTPS port (443).
+    """
+
+    def test_gerrit_ssh_defaults_to_ssh_discovery(self):
+        """Gerrit over SSH derives SSH discovery on the SSH port."""
+        config = Config(host="gerrit.example.org")
+        assert config.use_https is False
+        assert config.discovery_method == DiscoveryMethod.SSH
+        assert config.port == 29418
+
+    def test_gerrit_https_derives_http_discovery(self):
+        """Gerrit over HTTPS derives HTTP discovery and keeps the SSH port."""
+        config = Config(host="gerrit.example.org", use_https=True)
+        assert config.discovery_method == DiscoveryMethod.HTTP
+        # Port is the SSH port and must never become 443 (HTTPS uses base_url)
+        assert config.port == 29418
+
+    def test_https_with_explicit_http_is_allowed(self):
+        """HTTPS cloning paired with explicit HTTP discovery is valid."""
+        config = Config(
+            host="gerrit.example.org",
+            use_https=True,
+            discovery_method=DiscoveryMethod.HTTP,
+        )
+        assert config.discovery_method == DiscoveryMethod.HTTP
+
+    def test_https_with_explicit_ssh_discovery_fails_fast(self):
+        """HTTPS cloning with SSH discovery is contradictory and must raise."""
+        with pytest.raises(ValueError, match="use_https requires HTTP-based"):
+            Config(
+                host="gerrit.example.org",
+                use_https=True,
+                discovery_method=DiscoveryMethod.SSH,
+            )
+
+    def test_https_with_both_discovery_fails_fast(self):
+        """HTTPS cloning with 'both' discovery (needs SSH) must raise."""
+        with pytest.raises(ValueError, match="use_https requires HTTP-based"):
+            Config(
+                host="gerrit.example.org",
+                use_https=True,
+                discovery_method=DiscoveryMethod.BOTH,
+            )
+
+    def test_explicit_ssh_discovery_without_https_is_allowed(self):
+        """Explicit SSH discovery without HTTPS is unaffected."""
+        config = Config(
+            host="gerrit.example.org",
+            discovery_method=DiscoveryMethod.SSH,
+        )
+        assert config.discovery_method == DiscoveryMethod.SSH
+        assert config.port == 29418
+
+    def test_github_derives_github_api_discovery(self):
+        """GitHub sources derive github_api discovery regardless of input."""
+        config = Config(
+            host="github.com",
+            source_type=SourceType.GITHUB,
+            github_token="x",
+        )
+        assert config.discovery_method == DiscoveryMethod.GITHUB_API
+
+    def test_github_coerces_incompatible_discovery_to_api(self):
+        """GitHub coerces SSH/both discovery to github_api."""
+        config = Config(
+            host="github.com",
+            source_type=SourceType.GITHUB,
+            github_token="x",
+            discovery_method=DiscoveryMethod.SSH,
+        )
+        assert config.discovery_method == DiscoveryMethod.GITHUB_API
+
+    def test_github_normalizes_http_discovery_to_api(self):
+        """GitHub normalizes HTTP discovery to github_api (no ambiguity)."""
+        config = Config(
+            host="github.com",
+            source_type=SourceType.GITHUB,
+            github_token="x",
+            discovery_method=DiscoveryMethod.HTTP,
+        )
+        assert config.discovery_method == DiscoveryMethod.GITHUB_API
+
+    def test_gerrit_rejects_github_api_discovery(self):
+        """Gerrit sources reject github_api discovery to avoid mis-routing."""
+        with pytest.raises(ValueError, match="only valid for GitHub"):
+            Config(
+                host="gerrit.example.org",
+                discovery_method=DiscoveryMethod.GITHUB_API,
+            )
 
 
 class TestCloneResult:

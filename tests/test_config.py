@@ -15,7 +15,7 @@ import pytest
 import yaml
 
 from gerrit_clone.config import ConfigManager, ConfigurationError, load_config
-from gerrit_clone.models import Config, SourceType
+from gerrit_clone.models import Config, DiscoveryMethod, SourceType
 
 
 class TestConfigManager:
@@ -396,6 +396,48 @@ class TestLoadConfigFunction:
         assert config.host == "test.gerrit.org"
         assert config.port == 2222
         assert config.threads == 4
+
+
+class TestProtocolDiscoveryConsistency:
+    """Test that the loader keeps clone protocol and discovery consistent.
+
+    Regression coverage for the bug where ``use_https`` forced the port to 443
+    while discovery defaulted to SSH, producing an SSH connection against the
+    HTTPS port.
+    """
+
+    def test_https_keeps_ssh_port_and_derives_http_discovery(self):
+        """use_https must not mutate the SSH port and derives HTTP discovery."""
+        config = load_config(host="gerrit.example.org", use_https=True)
+        assert config.port == 29418
+        assert config.discovery_method == DiscoveryMethod.HTTP
+
+    def test_https_with_explicit_ssh_discovery_fails_fast(self):
+        """Explicit SSH discovery with HTTPS raises a configuration error."""
+        with pytest.raises(ConfigurationError, match="use_https requires HTTP-based"):
+            load_config(
+                host="gerrit.example.org",
+                use_https=True,
+                discovery_method="ssh",
+            )
+
+    def test_https_with_explicit_both_discovery_fails_fast(self):
+        """Explicit 'both' discovery with HTTPS raises a configuration error."""
+        with pytest.raises(ConfigurationError, match="use_https requires HTTP-based"):
+            load_config(
+                host="gerrit.example.org",
+                use_https=True,
+                discovery_method="both",
+            )
+
+    def test_empty_discovery_method_is_derived(self):
+        """An empty discovery_method string is treated as unset and derived."""
+        config = load_config(
+            host="gerrit.example.org",
+            use_https=True,
+            discovery_method="",
+        )
+        assert config.discovery_method == DiscoveryMethod.HTTP
 
 
 class TestPathAutoAdjustment:

@@ -27,6 +27,7 @@ import pytest
 from typer.testing import CliRunner
 
 from gerrit_clone.cli import app
+from gerrit_clone.error_codes import ExitCode
 from gerrit_clone.netrc import CredentialSource, GerritCredentials
 
 
@@ -442,3 +443,37 @@ class TestHelpOutput:
         assert "--http-password" in output
         assert "--no-netrc" in output
         assert "--netrc-file" in output
+
+
+class TestMirrorDiscoveryMethodValidation:
+    """Test discovery-method validation for the Gerrit-only mirror command."""
+
+    def test_mirror_rejects_github_api_discovery(self, runner):
+        """mirror rejects github_api with a clear CONFIGURATION_ERROR.
+
+        ``github_api`` is a valid ``DiscoveryMethod`` enum value, but it is
+        only meaningful for GitHub sources. Mirror targets Gerrit only, so it
+        must surface a configuration error rather than letting ``Config``
+        raise an unexpected error later.
+
+        A token and an explicit org are supplied so the command reaches the
+        discovery-method validation without requiring network access or a
+        real ``GITHUB_TOKEN`` (the GitHub client only checks a token is
+        present at construction, and ``--org`` avoids the org-lookup call).
+        """
+        result = runner.invoke(
+            app,
+            [
+                "mirror",
+                "--server",
+                "gerrit.example.org",
+                "--org",
+                "example-org",
+                "--github-token",
+                "fake-token",
+                "--discovery-method",
+                "github_api",
+            ],
+        )
+        assert result.exit_code == ExitCode.CONFIGURATION_ERROR
+        assert "Configuration Error" in strip_ansi(result.output)

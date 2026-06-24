@@ -169,8 +169,9 @@ def clone(
         "--port",
         "-p",
         help=(
-            "Gerrit SSH/HTTP port (default: 29418 for SSH, 443 for HTTPS). "
-            "Note: Only used for Gerrit sources; ignored for GitHub sources."
+            "Gerrit SSH port (default: 29418). HTTPS discovery and cloning use "
+            "the base URL, not this port. Only used for Gerrit sources; "
+            "ignored for GitHub sources."
         ),
         envvar="GERRIT_PORT",
         min=1,
@@ -244,10 +245,14 @@ def clone(
         help="Enable verbose SSH (-vvv) for troubleshooting authentication (single or few projects).",
         envvar="GERRIT_SSH_DEBUG",
     ),
-    discovery_method: str = typer.Option(
-        "ssh",
+    discovery_method: str | None = typer.Option(
+        None,
         "--discovery-method",
-        help="Method for discovering projects: ssh (default for Gerrit), http (REST API), both (union of both), or github_api (for GitHub)",
+        help=(
+            "Method for discovering projects: ssh, http (REST API), both "
+            "(union of both), or github_api. Default: derived from the clone "
+            "protocol (http with --https, ssh otherwise; github_api for GitHub)"
+        ),
         envvar="GERRIT_DISCOVERY_METHOD",
     ),
     allow_nested_git: bool = typer.Option(
@@ -693,30 +698,41 @@ def clone(
             except Exception:
                 file_logger.warning("Version information not available")
 
-        # Parse discovery method and adjust for source type
-        try:
-            discovery_method_enum = DiscoveryMethod(discovery_method.lower())
-        except ValueError:
-            console = Console()
-            console.print(
-                Panel(
-                    Text(
-                        f"Invalid discovery method '{discovery_method}'\nMust be one of: ssh, http, both, github_api",
-                        style="bold red",
-                    ),
-                    title="Configuration Error",
-                    border_style="red",
+        # Parse discovery method (None means "derive in Config from source
+        # type and clone protocol"). Only validate/convert when explicitly set.
+        discovery_method_enum: DiscoveryMethod | None = None
+        if discovery_method and discovery_method.strip():
+            try:
+                discovery_method_enum = DiscoveryMethod(
+                    discovery_method.strip().lower()
                 )
-            )
-            raise typer.Exit(ExitCode.CONFIGURATION_ERROR) from None
-
-        # Auto-adjust discovery method for GitHub
-        if detected_source_type == SourceType.GITHUB and discovery_method_enum not in [DiscoveryMethod.GITHUB_API, DiscoveryMethod.HTTP]:
-            discovery_method_enum = DiscoveryMethod.GITHUB_API
-            if not quiet:
+            except ValueError:
                 console.print(
-                    "[cyan]ℹ[/cyan] Using GitHub API discovery for GitHub source"  # noqa: RUF001
+                    Panel(
+                        Text(
+                            f"Invalid discovery method '{discovery_method}'\nMust be one of: ssh, http, both, github_api",
+                            style="bold red",
+                        ),
+                        title="Configuration Error",
+                        border_style="red",
+                    )
                 )
+                raise typer.Exit(ExitCode.CONFIGURATION_ERROR) from None
+
+            # Auto-adjust explicit discovery method for GitHub
+            if (
+                detected_source_type == SourceType.GITHUB
+                and discovery_method_enum
+                not in [
+                    DiscoveryMethod.GITHUB_API,
+                    DiscoveryMethod.HTTP,
+                ]
+            ):
+                discovery_method_enum = DiscoveryMethod.GITHUB_API
+                if not quiet:
+                    console.print(
+                        "[cyan]ℹ[/cyan] Using GitHub API discovery for GitHub source"  # noqa: RUF001
+                    )
 
         # Load and validate configuration
         try:
@@ -940,9 +956,10 @@ def _show_startup_banner(console: Console, config: Any) -> None:
     lines.append(f"Git Mirror: [cyan]{config.mirror}[/cyan]")
 
     # Add common options
+    discovery = getattr(config, "discovery_method", None) or DiscoveryMethod.SSH
     lines.extend(
         [
-            f"Discovery Method: [cyan]{str(getattr(config, 'discovery_method', DiscoveryMethod.SSH).value).upper()}[/cyan]",
+            f"Discovery Method: [cyan]{discovery.value.upper()}[/cyan]",
             f"Skip Archived: [cyan]{config.skip_archived}[/cyan]",
         ]
     )
@@ -1442,10 +1459,14 @@ def mirror(
         help="Skip archived/read-only repositories",
         envvar="GERRIT_SKIP_ARCHIVED",
     ),
-    discovery_method: str = typer.Option(
-        "ssh",
+    discovery_method: str | None = typer.Option(
+        None,
         "--discovery-method",
-        help="Method for discovering projects: ssh (default), http (REST API only), or both (union of both methods with SSH metadata preferred)",
+        help=(
+            "Method for discovering projects: ssh, http (REST API only), or "
+            "both (union, SSH metadata preferred). Default: derived from the "
+            "clone protocol (http with --https, ssh otherwise)"
+        ),
         envvar="GERRIT_DISCOVERY_METHOD",
     ),
     use_https: bool = typer.Option(
@@ -1744,21 +1765,41 @@ def mirror(
         # Build Gerrit configuration
         from gerrit_clone.models import Config  # noqa: PLC0415
 
-        # Validate discovery method
-        try:
-            discovery_enum = DiscoveryMethod(discovery_method.lower())
-        except ValueError:
-            console.print(
-                Panel(
-                    Text(
-                        f"Invalid discovery method '{discovery_method}'\nMust be one of: ssh, http, both",
-                        style="bold red",
-                    ),
-                    title="Configuration Error",
-                    border_style="red",
+        # Validate discovery method (None means "derive in Config from the
+        # clone protocol"). Only validate/convert when explicitly set.
+        discovery_enum: DiscoveryMethod | None = None
+        if discovery_method and discovery_method.strip():
+            try:
+                discovery_enum = DiscoveryMethod(discovery_method.strip().lower())
+            except ValueError:
+                console.print(
+                    Panel(
+                        Text(
+                            f"Invalid discovery method '{discovery_method}'\nMust be one of: ssh, http, both",
+                            style="bold red",
+                        ),
+                        title="Configuration Error",
+                        border_style="red",
+                    )
                 )
-            )
-            raise typer.Exit(ExitCode.CONFIGURATION_ERROR) from None
+                raise typer.Exit(ExitCode.CONFIGURATION_ERROR) from None
+
+            # Mirror targets Gerrit only; github_api is a valid enum value but
+            # not a valid Gerrit discovery method. Reject it here so the user
+            # gets a clear configuration error rather than an unexpected error
+            # raised later by Config.
+            if discovery_enum == DiscoveryMethod.GITHUB_API:
+                console.print(
+                    Panel(
+                        Text(
+                            f"Invalid discovery method '{discovery_method}'\nMust be one of: ssh, http, both",
+                            style="bold red",
+                        ),
+                        title="Configuration Error",
+                        border_style="red",
+                    )
+                )
+                raise typer.Exit(ExitCode.CONFIGURATION_ERROR) from None
 
         config = Config(
             host=server,
@@ -1852,8 +1893,12 @@ def mirror(
 
         # Show summary
         if not quiet:
+            resolved_discovery = config.discovery_method
+            discovery_label = (
+                resolved_discovery.value.upper() if resolved_discovery else "SSH"
+            )
             console.print("[bold]Mirror Summary[/bold]")
-            console.print(f"  Discovery Method: [cyan]{discovery_enum.value.upper()}[/cyan]")
+            console.print(f"  Discovery Method: [cyan]{discovery_label}[/cyan]")
             console.print(f"  Clone Protocol: [cyan]{'HTTPS' if use_https else 'SSH'}[/cyan]")
             console.print(f"  Skip Archived: [cyan]{skip_archived}[/cyan]")
             console.print(f"  Total: {batch_result.total_count}")
