@@ -281,17 +281,22 @@ def scan_repo_for_secrets(
 
                 for pattern_name, pattern in SECRET_PATTERNS.items():
                     for match in pattern.finditer(stripped):
-                        token = match.group(0)
-                        if token not in seen:
-                            seen.add(token)
-                            discovered.append(token)
+                        matched = match.group(0)
+                        if matched not in seen:
+                            seen.add(matched)
+                            discovered.append(matched)
+                            # Log only a truncated SHA-256 digest of
+                            # the matched text, never the raw value, to
+                            # avoid recording the credential itself and
+                            # reduce the leakage risk in the audit trail.
+                            digest = hashlib.sha256(
+                                matched.encode()
+                            ).hexdigest()[:12]
                             logger.info(
                                 "Secret scan: found %s pattern "
                                 "(sha256:%s) in %s",
                                 pattern_name,
-                                hashlib.sha256(
-                                    token.encode()
-                                ).hexdigest()[:12],
+                                digest,
                                 repo_path.name,
                             )
     finally:

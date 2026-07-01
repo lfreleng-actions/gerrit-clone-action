@@ -500,7 +500,7 @@ runs:
         # Use action-managed SSH agent socket if it exists; otherwise,
         # fall back to any existing SSH_AUTH_SOCK on the runner so that
         # SSH-based clones using the runner's default agent/keys still work.
-        SSH_AGENT_SOCK="/tmp/ssh_agent_${{ github.run_id }}.sock"
+        SSH_AGENT_SOCK="/tmp/ssh_agent_${GITHUB_RUN_ID}.sock"
         if [ -S "$SSH_AGENT_SOCK" ]; then
           export SSH_AUTH_SOCK="$SSH_AGENT_SOCK"
         fi

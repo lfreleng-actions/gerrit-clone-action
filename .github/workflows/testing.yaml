@@ -22,20 +22,18 @@ jobs:
   tests:
     name: "Test Gerrit Clone"
     runs-on: ubuntu-latest
+    # Secrets are unavailable in the pull_request context, so gate the
+    # whole job rather than trying to early-exit from a run block
+    # (an "exit" only ends its step, not the job).
+    if: github.event_name != 'pull_request'
+    # Gate secret access behind a dedicated environment so that access
+    # to the Gerrit SSH key can carry protection rules (zizmor
+    # secrets-outside-env).
+    environment: integration-testing
     permissions:
       contents: read
     timeout-minutes: 30 # Increase this timeout value as needed
     steps:
-      - name: "Check for pull request context"
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "Secrets not available on pull request; skipping tests ❌"
-            echo "Secrets not available on pull request; skipping tests ❌" \
-          else
-            echo "Running in trusted context (${{ github.event_name }}) ✅"
-          fi
-
       # Harden the runner used by this workflow
       # yamllint disable-line rule:line-length
       - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
@@ -90,21 +88,24 @@ jobs:
 
       - name: "Test CLI Tool: gerrit.o-ran-sc.org [SSH]"
         shell: bash
+        env:
+          GERRIT_SSH_PRIVATE_KEY: ${{ secrets.GERRIT_SSH_PRIVATE_KEY }}
+          GERRIT_SSH_USER: ${{ vars.GERRIT_SSH_USER }}
         run: |
           # Set up SSH agent with private key (never touches disk)
-          SSH_AUTH_SOCK="/tmp/ssh_agent_cli_${{ github.run_id }}.sock"
+          SSH_AUTH_SOCK="/tmp/ssh_agent_cli_${GITHUB_RUN_ID}.sock"
 
           # Start SSH agent
           ssh-agent -a "$SSH_AUTH_SOCK" > /dev/null
 
           # Add private key to SSH agent
-          echo "${{ secrets.GERRIT_SSH_PRIVATE_KEY }}" | \
+          echo "$GERRIT_SSH_PRIVATE_KEY" | \
             SSH_AUTH_SOCK="$SSH_AUTH_SOCK" ssh-add -
 
           # Run CLI tool with SSH agent
           SSH_AUTH_SOCK="$SSH_AUTH_SOCK" gerrit-clone clone \
             --host "gerrit.o-ran-sc.org" \
-            --ssh-user "${{ vars.GERRIT_SSH_USER }}" \
+            --ssh-user "$GERRIT_SSH_USER" \
             --output-path "gerrit.o-ran-sc.org-cli" \
             --threads "2" \
             --depth "1" \
@@ -194,6 +195,10 @@ jobs:
     needs: tests
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    # Gate secret access behind a dedicated environment so that access
+    # to the content-filter token can carry protection rules (zizmor
+    # secrets-outside-env).
+    environment: integration-testing
     permissions:
       contents: read
     timeout-minutes: 30
@@ -201,7 +206,7 @@ jobs:
       - name: "Check for pull request context"
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             echo "::warning::Secrets unavailable in PR context"
           fi
 
