@@ -23,8 +23,8 @@ jobs:
     name: "Repository Metadata"
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pull-requests: read
+      contents: read # read repository metadata and files
+      pull-requests: read # read pull request context for metadata
     timeout-minutes: 5
     steps:
       # yamllint disable-line rule:line-length
