@@ -217,7 +217,7 @@ class TestGitHubRefreshInCloneManager:
             check=True,
         )
         remote_url = result.stdout.strip()
-        assert "github.com" in remote_url
+        assert remote_url == "https://github.com/test-org/test-repo.git"
 
     def test_github_repo_ssh_and_https_both_supported(
         self,

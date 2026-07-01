@@ -8,7 +8,42 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from gerrit_clone.file_logging import get_default_log_path, init_logging
+from gerrit_clone.file_logging import (
+    cli_args_to_dict,
+    get_default_log_path,
+    init_logging,
+)
+
+
+class TestCliArgsToDict:
+    """Test secret redaction in cli_args_to_dict."""
+
+    def test_git_filter_is_redacted(self) -> None:
+        """git_filter (may carry tokens) is never logged verbatim."""
+        # Build a GitLab-PAT-shaped value at runtime so no token-like
+        # literal is committed to the source (which would otherwise
+        # match the project's own SECRET_PATTERNS and could trip
+        # secret-scanning / push protection).
+        fake_token = "glpat-" + ("x" * 24)
+        args = cli_args_to_dict(
+            git_filter=f"proj:{fake_token}",
+            host="gerrit.example.org",
+        )
+        assert args["git_filter"] == "<redacted>"
+        assert "glpat-" not in str(args)
+        # Non-sensitive args pass through unchanged.
+        assert args["host"] == "gerrit.example.org"
+
+    def test_github_token_is_redacted(self) -> None:
+        """github_token is never logged verbatim."""
+        fake_token = "ghp_" + ("y" * 36)
+        args = cli_args_to_dict(github_token=fake_token)
+        assert args["github_token"] == "<redacted>"
+
+    def test_none_sensitive_value_is_omitted(self) -> None:
+        """A None sensitive value is dropped, not redacted."""
+        args = cli_args_to_dict(git_filter=None, host="h")
+        assert "git_filter" not in args
 
 
 class TestDynamicLogFileNaming:

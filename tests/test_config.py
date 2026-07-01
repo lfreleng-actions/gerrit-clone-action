@@ -615,3 +615,51 @@ class TestPathAutoAdjustment:
             )
         finally:
             os.chdir(original_cwd)
+
+
+class TestGitHubBaseUrl:
+    """GitHub API base-URL derivation in Config.__post_init__."""
+
+    def test_plain_github_com(self) -> None:
+        """A bare github.com host resolves to api.github.com."""
+        config = Config(host="github.com", source_type=SourceType.GITHUB)
+        assert config.base_url == "https://api.github.com"
+
+    def test_github_com_with_org_suffix(self) -> None:
+        """github.com/ORG still resolves to api.github.com, not /api/v3."""
+        config = Config(host="github.com/myorg", source_type=SourceType.GITHUB)
+        assert config.base_url == "https://api.github.com"
+
+    def test_github_com_with_scheme_and_org(self) -> None:
+        """A scheme prefix and org suffix are both stripped before match."""
+        config = Config(host="https://github.com/myorg", source_type=SourceType.GITHUB)
+        assert config.base_url == "https://api.github.com"
+
+    def test_enterprise_host_with_org(self) -> None:
+        """A GitHub Enterprise host yields a bare-host /api/v3 URL."""
+        config = Config(
+            host="github.enterprise.com/engineering",
+            source_type=SourceType.GITHUB,
+        )
+        assert config.base_url == "https://github.enterprise.com/api/v3"
+
+    def test_lookalike_host_not_treated_as_github_com(self) -> None:
+        """A lookalike host is treated as enterprise, not api.github.com."""
+        config = Config(host="github.com.evil.example", source_type=SourceType.GITHUB)
+        assert config.base_url == "https://github.com.evil.example/api/v3"
+
+    def test_enterprise_host_preserves_http_scheme(self) -> None:
+        """An http:// scheme on an enterprise host is preserved."""
+        config = Config(
+            host="http://ghe.internal",
+            source_type=SourceType.GITHUB,
+        )
+        assert config.base_url == "http://ghe.internal/api/v3"
+
+    def test_enterprise_host_preserves_https_scheme_with_org(self) -> None:
+        """An explicit https:// scheme with an org suffix is preserved."""
+        config = Config(
+            host="https://ghe.internal/engineering",
+            source_type=SourceType.GITHUB,
+        )
+        assert config.base_url == "https://ghe.internal/api/v3"

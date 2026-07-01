@@ -192,7 +192,7 @@ class TestCloneWorker:
 
         assert "Connection refused" in result
         assert "SSH service is running" in result
-        assert "gerrit.example.org:29418" in result
+        assert f"{config.host}:29418" in result
 
     def test_analyze_clone_error_hostname_resolution(self) -> None:
         """Test error analysis for hostname resolution."""
@@ -209,7 +209,7 @@ class TestCloneWorker:
 
         assert "DNS resolution failed" in result
         assert "cannot resolve" in result
-        assert "gerrit.example.org" in result
+        assert config.host in result
 
     def test_analyze_clone_error_generic(self) -> None:
         """Test error analysis for generic errors."""

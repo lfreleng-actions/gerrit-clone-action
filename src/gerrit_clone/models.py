@@ -401,12 +401,32 @@ class Config:
                     )
                     self.base_url = f"https://{self.host}"
             elif self.source_type == SourceType.GITHUB:
-                # For GitHub, use api.github.com or GitHub Enterprise URL
-                if "github.com" in self.host.lower():
+                # For GitHub, use api.github.com or GitHub Enterprise URL.
+                # ``host`` may carry a scheme (https://github.com) and/or
+                # an org/path suffix (github.com/ORG); neither should
+                # affect the github.com vs GitHub-Enterprise
+                # classification or the API base URL, so reduce it to a
+                # bare hostname first.  Match the host exactly (or as a
+                # subdomain) rather than a substring so a lookalike such
+                # as "github.com.evil.example" is not mistaken for
+                # github.com.
+                bare_host = self.host
+                scheme = "https"
+                if "://" in bare_host:
+                    scheme, bare_host = bare_host.split("://", 1)
+                bare_host = bare_host.split("/", 1)[0]
+                host_lower = bare_host.lower()
+                if host_lower == "github.com" or host_lower.endswith(
+                    ".github.com"
+                ):
                     self.base_url = "https://api.github.com"
                 else:
-                    # GitHub Enterprise
-                    self.base_url = f"https://{self.host}/api/v3"
+                    # GitHub Enterprise — preserve the scheme supplied
+                    # on ``host`` (defaulting to https) so installations
+                    # served over plain http or a non-standard scheme
+                    # still receive a correct API base URL rather than a
+                    # forced https:// one.
+                    self.base_url = f"{scheme}://{bare_host}/api/v3"
 
         # Validate GitHub-specific requirements
         # Check for token: explicit config > GERRIT_CLONE_TOKEN > GITHUB_TOKEN
