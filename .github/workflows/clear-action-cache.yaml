@@ -1,0 +1,321 @@
+---
+# SPDX-FileCopyrightText: 2025 The Linux Foundation
+# SPDX-License-Identifier: Apache-2.0
+
+name: 'Clear Action Cache 🧹'
+
+# yamllint disable-line rule:truthy
+on:
+  workflow_dispatch:
+    inputs:
+      key_pattern:
+        description: >-
+          Optional substring filter applied to cache keys. Leave
+          empty to remove every cache entry.
+        required: false
+        default: ''
+        type: string
+      ref_filter:
+        description: >-
+          Optional git ref to limit deletion to (e.g.
+          'refs/heads/main' or 'refs/pull/42/merge'). Leave empty
+          to ignore the ref attribute.
+        required: false
+        default: ''
+        type: string
+      dry_run:
+        description: >-
+          When 'true', list matching entries but do not delete
+          them.
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  clear-cache:
+    name: 'Clear Action Cache'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # yamllint disable-line rule:line-length
+      actions: write  # Required to list and delete repository Actions caches
+    steps:
+      # Load the egress allow-list out-of-band from the
+      # organisation's .github repository and publish it as
+      # $CONNECTION_ALLOW_LIST for the harden-runner step below.
+      # yamllint disable-line rule:line-length
+      - uses: lfreleng-actions/harden-runner-block-action@6db537b3e6d060c3287c5a3ce2c28b55b0af330d  # v0.2.1
+        with:
+          config: '@807a544b7e55a9224b2b3780e636467bd4b5b99b'  # v0.5.0
+
+      # Harden the runner with the just-loaded allow-list.
+      - name: 'Harden runner (block)'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: 'block'
+          allowed-endpoints: >
+            ${{ env.CONNECTION_ALLOW_LIST }}
+
+      - name: 'Inspect cache before deletion'
+        id: before
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          KEY_PATTERN: ${{ inputs.key_pattern }}
+          REF_FILTER: ${{ inputs.ref_filter }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          # List current cache entries (pre-deletion snapshot).
+          set -euo pipefail
+
+          echo "Repository: $REPO"
+          echo "Key filter: '${KEY_PATTERN:-<none>}'"
+          echo "Ref filter: '${REF_FILTER:-<none>}'"
+          echo ""
+
+          # Page through all caches via the REST API; gh cache list
+          # is convenient locally but the JSON response from the
+          # REST endpoint is more reliable for scripting.
+          all_caches=$(
+            gh api \
+              --paginate \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/$REPO/actions/caches?per_page=100" \
+              --jq '.actions_caches[]'
+          )
+
+          if [ -z "$all_caches" ]; then
+            echo "No cache entries found."
+            echo "before_count=0" >> "$GITHUB_OUTPUT"
+            echo "matched_count=0" >> "$GITHUB_OUTPUT"
+            : > matched_ids.txt
+            exit 0
+          fi
+
+          # Total count before any filtering.
+          before_count=$(printf '%s\n' "$all_caches" | jq -s 'length')
+          echo "Total cache entries: $before_count"
+
+          # Apply optional key/ref filters.
+          filtered=$(printf '%s\n' "$all_caches" | jq -c '.')
+          if [ -n "$KEY_PATTERN" ]; then
+            filtered=$(printf '%s\n' "$filtered" | jq -c \
+              --arg pat "$KEY_PATTERN" \
+              'select(.key | contains($pat))')
+          fi
+          if [ -n "$REF_FILTER" ]; then
+            filtered=$(printf '%s\n' "$filtered" | jq -c \
+              --arg ref "$REF_FILTER" \
+              'select(.ref == $ref)')
+          fi
+
+          if [ -z "$filtered" ]; then
+            echo "No cache entries match the supplied filters."
+            echo "before_count=$before_count" >> "$GITHUB_OUTPUT"
+            echo "matched_count=0" >> "$GITHUB_OUTPUT"
+            : > matched_ids.txt
+            exit 0
+          fi
+
+          matched_count=$(printf '%s\n' "$filtered" | jq -s 'length')
+          echo ""
+          echo "Matched $matched_count cache entr(y/ies) for processing:"
+          printf '%s\n' "$filtered" | jq -r \
+            '"  - id=\(.id)  size=\(.size_in_bytes)B  ref=\(.ref)  key=\(.key)"'
+
+          # Persist matched IDs for the deletion step.
+          printf '%s\n' "$filtered" | jq -r '.id' > matched_ids.txt
+
+          {
+            echo "## Cache snapshot (before)"
+            echo ""
+            echo "| Property | Value |"
+            echo "|----------|-------|"
+            echo "| Total entries | $before_count |"
+            echo "| Matched | $matched_count |"
+            echo "| Dry run | \`${DRY_RUN}\` |"
+            echo ""
+            # Render user-controlled filter inputs inside a fenced
+            # code block. KEY_PATTERN and REF_FILTER are free-form
+            # workflow_dispatch inputs and may contain characters
+            # (|, backticks, newlines) that would break table
+            # rendering or inject markup into the step summary.
+            # jq @json safely quotes/escapes the values.
+            echo "### Filters"
+            echo ""
+            echo '```text'
+            jq -nr \
+              --arg key "${KEY_PATTERN:-}" \
+              --arg ref "${REF_FILTER:-}" \
+              '"key_pattern=\($key|@json)\nref_filter=\($ref|@json)"'
+            echo '```'
+            echo ""
+            if [ "$matched_count" -gt 0 ]; then
+              echo "### Matched entries"
+              echo ""
+              # Emit as a fenced code block rather than a Markdown
+              # table: cache keys and refs are user-controlled and
+              # may contain characters (|, backticks, newlines) that
+              # would otherwise break table rendering or allow
+              # injection into the step summary.
+              echo '```text'
+              printf '%s\n' "$filtered" | jq -r '
+                  "id=\(.id)  size=\(.size_in_bytes)B  " +
+                  "ref=\(.ref|tojson)  key=\(.key|tojson)"
+                '
+              echo '```'
+              echo ""
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "before_count=$before_count" >> "$GITHUB_OUTPUT"
+          echo "matched_count=$matched_count" >> "$GITHUB_OUTPUT"
+
+      - name: 'Delete matching cache entries'
+        if: steps.before.outputs.matched_count != '0'
+        id: delete
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          # Delete the matched cache IDs unless this is a dry run.
+          set -euo pipefail
+
+          if [ ! -s matched_ids.txt ]; then
+            echo "No matched IDs file; nothing to delete."
+            echo "deleted_count=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "Dry-run mode: would delete the following IDs:"
+            cat matched_ids.txt
+            echo "deleted_count=0" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Dry run"
+              echo ""
+              echo "No entries were deleted."
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          deleted=0
+          failed=0
+          while IFS= read -r cache_id; do
+            [ -z "$cache_id" ] && continue
+            echo "Deleting cache id=$cache_id…"
+            if gh api \
+                --method DELETE \
+                -H "Accept: application/vnd.github+json" \
+                "/repos/$REPO/actions/caches/${cache_id}";
+            then
+              deleted=$((deleted + 1))
+            else
+              echo "::warning::Failed to delete cache id=$cache_id"
+              failed=$((failed + 1))
+            fi
+          done < matched_ids.txt
+
+          echo ""
+          echo "Deleted: $deleted"
+          echo "Failed:  $failed"
+          echo "deleted_count=$deleted" >> "$GITHUB_OUTPUT"
+          echo "failed_count=$failed" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Deletion result"
+            echo ""
+            echo "| Property | Value |"
+            echo "|----------|-------|"
+            echo "| Deleted | $deleted |"
+            echo "| Failed | $failed |"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$failed" -gt 0 ]; then
+            exit 1
+          fi
+
+      - name: 'Verify cache after deletion'
+        if: always() && steps.before.outputs.matched_count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          KEY_PATTERN: ${{ inputs.key_pattern }}
+          REF_FILTER: ${{ inputs.ref_filter }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          # Re-query the cache list and confirm matched entries are
+          # gone (or still present in dry-run mode).
+          set -euo pipefail
+
+          all_caches=$(
+            gh api \
+              --paginate \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/$REPO/actions/caches?per_page=100" \
+              --jq '.actions_caches[]'
+          )
+
+          after_count=0
+          if [ -n "$all_caches" ]; then
+            after_count=$(printf '%s\n' "$all_caches" | jq -s 'length')
+          fi
+
+          remaining_matches=0
+          if [ -n "$all_caches" ]; then
+            filtered=$(printf '%s\n' "$all_caches" | jq -c '.')
+            if [ -n "$KEY_PATTERN" ]; then
+              filtered=$(printf '%s\n' "$filtered" | jq -c \
+                --arg pat "$KEY_PATTERN" \
+                'select(.key | contains($pat))')
+            fi
+            if [ -n "$REF_FILTER" ]; then
+              filtered=$(printf '%s\n' "$filtered" | jq -c \
+                --arg ref "$REF_FILTER" \
+                'select(.ref == $ref)')
+            fi
+            if [ -n "$filtered" ]; then
+              remaining_matches=$(
+                printf '%s\n' "$filtered" | jq -s 'length'
+              )
+            fi
+          fi
+
+          echo "Total cache entries after run: $after_count"
+          echo "Remaining matches:             $remaining_matches"
+
+          {
+            echo "## Cache snapshot (after)"
+            echo ""
+            echo "| Property | Value |"
+            echo "|----------|-------|"
+            echo "| Total entries | $after_count |"
+            echo "| Remaining matches | $remaining_matches |"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "Dry run: skipping post-deletion verification."
+            exit 0
+          fi
+
+          if [ "$remaining_matches" -ne 0 ]; then
+            echo "::error::Expected zero matching cache entries " \
+              "after deletion, found $remaining_matches"
+            exit 1
+          fi
+
+          echo "✅ All matched cache entries successfully removed"
