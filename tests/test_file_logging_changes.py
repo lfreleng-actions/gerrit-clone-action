@@ -22,7 +22,7 @@ class TestCliArgsToDict:
         """git_filter (may carry tokens) is never logged verbatim."""
         # Build a GitLab-PAT-shaped value at runtime so no token-like
         # literal is committed to the source (which would otherwise
-        # match the project's own SECRET_PATTERNS and could trip
+        # match the project's own SCAN_PATTERNS and could trip
         # secret-scanning / push protection).
         fake_token = "glpat-" + ("x" * 24)
         args = cli_args_to_dict(

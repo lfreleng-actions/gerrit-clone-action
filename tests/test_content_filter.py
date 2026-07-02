@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gerrit_clone.content_filter import (
-    SECRET_PATTERNS,
+    SCAN_PATTERNS,
     _generate_replacement_string,
     _matches_for_removal,
     _remove_files_filter_repo,
@@ -706,7 +706,7 @@ def _make_fake_token(
     return prefix + "".join(rng.choices(pool, k=suffix_len))
 
 
-#: Pre-built fake tokens keyed by SECRET_PATTERNS name.
+#: Pre-built fake tokens keyed by SCAN_PATTERNS name.
 #: Every value is guaranteed to match the corresponding pattern.
 _TEST_TOKENS: dict[str, str] = {
     "gitlab_pat": _make_fake_token(
@@ -758,11 +758,11 @@ _TEST_TOKENS: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
-# SECRET_PATTERNS tests
+# SCAN_PATTERNS tests
 # ---------------------------------------------------------------------------
 
 
-class TestSecretPatterns:
+class TestScanPatterns:
     """Tests for the built-in credential pattern library."""
 
     @pytest.mark.parametrize(
@@ -771,7 +771,7 @@ class TestSecretPatterns:
     )
     def test_pattern_matches_sample(self, pattern_name: str, sample: str) -> None:
         """Each dynamically generated token matches its pattern."""
-        pattern = SECRET_PATTERNS[pattern_name]
+        pattern = SCAN_PATTERNS[pattern_name]
         assert pattern.search(sample), (
             f"Pattern '{pattern_name}' did not match: {sample}"
         )
@@ -788,24 +788,24 @@ class TestSecretPatterns:
     )
     def test_pattern_rejects_non_match(self, pattern_name: str, non_match: str) -> None:
         """Patterns do not match non-credential strings."""
-        pattern = SECRET_PATTERNS[pattern_name]
+        pattern = SCAN_PATTERNS[pattern_name]
         assert not pattern.search(non_match), (
             f"Pattern '{pattern_name}' should not match: {non_match}"
         )
 
     def test_all_patterns_are_compiled(self) -> None:
-        """All entries in SECRET_PATTERNS are compiled regexes."""
-        for name, pat in SECRET_PATTERNS.items():
+        """All entries in SCAN_PATTERNS are compiled regexes."""
+        for name, pat in SCAN_PATTERNS.items():
             assert isinstance(pat, re_mod.Pattern), f"{name} is not a compiled pattern"
 
     def test_every_pattern_has_a_sample(self) -> None:
-        """Every SECRET_PATTERNS entry has a matching sample token.
+        """Every SCAN_PATTERNS entry has a matching sample token.
 
         Guards against new credential patterns being added without a
         corresponding entry in ``_TEST_TOKENS``, which would otherwise
         leave that pattern unexercised by ``test_pattern_matches_sample``.
         """
-        missing = set(SECRET_PATTERNS) - set(_TEST_TOKENS)
+        missing = set(SCAN_PATTERNS) - set(_TEST_TOKENS)
         assert not missing, f"Patterns without a test sample: {sorted(missing)}"
 
 
