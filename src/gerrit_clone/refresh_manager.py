@@ -57,6 +57,7 @@ class RefreshManager:
         exit_on_error: bool = False,
         dry_run: bool = False,
         force: bool = False,
+        force_hard: bool = False,
         recursive: bool = True,
         include_projects: list[str] | None = None,
         exclude_projects: list[str] | None = None,
@@ -77,6 +78,8 @@ class RefreshManager:
             exit_on_error: Exit immediately on first error
             dry_run: Show what would be refreshed without executing
             force: Force refresh by fixing detached HEAD, upstream tracking, and stashing changes
+            force_hard: Superset of force that also hard-resets each repository's
+                default branch to upstream, discarding local commits/divergence
             recursive: Recursively discover repositories in subdirectories (default: True)
             include_projects: Optional list of project name patterns to include.
                 Supports shell-style wildcards (*, ?, [seq]) and hierarchical
@@ -97,6 +100,7 @@ class RefreshManager:
         self.exit_on_error = exit_on_error
         self.dry_run = dry_run
         self.force = force
+        self.force_hard = force_hard
         self.recursive = recursive
         self.include_projects = include_projects
         self.exclude_projects = exclude_projects
@@ -107,9 +111,11 @@ class RefreshManager:
         elif config is not None:
             self.threads = config.effective_threads
         else:
-            # Default to CPU count * 4, capped at 32
+            # Default to CPU count * 4, capped at 32, then halved (floor of 1)
+            # to reduce concurrent SSH handshakes against Gerrit and avoid
+            # transient "Could not read from remote repository" throttling.
             cpu_count = os.cpu_count() or 4
-            self.threads = min(32, cpu_count * 4)
+            self.threads = max(1, min(32, cpu_count * 4) // 2)
 
         logger.debug(f"RefreshManager initialized with {self.threads} threads")
 
@@ -314,6 +320,7 @@ class RefreshManager:
             strategy=self.strategy,
             filter_gerrit_only=self.filter_gerrit_only,
             force=self.force,
+            force_hard=self.force_hard,
         )
 
         # Create progress display with two-line layout
@@ -337,7 +344,10 @@ class RefreshManager:
 
         with (
             Live(
-                display_group, console=Console(stderr=True), refresh_per_second=4, transient=False
+                display_group,
+                console=Console(stderr=True),
+                refresh_per_second=4,
+                transient=False,
             ),
             interruptible_executor(
                 max_workers=self.threads,
@@ -426,6 +436,7 @@ class RefreshManager:
             strategy=self.strategy,
             filter_gerrit_only=self.filter_gerrit_only,
             force=False,  # Never force modifications in dry run
+            force_hard=False,  # Never hard-reset in dry run
         )
 
         for repo_path in repo_paths:
@@ -546,6 +557,7 @@ def refresh_repositories(
     exit_on_error: bool = False,
     dry_run: bool = False,
     force: bool = False,
+    force_hard: bool = False,
     recursive: bool = True,
 ) -> RefreshBatchResult:
     """Refresh repositories in a directory.
@@ -568,6 +580,8 @@ def refresh_repositories(
         exit_on_error: Exit immediately on first error
         dry_run: Show what would be refreshed without executing
         force: Force refresh by fixing detached HEAD, upstream tracking, and stashing changes
+        force_hard: Superset of force that also hard-resets each repository's
+            default branch to upstream, discarding local commits/divergence
         recursive: Recursively discover repositories in subdirectories (default: True)
 
     Returns:
@@ -588,6 +602,7 @@ def refresh_repositories(
         exit_on_error=exit_on_error,
         dry_run=dry_run,
         force=force,
+        force_hard=force_hard,
         recursive=recursive,
     )
 

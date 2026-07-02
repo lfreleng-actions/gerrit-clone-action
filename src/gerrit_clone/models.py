@@ -416,9 +416,7 @@ class Config:
                     scheme, bare_host = bare_host.split("://", 1)
                 bare_host = bare_host.split("/", 1)[0]
                 host_lower = bare_host.lower()
-                if host_lower == "github.com" or host_lower.endswith(
-                    ".github.com"
-                ):
+                if host_lower == "github.com" or host_lower.endswith(".github.com"):
                     self.base_url = "https://api.github.com"
                 else:
                     # GitHub Enterprise — preserve the scheme supplied
@@ -498,10 +496,19 @@ class Config:
         Attempts to query performance core count; falls back to 10,
         then caps at 32. For other systems, use heuristic cpu_count * 4.
 
-        For GitHub sources, uses 2x multiplier since operations are network-limited
-        rather than CPU/filesystem-limited. This optimization typically halves
-        clone time for GitHub repositories (e.g., 10 cores -> 20 threads for GitHub,
-        max 64 threads vs 32 for Gerrit).
+        For Gerrit (SSH) sources, the dynamically calculated default is then
+        halved (floor of 1) to reduce the risk of overwhelming a Gerrit
+        server's SSH front-end with too many concurrent handshakes. Bursts of
+        parallel SSH connections are frequently throttled by Gerrit and
+        surface as transient "Could not read from remote repository"
+        failures. Users who want the previous, more aggressive concurrency
+        can still pass ``--threads`` explicitly.
+
+        For GitHub sources the halving does not apply; instead a 2x multiplier
+        is used since operations are network-limited rather than
+        CPU/filesystem-limited. This optimization typically halves clone time
+        for GitHub repositories (e.g., 10 cores -> 20 threads for GitHub,
+        max 64 threads vs 16 halved for Gerrit).
         """
         if self.threads is not None:
             return self.threads
@@ -545,7 +552,12 @@ class Config:
         if self.source_type == SourceType.GITHUB:
             return min(64, base_threads * 2)
 
-        return base_threads
+        # Halve the dynamically calculated default (floor of 1) for Gerrit (SSH)
+        # sources to avoid saturating Gerrit's SSH server with concurrent
+        # handshakes, which can trigger transient "Could not read from remote
+        # repository" errors. GitHub sources are unaffected: they are handled
+        # above with their own higher, network-bound concurrency.
+        return max(1, base_threads // 2)
 
     @property
     def protocol(self) -> str:
@@ -636,7 +648,12 @@ class CloneResult:
         between repos that were updated (REFRESHED with updates) vs merely
         verified as current (VERIFIED or REFRESHED without updates).
         """
-        return self.status in (CloneStatus.SUCCESS, CloneStatus.ALREADY_EXISTS, CloneStatus.REFRESHED, CloneStatus.VERIFIED)
+        return self.status in (
+            CloneStatus.SUCCESS,
+            CloneStatus.ALREADY_EXISTS,
+            CloneStatus.REFRESHED,
+            CloneStatus.VERIFIED,
+        )
 
     @property
     def failed(self) -> bool:
@@ -809,6 +826,11 @@ class RefreshResult:
     had_uncommitted_changes: bool = False
     stash_created: bool = False
     stash_popped: bool = False
+    # Branch the stash was created on. Used to avoid auto-popping a stash onto a
+    # different branch (e.g. after force-mode switches from a feature branch to
+    # the default branch), which could apply changes to the wrong branch.
+    stash_branch: str | None = None
+    hard_reset: bool = False
     detached_head: bool = False
 
     # Retry tracking
@@ -862,6 +884,8 @@ class RefreshResult:
             "had_uncommitted_changes": self.had_uncommitted_changes,
             "stash_created": self.stash_created,
             "stash_popped": self.stash_popped,
+            "stash_branch": self.stash_branch,
+            "hard_reset": self.hard_reset,
             "detached_head": self.detached_head,
             "first_started_at": self.first_started_at.isoformat()
             if self.first_started_at

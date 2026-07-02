@@ -212,6 +212,25 @@ Automatically stash uncommitted changes before refresh:
 gerrit-clone refresh --output-path ~/onap --auto-stash
 ```
 
+Force refresh (stash local changes, fix detached HEAD, restore feature-branch
+checkouts to the default branch):
+
+```bash
+gerrit-clone refresh --output-path ~/onap --force
+```
+
+Hard reset: make local content exactly match the remote, discarding local-only
+commits and any divergence. This is the single, explicit way to force-reset
+local content and is a strict superset of `--force`:
+
+```bash
+gerrit-clone refresh --output-path ~/onap --force-hard
+```
+
+> **Note:** `--force-hard` is destructive: it permanently discards
+> local-only commits on the default branch. It leaves other local
+> branches untouched.
+
 Use rebase strategy instead of merge:
 
 ```bash

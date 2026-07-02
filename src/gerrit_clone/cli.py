@@ -861,9 +861,7 @@ def clone(
         remove_file_patterns = (
             normalize_file_patterns([remove_files]) if remove_files else None
         )
-        git_filter_projects = (
-            parse_git_filter_spec(git_filter) if git_filter else None
-        )
+        git_filter_projects = parse_git_filter_spec(git_filter) if git_filter else None
         if remove_file_patterns or git_filter_projects or redact_secrets:
             if not quiet:
                 console.print("[cyan]🔧 Applying content filters...[/cyan]")
@@ -1227,6 +1225,16 @@ def refresh(
             "to your working copies; use with care and recover changes from `git stash` if needed."
         ),
     ),
+    force_hard: bool = typer.Option(
+        False,
+        "--force-hard",
+        help=(
+            "Everything --force does, plus hard-reset each repository's default "
+            "branch to its upstream ref, discarding local commits and "
+            "divergence so local content exactly matches the remote. "
+            "DESTRUCTIVE: local-only commits are permanently lost."
+        ),
+    ),
     recursive: bool = typer.Option(
         True,
         "--recursive / --no-recursive",
@@ -1311,6 +1319,10 @@ def refresh(
         # Auto-stash uncommitted changes
         gerrit-clone refresh --output-path ~/repos --auto-stash
 
+        # Hard-reset local content to exactly match the remote
+        # (discards local-only commits and divergence)
+        gerrit-clone refresh --output-path ~/repos --force-hard
+
         # Dry run (show what would be updated)
         gerrit-clone refresh --output-path ~/repos --dry-run
     """
@@ -1386,7 +1398,13 @@ def refresh(
             f"Exclude Filter: [cyan]{', '.join(exc_display) if exc_display else '—'}[/cyan]"
         )
         console.print(f"Dry Run: [cyan]{dry_run}[/cyan]")
-        console.print(f"Force: [cyan]{force}[/cyan]")
+        # A dry run disables all modifications (see RefreshManager), so report
+        # the *effective* force settings rather than the user-supplied flags to
+        # avoid implying a destructive run when nothing will be changed.
+        effective_force = (force or force_hard) and not dry_run
+        effective_force_hard = force_hard and not dry_run
+        console.print(f"Force: [cyan]{effective_force}[/cyan]")
+        console.print(f"Force Hard: [cyan]{effective_force_hard}[/cyan]")
         console.print(f"Recursive: [cyan]{recursive}[/cyan]")
         console.print()
 
@@ -1406,6 +1424,7 @@ def refresh(
             exit_on_error=exit_on_error,
             dry_run=dry_run,
             force=force,
+            force_hard=force_hard,
             recursive=recursive,
             include_projects=include_projects if include_projects else None,
             exclude_projects=exclude_projects if exclude_projects else None,
@@ -1415,9 +1434,7 @@ def refresh(
         remove_file_patterns = (
             normalize_file_patterns([remove_files]) if remove_files else None
         )
-        git_filter_projects = (
-            parse_git_filter_spec(git_filter) if git_filter else None
-        )
+        git_filter_projects = parse_git_filter_spec(git_filter) if git_filter else None
         if remove_file_patterns or git_filter_projects or redact_secrets:
             if not quiet:
                 console.print("[cyan]🔧 Applying content filters...[/cyan]")
@@ -2201,7 +2218,9 @@ def mirror(
             )
             console.print("[bold]Mirror Summary[/bold]")
             console.print(f"  Discovery Method: [cyan]{discovery_label}[/cyan]")
-            console.print(f"  Clone Protocol: [cyan]{'HTTPS' if use_https else 'SSH'}[/cyan]")
+            console.print(
+                f"  Clone Protocol: [cyan]{'HTTPS' if use_https else 'SSH'}[/cyan]"
+            )
             console.print(f"  Skip Archived: [cyan]{skip_archived}[/cyan]")
             console.print(f"  Total: {batch_result.total_count}")
             console.print(f"  [green]Succeeded: {batch_result.success_count}[/green]")

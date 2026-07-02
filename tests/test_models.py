@@ -255,6 +255,26 @@ class TestConfig:
         assert threads > 0
         assert threads <= 32
 
+    def test_effective_threads_github_not_halved(self):
+        """GitHub keeps its 2x multiplier; only Gerrit is halved."""
+        gerrit = Config(host="gerrit.example.org", source_type=SourceType.GERRIT)
+        github = Config(
+            host="github.com",
+            source_type=SourceType.GITHUB,
+            github_token="x",
+        )
+
+        gerrit_threads = gerrit.effective_threads
+        github_threads = github.effective_threads
+
+        # Gerrit is halved and capped at 32; GitHub is boosted and capped at 64.
+        assert 1 <= gerrit_threads <= 32
+        assert github_threads <= 64
+        # The Gerrit-only halving must not cancel GitHub's 2x multiplier, so
+        # GitHub concurrency stays well above the halved Gerrit value.
+        assert github_threads > gerrit_threads
+        assert github_threads >= gerrit_threads * 2
+
     def test_projects_url(self):
         """Test projects_url property."""
         config = Config(host="gerrit.example.org")

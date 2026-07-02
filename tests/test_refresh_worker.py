@@ -7,12 +7,17 @@ from __future__ import annotations
 
 import subprocess
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
 
 from gerrit_clone.models import Config, RefreshResult, RefreshStatus, RetryPolicy
-from gerrit_clone.refresh_worker import RefreshTimeoutError, RefreshWorker
+from gerrit_clone.refresh_worker import (
+    RefreshTimeoutError,
+    RefreshWorker,
+    StashOutcome,
+)
 
 
 @pytest.fixture
@@ -21,6 +26,10 @@ def worker():
     return RefreshWorker(
         retry_policy=RetryPolicy(max_attempts=2, base_delay=0.1),
         timeout=10,
+        # Disable SSH handshake jitter so its remote-URL lookup does not
+        # perturb tests that mock subprocess.run for the network helpers.
+        # Dedicated jitter tests construct their own workers.
+        ssh_jitter_seconds=0,
     )
 
 
@@ -276,8 +285,8 @@ class TestRefreshWorker:
         # Create uncommitted changes
         (temp_git_repo / "uncommitted.txt").write_text("uncommitted")
 
-        success = worker._stash_changes(temp_git_repo)
-        assert success is True
+        outcome = worker._stash_changes(temp_git_repo)
+        assert outcome is StashOutcome.CREATED
 
         # Verify working directory is clean
         result = subprocess.run(
@@ -288,6 +297,11 @@ class TestRefreshWorker:
             check=True,
         )
         assert result.stdout.strip() == ""
+
+    def test_stash_changes_nothing_to_stash(self, worker, temp_git_repo):
+        """A clean tree yields NOTHING_TO_STASH, not a failure."""
+        outcome = worker._stash_changes(temp_git_repo)
+        assert outcome is StashOutcome.NOTHING_TO_STASH
 
     def test_pop_stash(self, worker, temp_git_repo):
         """Test popping stashed changes."""
@@ -1169,3 +1183,500 @@ class TestFixUpstreamTracking:
         success = worker._fix_upstream_tracking(temp_git_repo, result)
 
         assert success is False
+
+
+class TestTransientAndDivergedClassification:
+    """Classification of transient SSH and diverged-branch failures."""
+
+    def test_analyze_transient_ssh_is_network(self, worker):
+        """Transient SSH failures are reported as retryable network errors."""
+        process_result = Mock()
+        process_result.returncode = 128
+        process_result.stdout = ""
+        process_result.stderr = "fatal: Could not read from remote repository."
+
+        assert "Network error" in worker._analyze_git_error(process_result, "pull")
+
+    def test_transient_ssh_is_retryable(self, worker):
+        """SSH handshake throttling is retryable."""
+        process_result = Mock()
+        process_result.returncode = 128
+        process_result.stdout = ""
+        process_result.stderr = (
+            "kex_exchange_identification: Connection closed by remote host"
+        )
+
+        assert worker._is_retryable_git_error(process_result) is True
+
+    def test_auth_with_could_not_read_still_non_retryable(self, worker):
+        """Real auth failures print 'could not read' too but must not retry."""
+        process_result = Mock()
+        process_result.returncode = 128
+        process_result.stdout = ""
+        process_result.stderr = (
+            "Permission denied (publickey).\n"
+            "fatal: Could not read from remote repository."
+        )
+
+        assert worker._is_retryable_git_error(process_result) is False
+        assert "Authentication error" in worker._analyze_git_error(
+            process_result, "pull"
+        )
+
+    def test_analyze_diverging_branches(self, worker):
+        """Diverging branches are recognised and hint at --force-hard."""
+        process_result = Mock()
+        process_result.returncode = 1
+        process_result.stdout = ""
+        process_result.stderr = "hint: Diverging branches can't be fast-forwarded"
+
+        msg = worker._analyze_git_error(process_result, "pull")
+        assert "Diverging branches" in msg
+        assert "force-hard" in msg.lower()
+
+    def test_diverging_branches_non_retryable(self, worker):
+        """Diverging branches are not retryable."""
+        process_result = Mock()
+        process_result.returncode = 1
+        process_result.stdout = ""
+        process_result.stderr = "hint: Diverging branches can't be fast-forwarded"
+
+        assert worker._is_retryable_git_error(process_result) is False
+
+    def test_diverging_with_transfer_stats_first_line(self, worker):
+        """Transfer stats before the hint must not mask the divergence."""
+        process_result = Mock()
+        process_result.returncode = 1
+        process_result.stdout = ""
+        process_result.stderr = (
+            "Total 5 (delta 3), reused 5 (delta 3)\n"
+            "hint: Diverging branches can't be fast-forwarded"
+        )
+
+        assert "Diverging branches" in worker._analyze_git_error(process_result, "pull")
+
+    def test_missing_repo_with_could_not_read_is_not_found(self, worker):
+        """Missing repos print 'could not read' too but are not transient."""
+        process_result = Mock()
+        process_result.returncode = 128
+        process_result.stdout = ""
+        process_result.stderr = (
+            "fatal: 'nonexistent' does not exist\n"
+            "fatal: Could not read from remote repository."
+        )
+
+        assert "Repository not found" in worker._analyze_git_error(
+            process_result, "fetch"
+        )
+
+    def test_missing_repo_is_not_retryable(self, worker):
+        """A missing repository must not be retried as a network blip."""
+        process_result = Mock()
+        process_result.returncode = 128
+        process_result.stdout = ""
+        process_result.stderr = (
+            "ERROR: Repository not found.\n"
+            "fatal: Could not read from remote repository."
+        )
+
+        assert worker._is_retryable_git_error(process_result) is False
+
+
+class TestPopStashSubmoduleNoise:
+    """Tests for stash-pop success detection under submodule status noise."""
+
+    def test_pop_stash_success_returns_true(self, worker, temp_git_repo):
+        """A clean pop (exit 0) is reported as success."""
+        (temp_git_repo / "uncommitted.txt").write_text("uncommitted")
+        worker._stash_changes(temp_git_repo)
+
+        assert worker._pop_stash(temp_git_repo) is True
+        assert (temp_git_repo / "uncommitted.txt").read_text() == "uncommitted"
+
+    @patch("gerrit_clone.refresh_worker.subprocess.run")
+    def test_pop_stash_nonzero_but_dropped_is_success(self, mock_run, worker):
+        """Non-zero pop that still drops the stash counts as success.
+
+        Reproduces the submodule-gitlink case where ``git stash pop`` applies
+        the working-tree changes and drops the stash entry but exits non-zero
+        because of submodule status reporting.
+        """
+        pop = Mock(returncode=1, stdout="", stderr="error in submodule")
+        before = Mock(returncode=0, stdout="stash@{0}: WIP\n", stderr="")
+        after = Mock(returncode=0, stdout="", stderr="")
+        # Call order: _stash_count (before), stash pop, _stash_count (after)
+        mock_run.side_effect = [before, pop, after]
+
+        assert worker._pop_stash(Path("/tmp/repo")) is True
+
+    @patch("gerrit_clone.refresh_worker.subprocess.run")
+    def test_pop_stash_nonzero_and_retained_is_failure(self, mock_run, worker):
+        """Non-zero pop that leaves the stash in place is a real failure."""
+        pop = Mock(returncode=1, stdout="", stderr="CONFLICT (content)")
+        before = Mock(returncode=0, stdout="stash@{0}: WIP\n", stderr="")
+        after = Mock(returncode=0, stdout="stash@{0}: WIP\n", stderr="")
+        mock_run.side_effect = [before, pop, after]
+
+        assert worker._pop_stash(Path("/tmp/repo")) is False
+
+
+class TestForceHard:
+    """Tests for force-hard behaviour and its helpers."""
+
+    def test_force_hard_implies_force(self):
+        """--force-hard is a superset of --force."""
+        worker = RefreshWorker(force_hard=True)
+        assert worker.force is True
+        assert worker.force_hard is True
+
+    def test_force_default_not_hard(self):
+        """--force alone does not enable hard reset."""
+        worker = RefreshWorker(force=True)
+        assert worker.force is True
+        assert worker.force_hard is False
+
+    @patch("gerrit_clone.refresh_worker.subprocess.run")
+    def test_reset_to_upstream_success(self, mock_run, worker, temp_git_repo):
+        """Hard reset succeeds when an upstream exists."""
+        upstream_check = Mock(returncode=0, stdout="origin/master", stderr="")
+        reset = Mock(returncode=0, stdout="", stderr="")
+        mock_run.side_effect = [upstream_check, reset]
+
+        result = RefreshResult(
+            path=temp_git_repo,
+            project_name="test-repo",
+            status=RefreshStatus.PENDING,
+            started_at=datetime.now(UTC),
+        )
+        result.current_branch = "master"
+
+        assert worker._reset_to_upstream(temp_git_repo, result) is True
+
+    @patch("gerrit_clone.refresh_worker.subprocess.run")
+    def test_reset_to_upstream_no_upstream(self, mock_run, worker, temp_git_repo):
+        """Hard reset is skipped when there is no upstream to reset to."""
+        upstream_check = Mock(returncode=128, stdout="", stderr="fatal: no upstream")
+        mock_run.side_effect = [upstream_check]
+
+        result = RefreshResult(
+            path=temp_git_repo,
+            project_name="test-repo",
+            status=RefreshStatus.PENDING,
+            started_at=datetime.now(UTC),
+        )
+        result.current_branch = "master"
+
+        assert worker._reset_to_upstream(temp_git_repo, result) is False
+
+    def test_reset_to_upstream_no_branch(self, worker, temp_git_repo):
+        """Hard reset requires a current branch."""
+        result = RefreshResult(
+            path=temp_git_repo,
+            project_name="test-repo",
+            status=RefreshStatus.PENDING,
+            started_at=datetime.now(UTC),
+        )
+        result.current_branch = None
+
+        assert worker._reset_to_upstream(temp_git_repo, result) is False
+
+    @patch("gerrit_clone.refresh_worker.subprocess.run")
+    def test_switch_to_default_branch_success(self, mock_run, worker, temp_git_repo):
+        """Switching to the default branch checks it out and sets upstream."""
+        checkout = Mock(returncode=0, stdout="", stderr="")
+        set_upstream = Mock(returncode=0, stdout="", stderr="")
+        mock_run.side_effect = [checkout, set_upstream]
+
+        assert worker._switch_to_default_branch(temp_git_repo, "master") is True
+
+    @patch("gerrit_clone.refresh_worker.subprocess.run")
+    def test_switch_to_default_branch_checkout_fails(
+        self, mock_run, worker, temp_git_repo
+    ):
+        """A failed checkout is reported as failure."""
+        checkout = Mock(returncode=1, stdout="", stderr="error: pathspec")
+        mock_run.side_effect = [checkout]
+
+        assert worker._switch_to_default_branch(temp_git_repo, "master") is False
+
+    def test_force_hard_skips_reset_when_not_on_default(self, temp_git_repo):
+        """Force-hard must not hard-reset a feature branch on switch failure."""
+        worker = RefreshWorker(force_hard=True, filter_gerrit_only=False)
+        state = {
+            "branch": "feature/x",
+            "detached_head": False,
+            "has_uncommitted": False,
+            "has_upstream": True,
+            "on_meta_config": False,
+        }
+        with (
+            patch.object(worker, "_check_repository_state", return_value=state),
+            patch.object(worker, "_get_default_branch_local", return_value="main"),
+            patch.object(worker, "_switch_to_default_branch", return_value=False),
+            patch.object(worker, "_reset_to_upstream") as mock_reset,
+            patch.object(worker, "_execute_adaptive_refresh", return_value=True),
+        ):
+            result = worker.refresh_repository(temp_git_repo)
+
+        # Still parked on the feature branch, so the destructive reset that
+        # would discard its local-only commits must be skipped.
+        mock_reset.assert_not_called()
+        assert result.hard_reset is False
+
+    def test_force_hard_resets_on_default_branch(self, temp_git_repo):
+        """Force-hard hard-resets when already on the default branch."""
+        worker = RefreshWorker(force_hard=True, filter_gerrit_only=False)
+        state = {
+            "branch": "main",
+            "detached_head": False,
+            "has_uncommitted": False,
+            "has_upstream": True,
+            "on_meta_config": False,
+        }
+        with (
+            patch.object(worker, "_check_repository_state", return_value=state),
+            patch.object(worker, "_get_default_branch_local", return_value="main"),
+            patch.object(worker, "_reset_to_upstream", return_value=True) as mock_reset,
+            patch.object(worker, "_execute_adaptive_refresh", return_value=True),
+        ):
+            result = worker.refresh_repository(temp_git_repo)
+
+        mock_reset.assert_called_once()
+        assert result.hard_reset is True
+
+    def test_force_preswitch_stash_clears_dirty_flag(self, temp_git_repo):
+        """A successful pre-switch stash prevents a redundant second stash."""
+        worker = RefreshWorker(force_hard=True, filter_gerrit_only=False)
+        state = {
+            "branch": "feature/x",
+            "detached_head": False,
+            "has_uncommitted": True,
+            "has_upstream": True,
+            "on_meta_config": False,
+        }
+        with (
+            patch.object(worker, "_check_repository_state", return_value=state),
+            patch.object(worker, "_get_default_branch_local", return_value="main"),
+            patch.object(worker, "_switch_to_default_branch", return_value=False),
+            patch.object(
+                worker, "_stash_changes", return_value=StashOutcome.CREATED
+            ) as mock_stash,
+            patch.object(worker, "_reset_to_upstream") as mock_reset,
+            patch.object(worker, "_execute_adaptive_refresh", return_value=True),
+        ):
+            result = worker.refresh_repository(temp_git_repo)
+
+        # The tree is stashed once before the (failed) switch; the later
+        # "always stash" block must not re-stash a now-clean tree.
+        mock_stash.assert_called_once()
+        mock_reset.assert_not_called()
+        assert result.stash_created is True
+
+    def test_force_stash_not_popped_on_different_branch(self, temp_git_repo):
+        """A stash taken on a feature branch is not popped onto default."""
+        worker = RefreshWorker(force=True, filter_gerrit_only=False)
+        feature_state = {
+            "branch": "feature/x",
+            "detached_head": False,
+            "has_uncommitted": True,
+            "has_upstream": True,
+            "on_meta_config": False,
+        }
+        main_state = {
+            "branch": "main",
+            "detached_head": False,
+            "has_uncommitted": False,
+            "has_upstream": True,
+            "on_meta_config": False,
+        }
+        pending = [feature_state]
+
+        def fake_state(_repo):
+            return pending.pop(0) if pending else main_state
+
+        with (
+            patch.object(worker, "_check_repository_state", side_effect=fake_state),
+            patch.object(worker, "_get_default_branch_local", return_value="main"),
+            patch.object(worker, "_stash_changes", return_value=StashOutcome.CREATED),
+            patch.object(worker, "_switch_to_default_branch", return_value=True),
+            patch.object(worker, "_pop_stash") as mock_pop,
+            patch.object(worker, "_execute_adaptive_refresh", return_value=True),
+        ):
+            result = worker.refresh_repository(temp_git_repo)
+
+        # Stash came from feature/x but we ended on main, so it must be left
+        # intact rather than popped onto the wrong branch.
+        mock_pop.assert_not_called()
+        assert result.stash_created is True
+        assert result.stash_popped is False
+        assert result.stash_branch == "feature/x"
+        assert result.current_branch == "main"
+
+    def test_force_nothing_to_stash_does_not_fail_or_pop(self, temp_git_repo):
+        """A submodule-only dirty tree (nothing to stash) is benign.
+
+        Reproduces the ci-management case: the only change is a modified
+        submodule gitlink, which git stash does not capture, so no stash is
+        created. Force mode must not fail, must not set stash_created, and must
+        not attempt (and warn about) a pop of a non-existent stash.
+        """
+        worker = RefreshWorker(force=True, filter_gerrit_only=False)
+        state = {
+            "branch": "master",
+            "detached_head": False,
+            "has_uncommitted": True,
+            "has_upstream": True,
+            "on_meta_config": False,
+        }
+        with (
+            patch.object(worker, "_check_repository_state", return_value=state),
+            patch.object(worker, "_get_default_branch_local", return_value="master"),
+            patch.object(
+                worker,
+                "_stash_changes",
+                return_value=StashOutcome.NOTHING_TO_STASH,
+            ),
+            patch.object(worker, "_pop_stash") as mock_pop,
+            patch.object(worker, "_execute_adaptive_refresh", return_value=True),
+        ):
+            result = worker.refresh_repository(temp_git_repo)
+
+        assert result.status is not RefreshStatus.FAILED
+        assert result.stash_created is False
+        assert result.stash_popped is False
+        mock_pop.assert_not_called()
+
+
+class TestSshJitter:
+    """Tests for SSH handshake jitter."""
+
+    def test_jitter_zero_no_sleep(self):
+        """Zero jitter performs no sleep."""
+        worker = RefreshWorker(ssh_jitter_seconds=0)
+        with patch("gerrit_clone.refresh_worker.time.sleep") as mock_sleep:
+            worker._ssh_handshake_jitter(Path("/tmp/repo"))
+            mock_sleep.assert_not_called()
+
+    def test_jitter_positive_sleeps_within_bounds(self):
+        """Positive jitter sleeps within [0, ssh_jitter_seconds] for SSH."""
+        worker = RefreshWorker(ssh_jitter_seconds=0.1)
+        with (
+            patch.object(
+                worker, "_get_remote_url", return_value="ssh://gerrit:29418/x"
+            ),
+            patch("gerrit_clone.refresh_worker.time.sleep") as mock_sleep,
+        ):
+            worker._ssh_handshake_jitter(Path("/tmp/repo"))
+            mock_sleep.assert_called_once()
+            slept = mock_sleep.call_args[0][0]
+            assert 0 <= slept <= 0.1
+
+    def test_jitter_skipped_for_http_remote(self):
+        """HTTP(S) remotes perform no SSH handshake, so jitter is skipped."""
+        worker = RefreshWorker(ssh_jitter_seconds=0.1)
+        with (
+            patch.object(
+                worker,
+                "_get_remote_url",
+                return_value="https://github.com/org/repo.git",
+            ),
+            patch("gerrit_clone.refresh_worker.time.sleep") as mock_sleep,
+        ):
+            worker._ssh_handshake_jitter(Path("/tmp/repo"))
+            mock_sleep.assert_not_called()
+
+    def test_jitter_applied_for_scp_style_ssh_remote(self):
+        """scp-style user@host:path remotes are treated as SSH."""
+        worker = RefreshWorker(ssh_jitter_seconds=0.1)
+        with (
+            patch.object(
+                worker, "_get_remote_url", return_value="git@github.com:org/repo.git"
+            ),
+            patch("gerrit_clone.refresh_worker.time.sleep") as mock_sleep,
+        ):
+            worker._ssh_handshake_jitter(Path("/tmp/repo"))
+            mock_sleep.assert_called_once()
+
+    def test_jitter_applied_for_unknown_remote(self):
+        """An unreadable remote conservatively still jitters."""
+        worker = RefreshWorker(ssh_jitter_seconds=0.1)
+        with (
+            patch.object(worker, "_get_remote_url", return_value=None),
+            patch("gerrit_clone.refresh_worker.time.sleep") as mock_sleep,
+        ):
+            worker._ssh_handshake_jitter(Path("/tmp/repo"))
+            mock_sleep.assert_called_once()
+
+    def test_jitter_skipped_for_file_and_local_remotes(self):
+        """file:// URLs and local paths perform no SSH handshake."""
+        worker = RefreshWorker(ssh_jitter_seconds=0.1)
+        for url in ("file:///srv/git/repo.git", "/srv/git/repo.git", "../peer"):
+            with (
+                patch.object(worker, "_get_remote_url", return_value=url),
+                patch("gerrit_clone.refresh_worker.time.sleep") as mock_sleep,
+            ):
+                worker._ssh_handshake_jitter(Path("/tmp/repo"))
+                mock_sleep.assert_not_called()
+
+    def test_remote_uses_ssh_classification(self):
+        """Direct classification of remote URL transports."""
+        ssh = RefreshWorker._remote_uses_ssh
+        assert ssh("ssh://gerrit.example.org:29418/proj") is True
+        assert ssh("git@github.com:org/repo.git") is True
+        assert ssh(None) is True  # unknown -> conservative
+        assert ssh("https://github.com/org/repo.git") is False
+        assert ssh("http://example.org/repo.git") is False
+        assert ssh("git://example.org/repo.git") is False
+        assert ssh("file:///srv/git/repo.git") is False
+        assert ssh("/srv/git/repo.git") is False
+        assert ssh("./peer") is False
+        assert ssh("~/repos/peer") is False
+
+    @patch("gerrit_clone.refresh_worker.subprocess.run")
+    def test_get_default_branch_applies_jitter(self, mock_run, temp_git_repo):
+        """Networked default-branch lookup is preceded by SSH jitter."""
+        worker = RefreshWorker(ssh_jitter_seconds=0.1)
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout="ref: refs/heads/main\tHEAD\n",
+            stderr="",
+        )
+        with patch.object(worker, "_ssh_handshake_jitter") as mock_jitter:
+            branch = worker._get_default_branch(temp_git_repo)
+
+        mock_jitter.assert_called_once()
+        assert branch == "main"
+
+    @patch("gerrit_clone.refresh_worker.subprocess.run")
+    def test_is_meta_only_repo_applies_jitter(self, mock_run, temp_git_repo):
+        """The networked meta-only check is preceded by SSH jitter."""
+        worker = RefreshWorker(ssh_jitter_seconds=0.1)
+        mock_run.return_value = Mock(
+            returncode=0,
+            stdout="abc123\trefs/heads/main\n",
+            stderr="",
+        )
+        with patch.object(worker, "_ssh_handshake_jitter") as mock_jitter:
+            worker._is_meta_only_repo(temp_git_repo)
+
+        mock_jitter.assert_called()
+
+    @patch("gerrit_clone.refresh_worker.subprocess.run")
+    def test_fix_detached_head_applies_jitter(self, mock_run, temp_git_repo):
+        """The networked detached-HEAD fetch is preceded by SSH jitter."""
+        worker = RefreshWorker(ssh_jitter_seconds=0.1)
+        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+        result = RefreshResult(
+            path=temp_git_repo,
+            project_name="test-repo",
+            status=RefreshStatus.PENDING,
+            started_at=datetime.now(UTC),
+        )
+        with (
+            patch.object(worker, "_is_on_meta_config", return_value=False),
+            patch.object(worker, "_get_default_branch", return_value="main"),
+            patch.object(worker, "_ssh_handshake_jitter") as mock_jitter,
+        ):
+            worker._fix_detached_head(temp_git_repo, result)
+
+        mock_jitter.assert_called()

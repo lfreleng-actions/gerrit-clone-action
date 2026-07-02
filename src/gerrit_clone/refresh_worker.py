@@ -11,6 +11,7 @@ import re
 import subprocess
 import time
 from datetime import UTC, datetime
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from gerrit_clone.git_utils import is_git_repository
@@ -21,6 +22,76 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 logger = get_logger(__name__)
+
+# Maximum random delay (seconds) inserted before each SSH-backed git network
+# operation. Spreading handshakes across a small window de-synchronises worker
+# threads so we do not open many simultaneous SSH connections to Gerrit, which
+# is a common cause of transient "Could not read from remote repository"
+# throttling failures.
+SSH_HANDSHAKE_JITTER_SECONDS = 0.25
+
+# Transient SSH / network failures that are safe to retry. Gerrit prints some of
+# these (notably "could not read from remote repository") for genuine
+# authentication failures too, so callers MUST check for authentication markers
+# (see ``_AUTH_ERROR_PATTERNS``) BEFORE treating an error as transient.
+_TRANSIENT_GIT_ERROR_PATTERNS = (
+    "could not read from remote repository",
+    "early eof",
+    "the remote end hung up unexpectedly",
+    "kex_exchange_identification",
+    "ssh_exchange_identification",
+    "connection closed by remote host",
+    "connection reset by peer",
+    "connection reset",
+    "broken pipe",
+)
+
+# Markers that unambiguously indicate an authentication / authorization failure.
+_AUTH_ERROR_PATTERNS = (
+    "permission denied",
+    "publickey",
+    "authentication failed",
+    "access denied",
+)
+
+# Markers indicating the remote repository does not exist (or is not visible as
+# a project). Gerrit and GitHub also print the generic "could not read from
+# remote repository" line for a missing repo, so callers MUST check these
+# BEFORE the transient patterns to avoid misclassifying a permanently missing
+# repository as a retryable network blip.
+_NOT_FOUND_GIT_ERROR_PATTERNS = (
+    "repository not found",
+    "does not exist",
+)
+
+# Markers indicating the local branch has diverged from upstream and a
+# fast-forward-only update is not possible (i.e. local commits exist).
+_DIVERGED_BRANCH_PATTERNS = (
+    "diverging branches",
+    "not possible to fast-forward",
+    "can't be fast-forwarded",
+    "cannot be fast-forwarded",
+)
+
+
+class StashOutcome(Enum):
+    """Result of attempting to stash a working tree.
+
+    ``git stash push`` exits 0 both when it stashes changes and when it finds
+    nothing to stash (for example a working tree whose only modification is a
+    submodule gitlink, which git stash does not capture). Distinguishing these
+    lets callers avoid both a spurious "failed to stash" error and a later
+    "failed to restore stash" warning for a stash that was never created.
+    """
+
+    CREATED = "created"
+    """A new stash entry was created."""
+
+    NOTHING_TO_STASH = "nothing_to_stash"
+    """The command succeeded but there was nothing git could stash."""
+
+    FAILED = "failed"
+    """The stash command errored."""
 
 
 class RefreshError(Exception):
@@ -46,6 +117,8 @@ class RefreshWorker:
         strategy: str = "merge",
         filter_gerrit_only: bool = True,
         force: bool = False,
+        force_hard: bool = False,
+        ssh_jitter_seconds: float = SSH_HANDSHAKE_JITTER_SECONDS,
     ) -> None:
         """Initialize refresh worker.
 
@@ -60,6 +133,11 @@ class RefreshWorker:
             strategy: Git pull strategy ('merge' or 'rebase')
             filter_gerrit_only: Only refresh repositories with Gerrit remotes
             force: Force refresh by fixing detached HEAD, upstream tracking, and stashing changes
+            force_hard: Superset of ``force`` that additionally hard-resets the
+                default branch to its upstream ref, discarding local commits and
+                divergence. Implies ``force``.
+            ssh_jitter_seconds: Maximum random delay before each SSH-backed git
+                network operation, used to de-synchronise concurrent handshakes.
         """
         self.config = config
         self.retry_policy = retry_policy or RetryPolicy()
@@ -70,7 +148,10 @@ class RefreshWorker:
         self.auto_stash = auto_stash
         self.strategy = strategy
         self.filter_gerrit_only = filter_gerrit_only
-        self.force = force
+        # force_hard is a strict superset of force.
+        self.force_hard = force_hard
+        self.force = force or force_hard
+        self.ssh_jitter_seconds = max(0.0, ssh_jitter_seconds)
 
     def refresh_repository(self, repo_path: Path) -> RefreshResult:
         """Refresh a single repository.
@@ -169,6 +250,53 @@ class RefreshWorker:
                         logger.error(f"❌ {project_name}: Failed to fix detached HEAD")
                         return result
 
+                # Force mode: if parked on a non-default feature branch, switch
+                # back to the default branch so we refresh the mainline rather
+                # than local feature work. Use a local-only default-branch lookup
+                # first to avoid an extra networked ls-remote per repository.
+                default_branch: str | None = None
+                if result.current_branch and not result.detached_head:
+                    default_branch = self._get_default_branch_local(repo_path)
+                    if default_branch is None:
+                        default_branch = self._get_default_branch(repo_path)
+                    if default_branch and result.current_branch != default_branch:
+                        logger.debug(
+                            f"🔧 {project_name}: Switching from feature branch "
+                            f"'{result.current_branch}' to default branch '{default_branch}'"
+                        )
+                        # Stash first so an unclean tree cannot block checkout.
+                        if (
+                            result.had_uncommitted_changes
+                            and not result.stash_created
+                            and self._stash_changes(repo_path) is StashOutcome.CREATED
+                        ):
+                            result.stash_created = True
+                            # Record the branch the stash came from so it is
+                            # not auto-popped onto the default branch after
+                            # the switch below (that would apply
+                            # feature-branch work to the wrong branch).
+                            result.stash_branch = result.current_branch
+                            # Tree is now clean; clear the dirty flag so the
+                            # later force-mode stash does not try to re-stash
+                            # a clean tree if the checkout below fails.
+                            result.had_uncommitted_changes = False
+                        if self._switch_to_default_branch(repo_path, default_branch):
+                            state = self._check_repository_state(repo_path)
+                            result.current_branch = state.get("branch")
+                            result.detached_head = state.get("detached_head", False)
+                            result.had_uncommitted_changes = state.get(
+                                "has_uncommitted", False
+                            )
+                            logger.debug(
+                                f"✓ {project_name}: Switched to default branch "
+                                f"'{result.current_branch}'"
+                            )
+                        else:
+                            logger.warning(
+                                f"⚠️ {project_name}: Could not switch to default "
+                                f"branch '{default_branch}', refreshing current branch"
+                            )
+
                 # Fix upstream tracking
                 if not state.get("has_upstream", False) and result.current_branch:
                     logger.debug(
@@ -217,8 +345,18 @@ class RefreshWorker:
                     logger.debug(
                         f"💾 {project_name}: Force stashing uncommitted changes"
                     )
-                    if self._stash_changes(repo_path):
+                    stash_outcome = self._stash_changes(repo_path)
+                    if stash_outcome is StashOutcome.CREATED:
                         result.stash_created = True
+                        result.stash_branch = result.current_branch
+                    elif stash_outcome is StashOutcome.NOTHING_TO_STASH:
+                        # Nothing git could stash (e.g. a modified submodule
+                        # gitlink). Not an error and nothing to restore later.
+                        result.had_uncommitted_changes = False
+                        logger.debug(
+                            f"💾 {project_name}: Nothing to stash "
+                            f"(e.g. submodule-only change)"
+                        )
                     else:
                         result.status = RefreshStatus.FAILED
                         result.error_message = (
@@ -230,6 +368,42 @@ class RefreshWorker:
                         ).total_seconds()
                         logger.error(f"❌ {project_name}: Failed to stash changes")
                         return result
+
+                # Force-hard mode: discard any local commits / divergence by
+                # hard-resetting the default branch to its upstream ref. This
+                # is the single, explicit way to make local content exactly
+                # match the remote; the normal pull that follows is then a
+                # no-op fast-forward.
+                #
+                # Guard the reset so it only ever touches the default branch.
+                # If the default branch could not be determined or the switch
+                # to it failed above, we are still parked on a feature branch;
+                # hard-resetting it would silently discard local-only commits,
+                # which contradicts the documented "default branch only"
+                # contract. Skip the reset in that case.
+                if self.force_hard and result.current_branch:
+                    on_default_branch = (
+                        default_branch is not None
+                        and result.current_branch == default_branch
+                    )
+                    if not on_default_branch:
+                        logger.warning(
+                            f"⚠️ {project_name}: Not on the default branch "
+                            f"(on '{result.current_branch}', default "
+                            f"'{default_branch}'); skipping hard reset to avoid "
+                            f"discarding local commits"
+                        )
+                    elif self._reset_to_upstream(repo_path, result):
+                        result.hard_reset = True
+                        logger.debug(
+                            f"🧨 {project_name}: Hard reset '{result.current_branch}' "
+                            f"to upstream"
+                        )
+                    else:
+                        logger.warning(
+                            f"⚠️ {project_name}: Hard reset to upstream failed "
+                            f"(no upstream?), continuing with pull"
+                        )
             else:
                 # Normal mode: Skip problematic repos
                 # Handle detached HEAD state
@@ -273,9 +447,18 @@ class RefreshWorker:
                     return result
                 elif self.auto_stash:
                     # Stash uncommitted changes
-                    if self._stash_changes(repo_path):
+                    stash_outcome = self._stash_changes(repo_path)
+                    if stash_outcome is StashOutcome.CREATED:
                         result.stash_created = True
+                        result.stash_branch = result.current_branch
                         logger.debug(f"💾 {project_name}: Stashed uncommitted changes")
+                    elif stash_outcome is StashOutcome.NOTHING_TO_STASH:
+                        # Nothing git could stash (e.g. a modified submodule
+                        # gitlink); proceed with the refresh as if clean.
+                        logger.debug(
+                            f"💾 {project_name}: Nothing to stash "
+                            f"(e.g. submodule-only change)"
+                        )
                     else:
                         result.status = RefreshStatus.FAILED
                         result.error_message = "Failed to stash uncommitted changes"
@@ -306,9 +489,25 @@ class RefreshWorker:
                     result.status = RefreshStatus.UP_TO_DATE
                     logger.debug(f"✓ {project_name}: Already up-to-date")
 
-                # Pop stash if we created one
+                # Pop stash if we created one, but only back onto the branch it
+                # came from. In force mode the stash may have been taken on a
+                # feature branch before switching to the default branch; popping
+                # it here would apply that work to the wrong branch (and drop
+                # the stash entry). In that case leave the stash intact for
+                # manual recovery.
                 if result.stash_created:
-                    if self._pop_stash(repo_path):
+                    stashed_elsewhere = (
+                        result.stash_branch is not None
+                        and result.current_branch != result.stash_branch
+                    )
+                    if stashed_elsewhere:
+                        logger.warning(
+                            f"⚠️ {project_name}: Stash was created on "
+                            f"'{result.stash_branch}' but the working tree is now "
+                            f"on '{result.current_branch}'; leaving the stash "
+                            f"intact for manual recovery (git stash list)"
+                        )
+                    elif self._pop_stash(repo_path):
                         result.stash_popped = True
                         logger.debug(f"💾 {project_name}: Restored stashed changes")
                     else:
@@ -406,6 +605,10 @@ class RefreshWorker:
         result.attempts += 1
         attempt_start = datetime.now(UTC)
 
+        # Spread out SSH handshakes across concurrent workers to avoid Gerrit
+        # throttling a burst of simultaneous connections.
+        self._ssh_handshake_jitter(repo_path)
+
         try:
             if self.fetch_only:
                 # Fetch only, don't merge
@@ -457,6 +660,8 @@ class RefreshWorker:
                 env=env,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=self.timeout,
                 check=False,
             )
@@ -511,6 +716,8 @@ class RefreshWorker:
                 env=env,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=self.timeout,
                 check=False,
             )
@@ -569,6 +776,8 @@ class RefreshWorker:
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
                 check=False,
             )
@@ -632,6 +841,8 @@ class RefreshWorker:
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
                 check=False,
             )
@@ -651,6 +862,8 @@ class RefreshWorker:
                         cwd=repo_path,
                         capture_output=True,
                         text=True,
+                        encoding="utf-8",
+                        errors="replace",
                         timeout=5,
                         check=False,
                     )
@@ -664,6 +877,8 @@ class RefreshWorker:
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
                 check=False,
             )
@@ -676,16 +891,23 @@ class RefreshWorker:
 
         return state
 
-    def _stash_changes(self, repo_path: Path) -> bool:
+    def _stash_changes(self, repo_path: Path) -> StashOutcome:
         """Stash uncommitted changes.
+
+        ``git stash push`` exits 0 even when it stashes nothing (most commonly
+        when the only change is a modified submodule gitlink, which git stash
+        does not capture). We therefore confirm a new stash entry was actually
+        created so callers can distinguish CREATED from NOTHING_TO_STASH and
+        never attempt to pop a stash that does not exist.
 
         Args:
             repo_path: Repository path
 
         Returns:
-            True if stash succeeded
+            The :class:`StashOutcome` describing what happened.
         """
         try:
+            before = self._stash_count(repo_path)
             result = subprocess.run(
                 [
                     "git",
@@ -698,15 +920,33 @@ class RefreshWorker:
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
                 check=False,
             )
 
-            return result.returncode == 0
+            if result.returncode != 0:
+                return StashOutcome.FAILED
+
+            # Confirm a stash entry actually appeared. git prints "No local
+            # changes to save" and exits 0 when there was nothing to stash.
+            after = self._stash_count(repo_path)
+            if before >= 0 and after >= 0:
+                return (
+                    StashOutcome.CREATED
+                    if after > before
+                    else StashOutcome.NOTHING_TO_STASH
+                )
+
+            # Counts unavailable: fall back to sniffing git's message.
+            if "no local changes to save" in result.stdout.lower():
+                return StashOutcome.NOTHING_TO_STASH
+            return StashOutcome.CREATED
 
         except Exception as e:
             logger.debug(f"Failed to stash changes: {e}")
-            return False
+            return StashOutcome.FAILED
 
     def _is_on_meta_config(self, repo_path: Path) -> bool:
         """Check if repository is currently on Gerrit's meta/config branch.
@@ -724,6 +964,8 @@ class RefreshWorker:
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
                 check=False,
             )
@@ -738,6 +980,8 @@ class RefreshWorker:
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
                 check=False,
             )
@@ -765,12 +1009,17 @@ class RefreshWorker:
             True if repo only has meta/* refs and no regular branches
         """
         try:
-            # List all remote heads (branches)
+            # List all remote heads (branches). ls-remote is an SSH-backed
+            # network operation for Gerrit, so de-sync the handshake to avoid
+            # bursty concurrent connections under high worker counts.
+            self._ssh_handshake_jitter(repo_path)
             result = subprocess.run(
                 ["git", "ls-remote", "--heads", "origin"],
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
                 check=False,
             )
@@ -787,6 +1036,8 @@ class RefreshWorker:
                     cwd=repo_path,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=10,
                     check=False,
                 )
@@ -820,12 +1071,18 @@ class RefreshWorker:
         """
         try:
             # First, try to query the remote directly for HEAD
-            # This works even if we haven't fetched recently
+            # This works even if we haven't fetched recently. ls-remote is an
+            # SSH-backed network operation for Gerrit remotes, so de-sync the
+            # handshake here too to avoid the same throttling _perform_refresh
+            # guards against under high concurrency.
+            self._ssh_handshake_jitter(repo_path)
             ls_remote_result = subprocess.run(
                 ["git", "ls-remote", "--symref", "origin", "HEAD"],
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
                 check=False,
             )
@@ -850,6 +1107,8 @@ class RefreshWorker:
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
                 check=False,
             )
@@ -869,6 +1128,8 @@ class RefreshWorker:
                     cwd=repo_path,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=5,
                     check=False,
                 )
@@ -907,12 +1168,17 @@ class RefreshWorker:
                 )
 
             # Fetch remote to ensure we have latest branch info
-            # This is crucial for repos that might not have been fetched recently
+            # This is crucial for repos that might not have been fetched recently.
+            # git fetch opens an SSH connection for Gerrit, so de-sync the
+            # handshake to avoid contributing to concurrent-connection throttling.
+            self._ssh_handshake_jitter(repo_path)
             fetch_result = subprocess.run(
                 ["git", "fetch", "--quiet", "origin"],
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
                 check=False,
             )
@@ -944,6 +1210,8 @@ class RefreshWorker:
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
                 check=False,
             )
@@ -964,6 +1232,8 @@ class RefreshWorker:
                     cwd=repo_path,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=10,
                     check=False,
                 )
@@ -981,6 +1251,208 @@ class RefreshWorker:
         except Exception as e:
             logger.debug(f"Failed to fix detached HEAD: {e}")
             return False
+
+    def _get_default_branch_local(self, repo_path: Path) -> str | None:
+        """Determine the default branch using only local refs (no network).
+
+        Reads the locally cached ``refs/remotes/origin/HEAD`` symbolic ref, which
+        gerrit-clone sets at clone time. Returns None if it is not available so
+        callers can decide whether a networked lookup is warranted.
+
+        Args:
+            repo_path: Repository path
+
+        Returns:
+            Default branch name, or None if it cannot be determined locally
+        """
+        try:
+            result = subprocess.run(
+                ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=5,
+                check=False,
+            )
+            if result.returncode == 0:
+                ref = result.stdout.strip()
+                # "origin/master" -> "master"
+                branch = ref.split("/", 1)[1] if ref.startswith("origin/") else ref
+                if branch and not branch.startswith("meta/"):
+                    return branch
+            return None
+        except Exception as e:
+            logger.debug(f"Failed to get local default branch: {e}")
+            return None
+
+    def _switch_to_default_branch(self, repo_path: Path, default_branch: str) -> bool:
+        """Check out the default branch and set its upstream tracking.
+
+        Unlike ``_fix_detached_head`` this is intended for repositories that are
+        on a (non-default) local feature branch rather than in a detached HEAD
+        state, and it does not perform meta/config or parent-project detection.
+
+        Args:
+            repo_path: Repository path
+            default_branch: Name of the branch to check out
+
+        Returns:
+            True if the branch was checked out successfully
+        """
+        try:
+            checkout_result = subprocess.run(
+                ["git", "checkout", default_branch],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                check=False,
+            )
+
+            if checkout_result.returncode != 0:
+                logger.debug(
+                    f"Failed to checkout '{default_branch}': {checkout_result.stderr}"
+                )
+                return False
+
+            # Best-effort: ensure upstream tracking is set for the default branch.
+            subprocess.run(
+                [
+                    "git",
+                    "branch",
+                    f"--set-upstream-to=origin/{default_branch}",
+                    default_branch,
+                ],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
+                check=False,
+            )
+            return True
+
+        except Exception as e:
+            logger.debug(f"Failed to switch to default branch: {e}")
+            return False
+
+    def _reset_to_upstream(self, repo_path: Path, result: RefreshResult) -> bool:
+        """Hard-reset the current branch to its upstream tracking ref.
+
+        This discards any local commits and divergence so that local content
+        exactly matches the remote. Used by force-hard mode. The subsequent pull
+        then fast-forwards cleanly (typically a no-op).
+
+        Args:
+            repo_path: Repository path
+            result: Result object with current branch info
+
+        Returns:
+            True if the reset succeeded
+        """
+        if not result.current_branch:
+            return False
+
+        try:
+            # Verify the branch has an upstream to reset to.
+            upstream_check = subprocess.run(
+                [
+                    "git",
+                    "rev-parse",
+                    "--abbrev-ref",
+                    f"{result.current_branch}@{{upstream}}",
+                ],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=5,
+                check=False,
+            )
+            if upstream_check.returncode != 0:
+                logger.debug(
+                    f"No upstream for '{result.current_branch}', cannot hard reset"
+                )
+                return False
+
+            reset_result = subprocess.run(
+                ["git", "reset", "--hard", f"{result.current_branch}@{{upstream}}"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                check=False,
+            )
+
+            if reset_result.returncode == 0:
+                return True
+
+            logger.debug(f"Hard reset failed: {reset_result.stderr}")
+            return False
+
+        except Exception as e:
+            logger.debug(f"Failed to hard reset to upstream: {e}")
+            return False
+
+    @staticmethod
+    def _remote_uses_ssh(remote_url: str | None) -> bool:
+        """Return True if the origin remote performs an SSH handshake.
+
+        Only SSH-backed remotes benefit from handshake jitter. HTTP(S), the
+        anonymous git protocol, ``file://`` URLs and local filesystem paths
+        never open an SSH connection, so jittering them just adds latency. An
+        unknown/empty remote is treated as SSH so the throttling protection is
+        preserved when the URL cannot be read.
+
+        Args:
+            remote_url: The origin remote URL, or None if it is unknown.
+
+        Returns:
+            True if a handshake (and therefore jitter) is warranted.
+        """
+        if not remote_url:
+            return True
+        url = remote_url.strip()
+        lowered = url.lower()
+        if lowered.startswith("ssh://"):
+            return True
+        # Non-SSH transports and local paths never open an SSH handshake.
+        if lowered.startswith(("http://", "https://", "git://", "file://")):
+            return False
+        if url.startswith(("/", "./", "../", "~")):
+            return False
+        # scp-like syntax (``[user@]host:path``) is SSH. git only recognises it
+        # when a colon appears before the first slash; a colon after a slash
+        # (or no colon at all) denotes a local filesystem path.
+        colon = url.find(":")
+        slash = url.find("/")
+        return colon != -1 and (slash == -1 or colon < slash)
+
+    def _ssh_handshake_jitter(self, repo_path: Path) -> None:
+        """Sleep a small random interval before an SSH-backed git operation.
+
+        De-synchronises concurrent worker threads so we avoid opening many
+        simultaneous SSH connections to Gerrit, which is a common cause of
+        transient "Could not read from remote repository" throttling. The
+        sleep is skipped for HTTP(S)/git-protocol remotes, which perform no
+        SSH handshake and so gain nothing from jitter.
+
+        Args:
+            repo_path: Repository whose origin remote is about to be contacted.
+        """
+        if self.ssh_jitter_seconds <= 0:
+            return
+        if not self._remote_uses_ssh(self._get_remote_url(repo_path)):
+            return
+        time.sleep(random.uniform(0, self.ssh_jitter_seconds))
 
     def _fix_upstream_tracking(self, repo_path: Path, result: RefreshResult) -> bool:
         """Fix upstream tracking by setting it to origin/<branch>.
@@ -1002,6 +1474,8 @@ class RefreshWorker:
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
                 check=False,
             )
@@ -1023,6 +1497,8 @@ class RefreshWorker:
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
                 check=False,
             )
@@ -1043,27 +1519,80 @@ class RefreshWorker:
     def _pop_stash(self, repo_path: Path) -> bool:
         """Pop stashed changes.
 
+        ``git stash pop`` can exit non-zero even when the working-tree changes
+        were applied and the stash entry was dropped. The most common cause in
+        practice is a submodule gitlink whose status reporting produces a
+        non-zero exit even though nothing failed (e.g. a repository with a
+        dirty or advanced submodule pointer). A genuine failure (a merge
+        conflict) leaves the stash entry in place, so we treat a dropped stash
+        as success regardless of the exit status.
+
         Args:
             repo_path: Repository path
 
         Returns:
-            True if pop succeeded
+            True if pop succeeded (changes applied and stash dropped)
         """
         try:
+            before = self._stash_count(repo_path)
             result = subprocess.run(
                 ["git", "stash", "pop"],
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
                 check=False,
             )
 
-            return result.returncode == 0
+            if result.returncode == 0:
+                return True
+
+            # Non-zero exit: fall back to checking whether the stash entry was
+            # actually consumed. If it was, the changes were applied and the
+            # non-zero status is spurious (typically submodule status noise).
+            after = self._stash_count(repo_path)
+            if before > 0 and 0 <= after < before:
+                logger.debug(
+                    "Stash applied despite non-zero git exit "
+                    "(likely submodule status noise)"
+                )
+                return True
+
+            return False
 
         except Exception as e:
             logger.debug(f"Failed to pop stash: {e}")
             return False
+
+    def _stash_count(self, repo_path: Path) -> int:
+        """Return the number of entries in the repository's stash list.
+
+        Args:
+            repo_path: Repository path
+
+        Returns:
+            Number of stash entries, or -1 if the count could not be
+            determined.
+        """
+        try:
+            result = subprocess.run(
+                ["git", "stash", "list"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                check=False,
+            )
+            if result.returncode != 0:
+                return -1
+            return sum(1 for line in result.stdout.splitlines() if line.strip())
+        except Exception as e:
+            logger.debug(f"Failed to count stash entries: {e}")
+            return -1
 
     def _build_git_environment(self) -> dict[str, str]:
         """Build environment for Git operations.
@@ -1156,20 +1685,35 @@ class RefreshWorker:
         ):
             return f"Network error during {operation}"
 
-        # Authentication errors
-        if any(
-            phrase in combined
-            for phrase in [
-                "permission denied",
-                "authentication failed",
-                "could not read",
-            ]
-        ):
+        # Authentication errors. Checked BEFORE transient SSH errors because
+        # Gerrit prints a generic "Could not read from remote repository" line
+        # for auth failures too; the "permission denied"/"publickey" markers
+        # disambiguate a real auth failure from transient throttling.
+        if any(phrase in combined for phrase in _AUTH_ERROR_PATTERNS):
             return f"Authentication error during {operation}"
 
-        # Repository errors
-        if "repository not found" in combined or "does not exist" in combined:
+        # Repository not found. Checked BEFORE the transient SSH patterns
+        # because a missing repository also produces the generic "could not
+        # read from remote repository" line; without this ordering a
+        # permanently missing repo would be misreported as a transient network
+        # error and needlessly retried.
+        if any(phrase in combined for phrase in _NOT_FOUND_GIT_ERROR_PATTERNS):
             return f"Repository not found during {operation}"
+
+        # Transient SSH / connection failures (e.g. Gerrit throttling a burst of
+        # concurrent connections). Reported as a network error so the retry
+        # logic treats them as retryable.
+        if any(phrase in combined for phrase in _TRANSIENT_GIT_ERROR_PATTERNS):
+            return f"Network error during {operation}"
+
+        # Diverging branches: local commits prevent a fast-forward-only update.
+        # git's wording ("Diverging branches can't be fast-forwarded") does not
+        # contain "non-fast-forward", so it must be matched explicitly.
+        if any(phrase in combined for phrase in _DIVERGED_BRANCH_PATTERNS):
+            return (
+                f"Diverging branches during {operation}: local commits differ "
+                f"from upstream; use --force-hard to reset to the remote"
+            )
 
         # Merge conflicts
         if "conflict" in combined:
@@ -1203,30 +1747,48 @@ class RefreshWorker:
         stdout = process_result.stdout.lower()
         combined = stderr + stdout
 
-        # Retryable: network errors
+        # Authentication / authorization failures are never retryable. Check
+        # these FIRST: Gerrit prints a generic "could not read from remote
+        # repository" line (which also appears for transient throttling) on real
+        # auth failures, so the "permission denied"/"publickey" markers are what
+        # distinguish them and must take precedence.
+        if any(pattern in combined for pattern in _AUTH_ERROR_PATTERNS):
+            return False
+
+        # Missing repositories are never retryable. Check BEFORE the transient
+        # patterns: Gerrit/GitHub also print "could not read from remote
+        # repository" when a project does not exist, so without this ordering a
+        # permanently missing repo would match a transient pattern and be
+        # retried pointlessly.
+        if any(pattern in combined for pattern in _NOT_FOUND_GIT_ERROR_PATTERNS):
+            return False
+
+        # Retryable: network and transient SSH handshake failures. The transient
+        # SSH patterns (e.g. "could not read from remote repository", "early
+        # EOF", "kex_exchange_identification") cover Gerrit throttling a burst of
+        # concurrent connections, which succeeds on retry.
         retryable_patterns = [
             "could not resolve host",
             "failed to connect",
             "connection timed out",
             "connection refused",
-            "connection reset",
-            "broken pipe",
             "temporary failure",
             "try again",
+            *_TRANSIENT_GIT_ERROR_PATTERNS,
         ]
 
         for pattern in retryable_patterns:
             if pattern in combined:
                 return True
 
-        # Non-retryable: authentication, conflicts, etc.
+        # Non-retryable: conflicts, divergence, etc. (missing repositories are
+        # handled earlier, before the transient-pattern check).
         non_retryable_patterns = [
-            "permission denied",
             "authentication failed",
             "conflict",
             "non-fast-forward",
             "rejected",
-            "repository not found",
+            *_DIVERGED_BRANCH_PATTERNS,
         ]
 
         for pattern in non_retryable_patterns:
