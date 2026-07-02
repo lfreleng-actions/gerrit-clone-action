@@ -45,7 +45,11 @@ logger = get_logger(__name__)
 #: Each pattern is designed to match the token value itself (no
 #: surrounding context required) so it can be used as a literal
 #: replacement target for ``git filter-repo --replace-text``.
-SECRET_PATTERNS: dict[str, re.Pattern[str]] = {
+#:
+#: The registry holds only public, well-known token *format*
+#: expressions (never actual credential values), so both the
+#: pattern names and the regexes themselves are safe to log.
+SCAN_PATTERNS: dict[str, re.Pattern[str]] = {
     # GitLab Personal Access Tokens (glpat-XXXX...)
     "gitlab_pat": re.compile(r"glpat-[A-Za-z0-9_\-]{20,}"),
     # GitHub classic Personal Access Tokens (ghp_XXXX...)
@@ -136,7 +140,7 @@ def scan_repo_for_secrets(
 
     Iterates over all blob content in the repository using
     ``git log --all -p`` and matches each line against the
-    built-in :data:`SECRET_PATTERNS` dictionary.
+    built-in :data:`SCAN_PATTERNS` dictionary.
 
     The git output is streamed line-by-line rather than buffered
     in full, so repositories with very large histories do not
@@ -279,7 +283,7 @@ def scan_repo_for_secrets(
                 if not stripped:
                     continue
 
-                for pattern_name, pattern in SECRET_PATTERNS.items():
+                for pattern_name, pattern in SCAN_PATTERNS.items():
                     for match in pattern.finditer(stripped):
                         matched = match.group(0)
                         if matched not in seen:
