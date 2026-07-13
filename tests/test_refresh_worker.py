@@ -14,6 +14,8 @@ import pytest
 
 from gerrit_clone.models import Config, RefreshResult, RefreshStatus, RetryPolicy
 from gerrit_clone.refresh_worker import (
+    RefreshAuthError,
+    RefreshError,
     RefreshTimeoutError,
     RefreshWorker,
     StashOutcome,
@@ -398,14 +400,19 @@ class TestRefreshWorker:
         assert worker._is_retryable_error("Permission denied") is False
 
     def test_calculate_adaptive_delay(self, worker):
-        """Test adaptive delay calculation."""
-        delay1 = worker._calculate_adaptive_delay(1)
-        delay2 = worker._calculate_adaptive_delay(2)
-        delay3 = worker._calculate_adaptive_delay(3)
-
-        # Delays should increase exponentially
-        assert delay2 > delay1
-        assert delay3 > delay2
+        """Full-jitter delay stays within [0.1, exponential bound]."""
+        # Full jitter picks a random point in [0, exponential-bound] with a
+        # 0.1s floor, so assert bounds across many samples rather than strict
+        # monotonicity (which no longer holds by design).
+        base = worker.retry_policy.base_delay
+        factor = worker.retry_policy.factor
+        max_delay = worker.retry_policy.max_delay
+        for attempt in (1, 2, 3):
+            bound = min(base * (factor ** (attempt - 1)), max_delay)
+            upper = max(0.1, bound)
+            for _ in range(50):
+                delay = worker._calculate_adaptive_delay(attempt)
+                assert 0.1 <= delay <= upper
 
     def test_count_pulled_commits_fast_forward(self, worker):
         """Test counting commits from fast-forward output."""
@@ -1280,6 +1287,116 @@ class TestTransientAndDivergedClassification:
         )
 
         assert worker._is_retryable_git_error(process_result) is False
+
+
+class TestAuthRetryBudget:
+    """Bounded retry handling for auth-classified (throttle) failures."""
+
+    def _make_result(self) -> RefreshResult:
+        """Build a minimal pending RefreshResult for retry-loop tests."""
+        return RefreshResult(
+            path=Path("/tmp/repo"),
+            project_name="test-repo",
+            status=RefreshStatus.PENDING,
+            started_at=datetime.now(UTC),
+        )
+
+    def test_is_auth_git_error_detects_permission_denied(self, worker):
+        """A permission-denied failure is classified as an auth error."""
+        process_result = Mock()
+        process_result.stdout = ""
+        process_result.stderr = (
+            "Permission denied (publickey).\n"
+            "fatal: Could not read from remote repository."
+        )
+        assert worker._is_auth_git_error(process_result) is True
+
+    def test_is_auth_git_error_not_found_is_not_auth(self, worker):
+        """A missing repository is not treated as an auth error."""
+        process_result = Mock()
+        process_result.stdout = ""
+        process_result.stderr = (
+            "ERROR: Repository not found.\n"
+            "fatal: Could not read from remote repository."
+        )
+        assert worker._is_auth_git_error(process_result) is False
+
+    def test_is_auth_git_error_transient_is_not_auth(self, worker):
+        """A bare SSH throttle (no auth marker) is not an auth error."""
+        process_result = Mock()
+        process_result.stdout = ""
+        process_result.stderr = (
+            "kex_exchange_identification: Connection closed by remote host"
+        )
+        assert worker._is_auth_git_error(process_result) is False
+
+    def test_raise_for_auth_error_raises_refresh_auth_error(self, worker):
+        """Auth failures raise RefreshAuthError for the bounded budget."""
+        process_result = Mock()
+        process_result.stdout = ""
+        process_result.stderr = "Permission denied (publickey)."
+        with pytest.raises(RefreshAuthError):
+            worker._raise_for_retryable_git_error(process_result, "Auth error")
+
+    def test_raise_for_transient_error_raises_refresh_error(self, worker):
+        """Transient failures raise RefreshError (not the auth subclass)."""
+        process_result = Mock()
+        process_result.stdout = ""
+        process_result.stderr = "Connection timed out"
+        with pytest.raises(RefreshError) as exc:
+            worker._raise_for_retryable_git_error(process_result, "Net error")
+        assert not isinstance(exc.value, RefreshAuthError)
+
+    def test_raise_for_non_retryable_returns_none(self, worker):
+        """Non-retryable failures (e.g. divergence) do not raise."""
+        process_result = Mock()
+        process_result.stdout = ""
+        process_result.stderr = "hint: Diverging branches can't be fast-forwarded"
+        assert worker._raise_for_retryable_git_error(process_result, "Diverged") is None
+
+    def test_auth_error_retried_up_to_bounded_budget(self):
+        """Auth errors retry at most _MAX_AUTH_RETRY_ATTEMPTS times."""
+        # Network budget of 5, but auth failures are capped at 2 attempts.
+        worker = RefreshWorker(
+            retry_policy=RetryPolicy(max_attempts=5, base_delay=0.01),
+            ssh_jitter_seconds=0,
+        )
+        result = self._make_result()
+        with (
+            patch.object(
+                worker,
+                "_perform_refresh",
+                side_effect=RefreshAuthError("Authentication error during pull"),
+            ) as mock_refresh,
+            patch("gerrit_clone.refresh_worker.time.sleep") as mock_sleep,
+        ):
+            ok = worker._execute_adaptive_refresh(Path("/tmp/repo"), result)
+
+        assert ok is False
+        assert mock_refresh.call_count == 2  # capped, not 5
+        assert mock_sleep.call_count == 1  # one backoff between the two tries
+        assert result.retry_count == 2
+
+    def test_transient_error_uses_full_network_budget(self):
+        """Transient (non-auth) errors use the full max_attempts budget."""
+        worker = RefreshWorker(
+            retry_policy=RetryPolicy(max_attempts=3, base_delay=0.01),
+            ssh_jitter_seconds=0,
+        )
+        result = self._make_result()
+        with (
+            patch.object(
+                worker,
+                "_perform_refresh",
+                side_effect=RefreshError("Network error during pull"),
+            ) as mock_refresh,
+            patch("gerrit_clone.refresh_worker.time.sleep") as mock_sleep,
+        ):
+            ok = worker._execute_adaptive_refresh(Path("/tmp/repo"), result)
+
+        assert ok is False
+        assert mock_refresh.call_count == 3
+        assert mock_sleep.call_count == 2
 
 
 class TestPopStashSubmoduleNoise:

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -274,6 +275,17 @@ class TestConfig:
         # GitHub concurrency stays well above the halved Gerrit value.
         assert github_threads > gerrit_threads
         assert github_threads >= gerrit_threads * 2
+
+    def test_effective_threads_gerrit_capped(self):
+        """The auto Gerrit default is capped by the per-user SSH ceiling."""
+        # Force a high core count on a non-Darwin path so the halved default
+        # would exceed the ceiling without the cap.
+        with (
+            patch("gerrit_clone.models.platform.system", return_value="Linux"),
+            patch("gerrit_clone.models.os.cpu_count", return_value=64),
+        ):
+            gerrit = Config(host="gerrit.example.org", source_type=SourceType.GERRIT)
+            assert gerrit.effective_threads == 8
 
     def test_projects_url(self):
         """Test projects_url property."""

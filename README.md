@@ -16,16 +16,18 @@ reliability, speed, and CI/CD compatibility.
 - **Bulk Repository Discovery**: Fetches all projects via Gerrit REST API with
   intelligent filtering
 - **Multi-threaded Cloning**: Concurrent operations with auto-scaling thread
-  pools (up to 32 workers for Gerrit, 64 for GitHub with 2x multiplier for
-  network-limited operations)
+  pools (Gerrit uses a conservative auto-default of at most 8 concurrent SSH
+  sessions to avoid server-side throttling; GitHub uses up to 64 with a 2x
+  multiplier; override either with `--threads`)
 - **Hierarchy Preservation**: Maintains complete Gerrit project folder
   structure without flattening
 - **Complete Metadata Cloning**: Uses `git clone --mirror` by default to
   capture all refs, tags, and branches for complete repository backups
 - **GitHub Mirroring**: Mirror Gerrit repositories to GitHub organizations
   with automatic name transformation
-- **Robust Retry Logic**: Exponential backoff with jitter for transient
-  network and server failures
+- **Robust Retry Logic**: Exponential backoff with full jitter for transient
+  network and server failures, including a small bounded retry for Gerrit SSH
+  throttling that can surface as a transient "Permission denied" rejection
 - **SSH Integration**: Full SSH agent, identity file, and config support
 - **CI/CD Ready**: Non-interactive operation with structured JSON manifests
 - **Smart Filtering**: Automatically excludes system repos and archived
