@@ -587,7 +587,11 @@ class RefreshWorker:
                 auth_attempt += 1
                 result.retry_count += 1
                 if auth_attempt < max_auth_attempts:
-                    delay = self._calculate_adaptive_delay(auth_attempt)
+                    # Base the backoff on the overall attempt counter, not the
+                    # smaller auth counter, so an auth failure following earlier
+                    # network retries does not reset exponential backoff and
+                    # re-collide with a throttled Gerrit.
+                    delay = self._calculate_adaptive_delay(attempt)
                     logger.warning(
                         f"⚠️ {result.project_name}: {e} (auth attempt {auth_attempt}/{max_auth_attempts}), retrying in {delay:.1f}s"
                     )
@@ -664,10 +668,12 @@ class RefreshWorker:
 
             return success
 
-        except (RefreshError, RefreshTimeoutError, RefreshAuthError):
+        except RefreshError:
             # Already-classified refresh errors (auth, timeout, transient)
             # propagate unchanged so the retry loop applies the correct retry
             # budget instead of re-wrapping them as a generic error.
+            # RefreshTimeoutError and RefreshAuthError both subclass
+            # RefreshError, so catching the base class covers all three.
             raise
 
         except subprocess.TimeoutExpired as err:
@@ -721,9 +727,14 @@ class RefreshWorker:
                 return True
             else:
                 error_msg = self._analyze_git_error(process_result, "fetch")
-                result.error_message = error_msg
 
+                # Raise first for retryable errors: the same RefreshResult
+                # is reused across retry attempts, so recording the message
+                # now would leave it stale on a later successful attempt.
+                # Only record it for non-retryable (hard) failures, which
+                # is when this call returns normally.
                 self._raise_for_retryable_git_error(process_result, error_msg)
+                result.error_message = error_msg
                 return False
 
         except subprocess.TimeoutExpired as err:
@@ -776,18 +787,25 @@ class RefreshWorker:
                 return True
             else:
                 error_msg = self._analyze_git_error(process_result, "pull")
-                result.error_message = error_msg
 
-                # Check for conflicts
+                # Check for conflicts (a hard failure: always record the
+                # message).
                 if (
                     "CONFLICT" in process_result.stdout
                     or "CONFLICT" in process_result.stderr
                 ):
+                    result.error_message = error_msg
                     result.status = RefreshStatus.CONFLICTS
                     logger.error(f"⚠️ {result.project_name}: Merge conflicts detected")
                     return False
 
+                # Raise first for retryable errors: the same RefreshResult
+                # is reused across retry attempts, so recording the message
+                # now would leave it stale on a later successful attempt.
+                # Only record it for non-retryable (hard) failures, which
+                # is when this call returns normally.
                 self._raise_for_retryable_git_error(process_result, error_msg)
+                result.error_message = error_msg
                 return False
 
         except subprocess.TimeoutExpired as err:

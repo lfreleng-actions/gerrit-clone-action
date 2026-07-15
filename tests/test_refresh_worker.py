@@ -617,6 +617,82 @@ class TestRefreshWorker:
 
         assert success is False
         assert result.status == RefreshStatus.CONFLICTS
+        # Conflicts are a hard failure: the message must be recorded.
+        assert result.error_message is not None
+
+    @patch("gerrit_clone.refresh_worker.subprocess.run")
+    def test_execute_git_fetch_retryable_error_no_stale_message(
+        self, mock_run, worker, temp_git_repo
+    ):
+        """Retryable fetch failures raise without recording error_message.
+
+        The same RefreshResult is reused across retry attempts, so a
+        message recorded on a transient failure would linger on a later
+        successful attempt. It must only be set for hard failures.
+        """
+        mock_result = Mock()
+        mock_result.returncode = 1
+        mock_result.stdout = ""
+        mock_result.stderr = "fatal: Could not read from remote repository."
+        mock_run.return_value = mock_result
+
+        result = RefreshResult(
+            path=temp_git_repo,
+            project_name="test-repo",
+            status=RefreshStatus.PENDING,
+            started_at=datetime.now(UTC),
+        )
+
+        with pytest.raises(RefreshError):
+            worker._execute_git_fetch(temp_git_repo, result)
+
+        assert result.error_message is None
+
+    @patch("gerrit_clone.refresh_worker.subprocess.run")
+    def test_execute_git_fetch_hard_error_records_message(
+        self, mock_run, worker, temp_git_repo
+    ):
+        """Non-retryable fetch failures record error_message and return False."""
+        mock_result = Mock()
+        mock_result.returncode = 1
+        mock_result.stdout = ""
+        mock_result.stderr = "fatal: unexpected corruption in object store"
+        mock_run.return_value = mock_result
+
+        result = RefreshResult(
+            path=temp_git_repo,
+            project_name="test-repo",
+            status=RefreshStatus.PENDING,
+            started_at=datetime.now(UTC),
+        )
+
+        success = worker._execute_git_fetch(temp_git_repo, result)
+
+        assert success is False
+        assert result.error_message is not None
+
+    @patch("gerrit_clone.refresh_worker.subprocess.run")
+    def test_execute_git_pull_retryable_error_no_stale_message(
+        self, mock_run, worker, temp_git_repo
+    ):
+        """Retryable pull failures raise without recording error_message."""
+        mock_result = Mock()
+        mock_result.returncode = 1
+        mock_result.stdout = ""
+        mock_result.stderr = "fetch-pack: Connection reset by peer"
+        mock_run.return_value = mock_result
+
+        result = RefreshResult(
+            path=temp_git_repo,
+            project_name="test-repo",
+            status=RefreshStatus.PENDING,
+            started_at=datetime.now(UTC),
+        )
+
+        with pytest.raises(RefreshError):
+            worker._execute_git_pull(temp_git_repo, result)
+
+        assert result.error_message is None
 
 
 class TestRefreshWorkerIntegration:
