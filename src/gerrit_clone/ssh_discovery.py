@@ -62,14 +62,12 @@ class GerritSSHClient:
         discovering_projects(self.config.host, method="ssh")
 
         try:
-            # Execute with retry for transient failures
             response_data = execute_with_retry(
                 self._fetch_projects_ssh,
                 self.config.retry_policy,
                 f"fetch projects via SSH from {self.config.host}",
             )
 
-            # Parse projects from response
             projects = self._parse_projects_response(response_data)
 
             logger.debug("Found %d projects via SSH", len(projects))
@@ -91,13 +89,11 @@ class GerritSSHClient:
             SSHCommandError: For command execution failures
             SSHParseError: For parsing errors
         """
-        # Build SSH command
         cmd = self._build_ssh_command()
 
         logger.debug(f"Executing SSH command: {' '.join(cmd)}")
 
         try:
-            # Execute SSH command
             result = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -106,7 +102,6 @@ class GerritSSHClient:
                 check=False,  # Don't raise on non-zero exit
             )
 
-            # Check for errors
             if result.returncode != 0:
                 stderr = result.stderr.strip()
 
@@ -125,7 +120,6 @@ class GerritSSHClient:
                         f"SSH connection failed (exit {result.returncode}): {stderr}"
                     )
 
-                # Check for authentication errors
                 if any(
                     msg in stderr.lower()
                     for msg in [
@@ -145,7 +139,6 @@ class GerritSSHClient:
                     f"SSH command failed (exit {result.returncode}): {stderr}"
                 )
 
-            # Parse JSON output
             if not result.stdout.strip():
                 raise SSHParseError("Empty output from gerrit ls-projects")
 
@@ -244,7 +237,6 @@ class GerritSSHClient:
             if isinstance(project_info, dict):
                 state_str = project_info.get("state", "ACTIVE")
 
-            # Parse state enum
             try:
                 state = ProjectState(state_str)
             except ValueError:
@@ -254,19 +246,16 @@ class GerritSSHClient:
                 )
                 state = ProjectState.ACTIVE
 
-            # Extract description
             description = None
             if isinstance(project_info, dict):
                 description = project_info.get("description")
 
-            # Extract web links
             web_links = None
             if isinstance(project_info, dict) and "web_links" in project_info:
                 web_links = project_info["web_links"]
                 if not isinstance(web_links, list):
                     web_links = None
 
-            # Create project object
             return Project(
                 name=project_name,
                 state=state,
@@ -302,7 +291,6 @@ class GerritSSHClient:
                     logger.debug(f"Skipping system project: {project_name}")
                     continue
 
-                # Parse individual project
                 project = self._parse_project_data(project_name, project_info)
                 projects.append(project)
 

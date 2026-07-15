@@ -123,7 +123,6 @@ class GerritAPIDiscovery:
                 if location:
                     logger.debug(f"Found redirect to: {location}")
 
-                    # Parse the redirect URL to extract the path
                     parsed = urlparse(location)
                     if parsed.netloc == host or not parsed.netloc:
                         # Same host redirect or relative redirect

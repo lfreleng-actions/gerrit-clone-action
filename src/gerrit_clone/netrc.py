@@ -61,10 +61,8 @@ def _normalize_host_for_netrc_lookup(host: str) -> str:
     # Remove scheme (http://, https://, etc.)
     if "://" in normalized:
         normalized = normalized.split("://", 1)[1]
-    # Remove path components
     if "/" in normalized:
         normalized = normalized.split("/", 1)[0]
-    # Remove port number
     if ":" in normalized:
         normalized = normalized.rsplit(":", 1)[0]
     return normalized
@@ -183,9 +181,7 @@ class NetrcParser:
         Returns:
             Unescaped string content without quotes.
         """
-        # Remove surrounding quotes
         inner = s[1:-1]
-        # Process escape sequences
         result: list[str] = []
         i = 0
         while i < len(inner):
@@ -230,7 +226,6 @@ class NetrcParser:
             List of tokens, including "\n" tokens for line boundaries.
         """
         tokens: list[str] = []
-        # Process line by line to preserve newline information
         lines: list[str] = []
         for raw_line in content.splitlines():
             # Strip leading whitespace to check for comment
@@ -239,7 +234,6 @@ class NetrcParser:
                 # Preserve blank line marker for macdef parsing
                 lines.append("")
                 continue
-            # Handle inline comments
             processed_line = self._strip_inline_comment(raw_line)
             lines.append(processed_line)
 
@@ -254,7 +248,6 @@ class NetrcParser:
             placeholder_idx += 1
             return placeholder
 
-        # Process each line, preserving newline tokens
         for line in lines:
             # Replace quoted strings with placeholders
             processed_line = self._QUOTED_STRING_PATTERN.sub(

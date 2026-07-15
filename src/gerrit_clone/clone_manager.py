@@ -71,7 +71,6 @@ class CloneManager:
         self.config = config
         self.progress_tracker = progress_tracker
         self._shutdown_event = threading.Event()
-        # Initialize nested stats tracking
         self._nested_candidates: set[str] = set()
         self._nested_detected: set[str] = set()
         self._nested_parent_usage: set[str] = set()
@@ -120,7 +119,6 @@ class CloneManager:
                 f"({', '.join(filter_desc_parts)})"
             )
 
-        # Update project name index early
         self._project_name_index = {p.name for p in unique_projects}
         # Pre-compute depth for candidate nested tracking
         for p in unique_projects:
@@ -147,7 +145,6 @@ class CloneManager:
             f"{parent_count} parents with {total_direct_children} direct child mappings"
         )
         if parent_children:
-            # Log a small deterministic sample for debugging
             sample_items = sorted(parent_children.items())[:5]
             logger.debug(f"Parent sample (up to 5): {sample_items}")
 
@@ -213,16 +210,13 @@ class CloneManager:
         project_map = {p.name: p for p in projects}
         project_names = set(project_map.keys())
 
-        # Build dependency graph
         dependencies: dict[str, str] = {}  # child -> parent (only immediate parent)
         dependents: dict[str, set[str]] = {}  # parent -> set of children
         in_degree: dict[str, int] = {}  # project -> number of dependencies
 
-        # Initialize in_degree for all projects
         for name in project_names:
             in_degree[name] = 0
 
-        # Build dependency relationships
         for project_name in project_names:
             path_parts = project_name.split("/")
             # Find immediate parent dependency
@@ -251,7 +245,6 @@ class CloneManager:
             current = queue.pop(0)
             result.append(project_map[current])
 
-            # Process all dependents of current project
             for dependent in dependents.get(current, set()):
                 in_degree[dependent] -= 1
                 if in_degree[dependent] == 0:
@@ -302,7 +295,6 @@ class CloneManager:
         if not projects:
             return []
 
-        # Build depth map
         depth_map: dict[int, list[Project]] = {}
         for p in projects:
             depth = p.name.count("/")
@@ -313,7 +305,6 @@ class CloneManager:
             group = sorted(depth_map[depth], key=lambda pr: pr.name)
             batches.append(group)
 
-        # Log summary
         logger.debug(
             f"Created {len(batches)} depth-based batches (min depth={min(depth_map.keys(), default=0)}, max depth={max(depth_map.keys(), default=0)})"
         )
@@ -384,7 +375,6 @@ class CloneManager:
         logger.debug("Starting dependency-aware clone execution")
         logger.debug(f"Total projects for batching: {len(projects)}")
 
-        # Create dependency-safe batches
         batches = self._create_dependency_batches(projects)
         all_results = []
 
@@ -436,7 +426,6 @@ class CloneManager:
                 if getattr(r, "nested_under", None):
                     self._nested_detected.add(r.project.name)
 
-            # Check for exit-on-error between batches
             if self.config.exit_on_error:
                 failed_results = [r for r in batch_results if r.failed]
                 if failed_results:
@@ -544,14 +533,11 @@ class CloneManager:
                         result = future.result()
                         results.append(result)
 
-                        # Update progress tracker
                         if self.progress_tracker:
                             self.progress_tracker.update_project_result(result)
 
-                        # Log individual result
                         self._log_project_result(result)
 
-                        # Check for exit-on-error
                         if self.config.exit_on_error and result.failed:
                             logger.error(
                                 f"🛑 Exiting on error: {project.name} failed with: {result.error_message}"
@@ -564,7 +550,6 @@ class CloneManager:
 
                     except Exception as e:
                         logger.error(f"Unexpected error cloning {project.name}: {e}")
-                        # Create failed result for exception
                         now = datetime.now(UTC)
                         error_result = CloneResult(
                             project=project,
@@ -581,7 +566,6 @@ class CloneManager:
                         if self.progress_tracker:
                             self.progress_tracker.update_project_result(error_result)
 
-                        # Check for exit-on-error on exceptions too
                         if self.config.exit_on_error:
                             logger.error(
                                 f"🛑 Exiting on error: {project.name} failed with exception: {e}"
@@ -602,7 +586,6 @@ class CloneManager:
                             f"Cancelled clone for {project.name}"
                         )
 
-                # Create failed results for any incomplete projects
                 for future, project in future_to_project.items():
                     if not future.done():
                         now = datetime.now(UTC)
@@ -637,7 +620,6 @@ class CloneManager:
         logger.debug(f"Starting clone task for project: {project.name}")
         logger.debug(f"Calling worker.clone_project for: {project.name}")
 
-        # Update status message to show current project being cloned
         if self.progress_tracker:
             self.progress_tracker.update_log_message(f"Cloning {project.name}...")
 
@@ -698,7 +680,6 @@ def _check_existing_manifest(config: Config, console: Any | None = None) -> dict
         with manifest_path.open() as f:
             manifest: dict[str, Any] = json.load(f)
 
-        # Check for configuration mismatches
         warnings = []
 
         if "clone_config" in manifest:
@@ -766,14 +747,12 @@ def clone_repositories(config: Config) -> BatchResult:
     # Pass None for console - will be created internally if needed before progress tracker
     _check_existing_manifest(config, console=None)
 
-    # Initialize progress tracker early for Rich status messages
     progress_tracker = create_progress_tracker(config)
 
     # Use status manager context for Rich status integration
 
     with create_status_manager(progress_tracker):
         try:
-            # Fetch projects from configured source
             if config.source_type == SourceType.GITHUB:
                 logger.debug("Connecting to GitHub: %s", config.host)
                 console = Console(stderr=True)
@@ -894,14 +873,12 @@ def clone_repositories(config: Config) -> BatchResult:
                                 )
                                 continue
 
-                            # Get local HEAD SHA
                             try:
                                 local_sha = get_current_commit_sha(target_path)
                                 # Metadata is guaranteed to exist by the check above (continue on line 873)
                                 metadata = getattr(project, "metadata", {}) or {}
                                 remote_sha = metadata.get('latest_commit_sha')
 
-                                # Handle different SHA comparison scenarios
                                 if not remote_sha and not local_sha:
                                     # Both None: Empty repository with no commits
                                     # No refresh needed since there's nothing to pull
@@ -1007,7 +984,6 @@ def clone_repositories(config: Config) -> BatchResult:
                                 target_path = config.path / project.filesystem_path
                                 refresh_start = datetime.now(UTC)
 
-                                # Update progress description
                                 progress.update(task, description=f"Refreshing {project.name}")
 
                                 try:
@@ -1104,7 +1080,6 @@ def clone_repositories(config: Config) -> BatchResult:
                 )
                 retry_projects = [r.project for r in failed_results]
 
-                # Update the progress tracker for retry operations
                 if progress_tracker:
                     progress_tracker.update_for_retry(retry_projects)
                     progress_tracker.update_log_message(
@@ -1118,7 +1093,6 @@ def clone_repositories(config: Config) -> BatchResult:
                 manager.config = retry_config
                 retry_results = manager._execute_dependency_aware_clone(retry_projects)
 
-                # Update results - replace failed with retry results
                 failed_names = {r.project.name for r in failed_results}
                 final_results = [
                     r for r in results if r.project.name not in failed_names
@@ -1150,7 +1124,6 @@ def clone_repositories(config: Config) -> BatchResult:
 
                 results = final_results
 
-            # Create batch result
             batch_result = BatchResult(
                 config=config,
                 results=results,
@@ -1158,10 +1131,8 @@ def clone_repositories(config: Config) -> BatchResult:
                 completed_at=datetime.now(UTC),
             )
 
-            # Write manifest file
             _write_manifest(batch_result, config)
 
-            # Log final summary
             _log_final_summary(batch_result, config)
 
             return batch_result
@@ -1232,7 +1203,6 @@ def _log_final_summary(batch_result: BatchResult, config: Config) -> None:
         logger.debug("Success rate: %.1f%%", success_rate_val)
         show_success_rate(success_rate_val, batch_result.failed_count)
 
-    # Log failed projects
     if batch_result.failed_count > 0 and not config.quiet:
         failed_results = [r for r in batch_result.results if r.failed]
         logger.debug(

@@ -200,7 +200,6 @@ def suppress_console_logging(verbose: bool = False) -> Generator[None, None, Non
     # Find all RichHandler instances
     rich_handlers = [h for h in root.handlers if isinstance(h, RichHandler)]
 
-    # Create a single filter instance to share across handlers
     suppress_filter = _SuppressConsoleFilter()
 
     # Add filter to all RichHandler instances
@@ -210,6 +209,5 @@ def suppress_console_logging(verbose: bool = False) -> Generator[None, None, Non
     try:
         yield
     finally:
-        # Remove filter from all handlers
         for handler in rich_handlers:
             handler.removeFilter(suppress_filter)

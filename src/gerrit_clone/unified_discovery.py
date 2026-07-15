@@ -101,7 +101,6 @@ class UnifiedDiscovery:
         Raises:
             Exception: If discovery fails
         """
-        # Handle GitHub discovery separately
         if self.config.source_type == SourceType.GITHUB:
             return self._discover_github()
 
@@ -308,7 +307,6 @@ class UnifiedDiscovery:
         Returns:
             Tuple of (merged projects union, combined stats with warnings)
         """
-        # Create project name sets for comparison
         http_names = {p.name for p in http_projects}
         ssh_names = {p.name for p in ssh_projects}
 
@@ -318,7 +316,6 @@ class UnifiedDiscovery:
         # Create union of projects, preferring SSH metadata for duplicates
         merged_projects = self._create_project_union(http_projects, ssh_projects)
 
-        # Create combined stats based on the merged result
         stats: dict[str, Any] = {
             "total": len(merged_projects),
             "filtered": max(ssh_stats["filtered"], http_stats["filtered"]),
@@ -357,7 +354,6 @@ class UnifiedDiscovery:
                 f"HTTP and SSH discovery returned identical results ({len(merged_projects)} projects)"
             )
 
-        # Return merged union of all projects
         return merged_projects, stats
 
     def _create_project_union(
@@ -386,7 +382,6 @@ class UnifiedDiscovery:
         for project in ssh_projects:
             project_map[project.name] = project
 
-        # Return sorted list for consistent ordering
         return sorted(project_map.values(), key=lambda p: p.name)
 
 

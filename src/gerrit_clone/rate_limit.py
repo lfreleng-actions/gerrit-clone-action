@@ -37,9 +37,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-# ---------------------------------------------------------------------------
 # RateLimitBudget - primary rate-limit tracking
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -356,9 +354,7 @@ class RateLimitBudget:
         return wait
 
 
-# ---------------------------------------------------------------------------
 # TokenBucketLimiter - async token-bucket for secondary rate limits
-# ---------------------------------------------------------------------------
 
 
 class TokenBucketLimiter:
@@ -679,9 +675,7 @@ class TokenBucketLimiter:
                 )
 
 
-# ---------------------------------------------------------------------------
 # AsyncProgressCounter - batch operation progress reporting
-# ---------------------------------------------------------------------------
 
 
 class AsyncProgressCounter:
@@ -749,9 +743,7 @@ class AsyncProgressCounter:
             )
 
 
-# ---------------------------------------------------------------------------
 # Helper: parse Retry-After from a response
-# ---------------------------------------------------------------------------
 
 
 def parse_retry_after(response: Any) -> float | None:

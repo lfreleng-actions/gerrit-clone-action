@@ -37,10 +37,6 @@ from gerrit_clone.models import match_project_pattern
 logger = get_logger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Well-known credential patterns for automatic secret detection
-# ---------------------------------------------------------------------------
-
 #: Compiled regex patterns for well-known credential formats.
 #: Each pattern is designed to match the token value itself (no
 #: surrounding context required) so it can be used as a literal
@@ -342,11 +338,6 @@ def scan_repo_for_secrets(
     return discovered
 
 
-# ---------------------------------------------------------------------------
-# Pattern matching helpers
-# ---------------------------------------------------------------------------
-
-
 def _glob_to_regex(pat: str) -> str:
     """Translate a path-segment-aware glob into a regex fragment.
 
@@ -503,11 +494,6 @@ def normalize_file_patterns(raw: list[str]) -> list[str]:
                 normalized.append(clean)
                 seen.add(clean)
     return normalized
-
-
-# ---------------------------------------------------------------------------
-# Feature 1: File removal from bare repositories
-# ---------------------------------------------------------------------------
 
 
 def _check_git_filter_repo() -> bool:
@@ -754,7 +740,6 @@ def _remove_files_worktree(
     """
     all_removed: list[str] = []
 
-    # Get list of branches
     try:
         result = subprocess.run(
             [
@@ -818,7 +803,6 @@ def _remove_files_worktree(
             files_to_remove[:5],
         )
 
-        # Create temporary worktree
         worktree_dir = tempfile.mkdtemp(prefix=f"gerrit-clone-filter-{repo_path.name}-")
         try:
             subprocess.run(
@@ -846,7 +830,6 @@ def _remove_files_worktree(
                 check=True,
             )
 
-            # Remove matching files
             for file_path in files_to_remove:
                 full_path = Path(worktree_dir) / file_path
                 if full_path.exists():
@@ -921,7 +904,6 @@ def _remove_files_worktree(
                 f"{repo_path.name}: {exc.stderr}"
             ) from exc
         finally:
-            # Clean up worktree
             subprocess.run(
                 [
                     "git",
@@ -949,11 +931,6 @@ def _remove_files_worktree(
             len(branches),
         )
     return unique_removed
-
-
-# ---------------------------------------------------------------------------
-# Feature 2: Token/credential replacement in git history
-# ---------------------------------------------------------------------------
 
 
 def _generate_replacement_string(original: str) -> str:
@@ -1130,11 +1107,6 @@ def replace_tokens_in_history(
             Path(replacements_file).unlink()
 
 
-# ---------------------------------------------------------------------------
-# High-level filtering orchestration
-# ---------------------------------------------------------------------------
-
-
 def apply_content_filters(
     repo_path: Path,
     project_name: str,
@@ -1171,7 +1143,6 @@ def apply_content_filters(
     """
     errors: list[str] = []
 
-    # Step 1: Remove files matching patterns
     if remove_patterns:
         try:
             removed = remove_files_from_bare_repo(
@@ -1188,7 +1159,6 @@ def apply_content_filters(
             logger.error(msg)
             errors.append(msg)
 
-    # Step 2: Replace tokens if this project matches
     # Aggregate tokens from all matching patterns so filter-repo runs once.
     if git_filter_projects:
         aggregated_tokens: list[str] = []
@@ -1229,7 +1199,6 @@ def apply_content_filters(
                 logger.error(msg)
                 errors.append(msg)
 
-    # Step 3: Auto-detect and redact secrets if requested
     if redact_secrets:
         try:
             discovered = scan_repo_for_secrets(

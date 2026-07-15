@@ -351,7 +351,6 @@ class Config:
         if self.clone_timeout <= 0:
             raise ValueError("clone_timeout must be positive")
 
-        # Validate mirror option compatibility
         if self.mirror:
             # --mirror is incompatible with --depth and --branch
             # When mirror is enabled, we override these options

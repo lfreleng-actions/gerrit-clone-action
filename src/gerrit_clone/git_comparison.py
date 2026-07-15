@@ -146,7 +146,6 @@ def _run_git_command_with_retry(
                 delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
                 time.sleep(delay)
             else:
-                # Create a failed result for the last timeout
                 last_result = subprocess.CompletedProcess[str](
                     args=cmd,
                     returncode=1,
@@ -178,7 +177,6 @@ def _get_local_repo_status(repo_path: Path) -> LocalRepoStatus:
     Returns:
         LocalRepoStatus with repository information
     """
-    # Get current branch
     branch_result = _run_git_command_with_retry(
         ["git", "rev-parse", "--abbrev-ref", "HEAD"],
         cwd=repo_path,
@@ -187,14 +185,12 @@ def _get_local_repo_status(repo_path: Path) -> LocalRepoStatus:
         branch_result.stdout.strip() if branch_result.returncode == 0 else None
     )
 
-    # Get latest commit SHA
     sha_result = _run_git_command_with_retry(
         ["git", "rev-parse", "HEAD"],
         cwd=repo_path,
     )
     last_sha = sha_result.stdout.strip() if sha_result.returncode == 0 else None
 
-    # Get commit count
     count_result = _run_git_command_with_retry(
         ["git", "rev-list", "--count", "HEAD"],
         cwd=repo_path,

@@ -282,7 +282,6 @@ class RefreshManager:
             logger.debug("🔍 DRY RUN MODE - no changes will be made")
             results = self._dry_run_refresh(repo_paths)
         else:
-            # Execute parallel refresh
             results = self._execute_parallel_refresh(repo_paths)
 
         completed_at = datetime.now(UTC)
@@ -308,7 +307,6 @@ class RefreshManager:
         results: list[RefreshResult] = []
         total = len(repo_paths)
 
-        # Create worker
         worker = RefreshWorker(
             config=self.config,
             retry_policy=self.retry_policy,
@@ -360,7 +358,6 @@ class RefreshManager:
                 for repo in repo_paths
             }
 
-            # Process results as they complete
             for future in as_completed(future_to_repo):
                 repo = future_to_repo[future]
 
@@ -368,10 +365,8 @@ class RefreshManager:
                     result = future.result()
                     results.append(result)
 
-                    # Update progress with status
                     self._update_progress(progress_bar, task, result, current_repo)
 
-                    # Check for exit-on-error
                     if self.exit_on_error and result.failed:
                         logger.error(
                             f"❌ Exiting due to error in {result.project_name}"
@@ -386,7 +381,6 @@ class RefreshManager:
                     # This shouldn't happen as worker catches all exceptions
                     # But just in case...
                     logger.error(f"❌ Unexpected error processing {repo.name}: {e}")
-                    # Create failure result
                     failure_result = RefreshResult(
                         path=repo,
                         project_name=repo.name,
@@ -451,12 +445,10 @@ class RefreshManager:
                 started_at=started_at,
             )
 
-            # Check Git repository
             if not worker._is_git_repository(repo_path):
                 result.status = RefreshStatus.NOT_GIT_REPO
                 result.error_message = "Not a Git repository"
             else:
-                # Get remote URL
                 remote_url = worker._get_remote_url(repo_path)
                 result.remote_url = remote_url
 
@@ -467,7 +459,6 @@ class RefreshManager:
                     result.status = RefreshStatus.NOT_GERRIT_REPO
                     result.error_message = "Not a Gerrit repository"
                 else:
-                    # Get repository state
                     state = worker._check_repository_state(repo_path)
                     result.current_branch = state.get("branch")
                     result.detached_head = state.get("detached_head", False)
@@ -485,7 +476,6 @@ class RefreshManager:
             result.duration_seconds = (result.completed_at - started_at).total_seconds()
             results.append(result)
 
-            # Log dry run result
             status_emoji = self._get_status_emoji(result.status)
             logger.debug(f"{status_emoji} {project_name}: {result.status.value}")
 
@@ -506,13 +496,10 @@ class RefreshManager:
             result: Refresh result
             current_repo: Text object for current repo display
         """
-        # Get emoji for status
         status_emoji = self._get_status_emoji(result.status)
 
-        # Update current repo text
         current_repo.plain = f"{status_emoji} {result.project_name}"
 
-        # Update progress bar
         progress.update(task, advance=1)
 
     def _get_status_emoji(self, status: RefreshStatus) -> str:

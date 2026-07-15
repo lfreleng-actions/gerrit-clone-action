@@ -86,7 +86,6 @@ def get_current_commit_sha(repo_path: Path) -> str | None:
         raise ValueError(f"Not a git repository: {repo_path}")
 
     try:
-        # Get the current HEAD commit SHA
         result = subprocess.run(
             ["git", "-C", str(repo_path), "rev-parse", "HEAD"],
             capture_output=True,
@@ -128,7 +127,6 @@ def get_current_branch(repo_path: Path) -> str | None:
         raise ValueError(f"Not a git repository: {repo_path}")
 
     try:
-        # Get the current branch name
         result = subprocess.run(
             ["git", "-C", str(repo_path), "symbolic-ref", "--short", "HEAD"],
             capture_output=True,
@@ -171,7 +169,6 @@ def is_repo_dirty(repo_path: Path) -> bool:
         raise ValueError(f"Not a git repository: {repo_path}")
 
     try:
-        # Check for uncommitted changes
         result = subprocess.run(
             ["git", "-C", str(repo_path), "status", "--porcelain"],
             capture_output=True,
@@ -213,7 +210,6 @@ def get_remote_url(repo_path: Path, remote: str = "origin") -> str | None:
         raise ValueError(f"Not a git repository: {repo_path}")
 
     try:
-        # Get the remote URL
         result = subprocess.run(
             ["git", "-C", str(repo_path), "remote", "get-url", remote],
             capture_output=True,

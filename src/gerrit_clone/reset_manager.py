@@ -191,7 +191,6 @@ class ResetManager:
         if skip_pr_issue_counts:
             return repos_map
 
-        # Create progress display
         progress_bar = Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -303,7 +302,6 @@ class ResetManager:
         for repo in sorted(repos.values(), key=lambda r: r.name):
             last_commit = "N/A"
             if repo.last_commit_date:
-                # Parse and format date properly
                 last_commit = self._format_commit_date(repo.last_commit_date)
 
             # Format counts, showing "?" for unavailable data (-1)
@@ -324,7 +322,6 @@ class ResetManager:
 
         self.console.print(table)
 
-        # Build summary message
         summary_parts = [
             f"\n📊 Summary: [cyan]{len(repos)}[/cyan] repositories, "
             f"[yellow]{total_prs}[/yellow] open PRs"
@@ -432,7 +429,6 @@ class ResetManager:
         combined_seed = f"reset:{self.org}:{repo_count}:{total_prs}:{total_issues}"
         seed_value = sum(ord(c) for c in combined_seed)
 
-        # Create random generator with deterministic seed
         rng = random.Random(seed_value)
 
         # Generate 16-character alphanumeric code (avoiding ambiguous chars)
@@ -585,7 +581,6 @@ class ResetManager:
         Returns:
             Dictionary mapping repo name to (success, error_message)
         """
-        # Validate repository names before attempting deletion
         invalid_names: dict[str, str] = {}
         valid_names: list[str] = []
 
@@ -723,7 +718,6 @@ class ResetManager:
                 "\n⚠️  [yellow]--no-confirm flag used, skipping confirmation[/yellow]"
             )
 
-        # Delete all repos
         repo_names = list(remote_repos.keys())
         results = await self.delete_all_repos(repo_names)
 

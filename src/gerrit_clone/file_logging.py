@@ -138,7 +138,6 @@ class ErrorCollector:
                 f.write(f"Errors: {summary['errors']}\n")
                 f.write(f"Warnings: {summary['warnings']}\n\n")
 
-                # Write detailed records
                 for category, records in [
                     ("CRITICAL ERRORS", self.critical_errors),
                     ("ERRORS", self.errors),
@@ -213,7 +212,6 @@ class FileLogger:
             # Ensure parent directory exists
             self.log_file_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Create/overwrite log file with header
             with self.log_file_path.open("w", encoding="utf-8") as f:
                 f.write("=" * 60 + "\n")
                 f.write("GERRIT CLONE EXECUTION LOG\n")
@@ -234,7 +232,6 @@ class FileLogger:
                     f.write(f"Command: {' '.join(cmd_parts)}\n")
                     f.write("\nCLI Arguments:\n")
 
-                    # Write formatted CLI arguments
                     for key, value in sorted(cli_args.items()):
                         f.write(f"  {key}: {value}\n")
 
@@ -344,20 +341,16 @@ def setup_file_logging(
     Returns:
         Tuple of (logger, error_collector)
     """
-    # Create file logger
     file_logger = FileLogger(
         log_file_path=log_file_path,
         enabled=enabled,
         log_level=log_level,
     )
 
-    # Create log file with header
     actual_log_path = file_logger.create_log_file(cli_args)
 
-    # Setup handlers and get logger
     logger = file_logger.setup_file_handlers()
 
-    # Log startup information
     if enabled:
         logger.debug("File logging initialized: %s", actual_log_path)
         logger.debug("Log level: %s", log_level)

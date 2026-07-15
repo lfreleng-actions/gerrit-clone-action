@@ -111,7 +111,6 @@ class GerritCloneError(Exception):
         """Display the error message and exit with the appropriate code."""
         console = Console(stderr=True)
 
-        # Log the error with details
         if self.original_exception:
             logger.error(
                 "Exit code %d: %s (Exception: %s)",

@@ -268,7 +268,6 @@ def detect_github_source(host: str) -> bool:
     """
     host_lower = host.lower()
 
-    # Check for github.com or common GitHub Enterprise patterns
     github_indicators = [
         "github.com",
         "github.io",
@@ -288,7 +287,6 @@ def parse_github_url(url: str) -> tuple[str | None, str | None]:
     Returns:
         Tuple of (host, org_or_user) or (None, None) if not parseable
     """
-    # Remove protocol
     url = url.replace("https://", "").replace("http://", "")
 
     # Split by /
