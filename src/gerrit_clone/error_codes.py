@@ -16,6 +16,7 @@ import urllib.error
 from enum import IntEnum
 from typing import NoReturn
 
+import httpx
 from rich.console import Console
 
 from gerrit_clone.logging import get_logger
@@ -261,7 +262,12 @@ def is_network_error(exception: Exception) -> bool:
     Returns:
         True if exception indicates network connectivity issues
     """
-    if isinstance(exception, urllib.error.URLError):
+    # httpx is the project's HTTP client; treat its transport and timeout
+    # errors (plus urllib and the builtin TimeoutError) as network errors.
+    if isinstance(
+        exception,
+        (httpx.TransportError, TimeoutError, urllib.error.URLError),
+    ):
         return True
 
     # Fall back to matching known network-error phrases in the message.
