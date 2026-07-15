@@ -262,27 +262,10 @@ def is_network_error(exception: Exception) -> bool:
     Returns:
         True if exception indicates network connectivity issues
     """
-    # Try to import requests exceptions if available (optional dependency)
-    try:
-        from requests.exceptions import (  # noqa: PLC0415
-            ConnectionError as RequestsConnectionError,
-        )
-        from requests.exceptions import (  # noqa: PLC0415
-            Timeout as RequestsTimeout,
-        )
+    if isinstance(exception, urllib.error.URLError):
+        return True
 
-        # Check for common network-related exceptions
-        if isinstance(
-            exception,
-            (RequestsConnectionError, RequestsTimeout, urllib.error.URLError),
-        ):
-            return True
-    except ImportError:
-        # requests not installed, check only urllib errors
-        if isinstance(exception, urllib.error.URLError):
-            return True
-
-    # Check for specific error messages that indicate network issues
+    # Fall back to matching known network-error phrases in the message.
     error_str = str(exception).lower()
     network_indicators = [
         "connection refused",

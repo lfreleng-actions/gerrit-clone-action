@@ -11,7 +11,7 @@ import platform
 import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +23,7 @@ from typing import Any
 _MAX_GERRIT_THREADS = 8
 
 
-class ProjectState(str, Enum):
+class ProjectState(StrEnum):
     """Gerrit project states."""
 
     ACTIVE = "ACTIVE"
@@ -31,14 +31,14 @@ class ProjectState(str, Enum):
     HIDDEN = "HIDDEN"
 
 
-class SourceType(str, Enum):
+class SourceType(StrEnum):
     """Source repository platform type."""
 
     GERRIT = "gerrit"
     GITHUB = "github"
 
 
-class DiscoveryMethod(str, Enum):
+class DiscoveryMethod(StrEnum):
     """Method for discovering projects."""
 
     SSH = "ssh"
@@ -47,7 +47,7 @@ class DiscoveryMethod(str, Enum):
     GITHUB_API = "github_api"
 
 
-class CloneStatus(str, Enum):
+class CloneStatus(StrEnum):
     """Clone operation status."""
 
     PENDING = "pending"
@@ -60,7 +60,7 @@ class CloneStatus(str, Enum):
     VERIFIED = "verified"
 
 
-class RefreshStatus(str, Enum):
+class RefreshStatus(StrEnum):
     """Refresh operation status."""
 
     PENDING = "pending"
@@ -269,7 +269,7 @@ class Config:
     use_gh_cli: bool = False
 
     # Clone behavior
-    path: Path = field(default_factory=lambda: Path())
+    path: Path = field(default_factory=Path)
     skip_archived: bool = True
     threads: int | None = None
     depth: int | None = None

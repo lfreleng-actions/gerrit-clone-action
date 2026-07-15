@@ -95,7 +95,11 @@ def _file_lock(
                                 lock_file_path.unlink()
                                 continue  # Try again
                     except OSError:
-                        pass
+                        logger.debug(
+                            "Could not inspect or remove stale lock %s",
+                            lock_file_path,
+                            exc_info=True,
+                        )
 
                     raise OSError(
                         f"Could not acquire lock within {timeout}s: {lock_file_path}"

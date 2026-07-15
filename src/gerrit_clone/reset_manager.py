@@ -227,7 +227,7 @@ class ResetManager:
                         # Exclude automation PRs
                         open_prs = sum(
                             1 for pr in all_prs
-                            if not self.is_automation_author(pr.get("user", {}).get("login", ""))
+                            if not self.is_automation_author((pr.get("user") or {}).get("login", ""))
                         )
 
                     # Get issue count (with pagination)

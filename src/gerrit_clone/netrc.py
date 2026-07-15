@@ -25,6 +25,7 @@ import stat
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from typing import ClassVar
 
 log = logging.getLogger(__name__)
 
@@ -149,6 +150,15 @@ class NetrcParser:
     # Regex for quoted strings with escape sequences
     _QUOTED_STRING_PATTERN = re.compile(r'"(?:[^"\\]|\\.)*"')
 
+    # Recognised backslash escape sequences within quoted netrc values.
+    _ESCAPE_SEQUENCES: ClassVar[dict[str, str]] = {
+        '"': '"',
+        "n": "\n",
+        "r": "\r",
+        "t": "\t",
+        "\\": "\\",
+    }
+
     def __init__(self, content: str) -> None:
         """
         Initialize parser with file content.
@@ -181,16 +191,9 @@ class NetrcParser:
         while i < len(inner):
             if inner[i] == "\\" and i + 1 < len(inner):
                 next_char = inner[i + 1]
-                if next_char == '"':
-                    result.append('"')
-                elif next_char == "n":
-                    result.append("\n")
-                elif next_char == "r":
-                    result.append("\r")
-                elif next_char == "t":
-                    result.append("\t")
-                elif next_char == "\\":
-                    result.append("\\")
+                mapped = self._ESCAPE_SEQUENCES.get(next_char)
+                if mapped is not None:
+                    result.append(mapped)
                 else:
                     # Unknown escape, keep as-is
                     result.append(inner[i : i + 2])

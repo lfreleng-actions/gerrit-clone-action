@@ -12,7 +12,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-class MirrorStatus(str, Enum):
+class MirrorStatus(StrEnum):
     """Status values for mirror operations."""
 
     PENDING = "pending"

@@ -1164,8 +1164,11 @@ class GitHubAPI:
                             continue
                         break
 
-                    org_data = data.get("data", {}).get(
-                        "organization"
+                    data_payload = data.get("data")
+                    org_data = (
+                        data_payload.get("organization")
+                        if data_payload
+                        else None
                     )
                     if not org_data:
                         logger.warning(

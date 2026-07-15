@@ -102,7 +102,8 @@ def _format_version_string(command: str = "", styled: bool = True) -> str:
 if "--help" in sys.argv:
     try:
         print(_format_version_string(styled=False))
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed to format version string: %s", exc, exc_info=True)
         print("⚠️ gerrit-clone version information not available")
 
 
@@ -2143,7 +2144,7 @@ def mirror(
             console.print(f"🌐 Connecting to Gerrit: [cyan]{server}[/cyan]")
 
         # Discover projects
-        all_projects, discovery_stats = discover_projects(config)
+        all_projects, _discovery_stats = discover_projects(config)
 
         if not all_projects:
             console.print("[yellow]No projects found on Gerrit server[/yellow]")

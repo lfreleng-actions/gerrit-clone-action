@@ -15,7 +15,6 @@ in rich_status.py and are not part of the logging system.
 from __future__ import annotations
 
 import logging
-import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -155,9 +154,12 @@ class ErrorCollector:
                             if record.exception:
                                 f.write(f"  Exception: {record.exception}\n")
                         f.write("\n")
-        except Exception as e:
-            # If we can't write to log file, write to stderr as last resort
-            print(f"Failed to write error summary to log file: {e}", file=sys.stderr)
+        except Exception:
+            # If we can't write to the log file, fall back to the standard
+            # logging subsystem, which records context and routes to stderr.
+            logging.getLogger(__name__).warning(
+                "Failed to write error summary to log file", exc_info=True
+            )
 
 
 class CollectingHandler(logging.Handler):
@@ -181,8 +183,9 @@ class CollectingHandler(logging.Handler):
             elif record.levelno >= logging.WARNING:
                 self.collector.add_warning(message, context, exception)
         except Exception:
-            # Don't let logging errors break the collector
-            pass
+            # Route handler failures through the standard logging machinery
+            # instead of silently dropping them.
+            self.handleError(record)
 
 
 class FileLogger:
@@ -241,8 +244,10 @@ class FileLogger:
 
             return self.log_file_path
 
-        except Exception as e:
-            print(f"Warning: Failed to create log file {self.log_file_path}: {e}", file=sys.stderr)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Failed to create log file %s", self.log_file_path, exc_info=True
+            )
             self.enabled = False
             return self.log_file_path
 
@@ -283,8 +288,10 @@ class FileLogger:
                 logger.addHandler(self._file_handler)
                 logger.setLevel(min(self.log_level, logging.WARNING))  # Ensure we capture warnings for collector
 
-            except Exception as e:
-                print(f"Warning: Failed to setup file logging: {e}", file=sys.stderr)
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "Failed to setup file logging", exc_info=True
+                )
                 self.enabled = False
 
         # Allow propagation to root logger so console handlers receive messages
@@ -313,8 +320,10 @@ class FileLogger:
             if self._collector_handler:
                 self._collector_handler = None
 
-        except Exception as e:
-            print(f"Warning: Error closing file logger: {e}", file=sys.stderr)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Error closing file logger", exc_info=True
+            )
 
 
 def setup_file_logging(
