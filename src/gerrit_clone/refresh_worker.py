@@ -73,6 +73,14 @@ _DIVERGED_BRANCH_PATTERNS = (
     "cannot be fast-forwarded",
 )
 
+# Auth-classified failures are normally fatal, but a Gerrit server throttling a
+# burst of concurrent SSH connections can reject a valid key with "Permission
+# denied (publickey)" while it drops the connection. Retrying such a failure a
+# small, bounded number of times recovers these transient throttles, whereas a
+# genuinely misconfigured key still fails quickly instead of consuming the full
+# network-retry budget across every repository.
+_MAX_AUTH_RETRY_ATTEMPTS = 2
+
 
 class StashOutcome(Enum):
     """Result of attempting to stash a working tree.
@@ -100,6 +108,17 @@ class RefreshError(Exception):
 
 class RefreshTimeoutError(RefreshError):
     """Raised when refresh operation times out."""
+
+
+class RefreshAuthError(RefreshError):
+    """Raised when a refresh fails with an authentication-style error.
+
+    Kept distinct from :class:`RefreshError` so the retry loop can apply a
+    small, dedicated retry budget: a throttled Gerrit may reject a valid key
+    with "Permission denied (publickey)" while dropping a connection, which a
+    couple of retries recover, whereas a genuine auth misconfiguration should
+    fail without consuming the full network-retry budget.
+    """
 
 
 class RefreshWorker:
@@ -544,7 +563,14 @@ class RefreshWorker:
             True if refresh succeeded, False otherwise
         """
         max_attempts = self.retry_policy.max_attempts
+        # Auth-style failures get a smaller, dedicated retry budget (see
+        # _MAX_AUTH_RETRY_ATTEMPTS): a throttled Gerrit can reject a valid key
+        # while dropping a connection, which a couple of retries recover, but a
+        # real auth misconfiguration should not consume the full network-retry
+        # budget.
+        max_auth_attempts = min(max_attempts, _MAX_AUTH_RETRY_ATTEMPTS)
         attempt = 0
+        auth_attempt = 0
 
         while attempt < max_attempts:
             attempt += 1
@@ -556,6 +582,26 @@ class RefreshWorker:
                 # If we get here, refresh failed but didn't raise exception
                 # (non-retryable error)
                 return False
+
+            except RefreshAuthError as e:
+                auth_attempt += 1
+                result.retry_count += 1
+                if auth_attempt < max_auth_attempts:
+                    # Base the backoff on the overall attempt counter, not the
+                    # smaller auth counter, so an auth failure following earlier
+                    # network retries does not reset exponential backoff and
+                    # re-collide with a throttled Gerrit.
+                    delay = self._calculate_adaptive_delay(attempt)
+                    logger.warning(
+                        f"⚠️ {result.project_name}: {e} (auth attempt {auth_attempt}/{max_auth_attempts}), retrying in {delay:.1f}s"
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        f"❌ {result.project_name}: {e} (auth retries exhausted)"
+                    )
+                    result.error_message = str(e)
+                    return False
 
             except RefreshTimeoutError:
                 result.retry_count += 1
@@ -622,6 +668,14 @@ class RefreshWorker:
 
             return success
 
+        except RefreshError:
+            # Already-classified refresh errors (auth, timeout, transient)
+            # propagate unchanged so the retry loop applies the correct retry
+            # budget instead of re-wrapping them as a generic error.
+            # RefreshTimeoutError and RefreshAuthError both subclass
+            # RefreshError, so catching the base class covers all three.
+            raise
+
         except subprocess.TimeoutExpired as err:
             error_msg = f"Git operation timeout after {self.timeout}s"
             result.error_message = error_msg
@@ -673,12 +727,15 @@ class RefreshWorker:
                 return True
             else:
                 error_msg = self._analyze_git_error(process_result, "fetch")
-                result.error_message = error_msg
 
-                if self._is_retryable_git_error(process_result):
-                    raise RefreshError(error_msg)
-                else:
-                    return False
+                # Raise first for retryable errors: the same RefreshResult
+                # is reused across retry attempts, so recording the message
+                # now would leave it stale on a later successful attempt.
+                # Only record it for non-retryable (hard) failures, which
+                # is when this call returns normally.
+                self._raise_for_retryable_git_error(process_result, error_msg)
+                result.error_message = error_msg
+                return False
 
         except subprocess.TimeoutExpired as err:
             raise RefreshTimeoutError(f"Fetch timeout after {self.timeout}s") from err
@@ -730,21 +787,26 @@ class RefreshWorker:
                 return True
             else:
                 error_msg = self._analyze_git_error(process_result, "pull")
-                result.error_message = error_msg
 
-                # Check for conflicts
+                # Check for conflicts (a hard failure: always record the
+                # message).
                 if (
                     "CONFLICT" in process_result.stdout
                     or "CONFLICT" in process_result.stderr
                 ):
+                    result.error_message = error_msg
                     result.status = RefreshStatus.CONFLICTS
                     logger.error(f"⚠️ {result.project_name}: Merge conflicts detected")
                     return False
 
-                if self._is_retryable_git_error(process_result):
-                    raise RefreshError(error_msg)
-                else:
-                    return False
+                # Raise first for retryable errors: the same RefreshResult
+                # is reused across retry attempts, so recording the message
+                # now would leave it stale on a later successful attempt.
+                # Only record it for non-retryable (hard) failures, which
+                # is when this call returns normally.
+                self._raise_for_retryable_git_error(process_result, error_msg)
+                result.error_message = error_msg
+                return False
 
         except subprocess.TimeoutExpired as err:
             raise RefreshTimeoutError(f"Pull timeout after {self.timeout}s") from err
@@ -1732,6 +1794,56 @@ class RefreshWorker:
 
         return f"Git {operation} failed with exit code {process_result.returncode}"
 
+    def _is_auth_git_error(
+        self, process_result: subprocess.CompletedProcess[str]
+    ) -> bool:
+        """Determine if a failed Git result looks like an authentication error.
+
+        A throttled Gerrit can surface a transient connection-limit drop as a
+        "Permission denied (publickey)" rejection, so auth-classified errors are
+        retried a small, bounded number of times (see
+        ``_MAX_AUTH_RETRY_ATTEMPTS``) rather than treated as immediately fatal.
+
+        Args:
+            process_result: Completed process result
+
+        Returns:
+            True if the failure carries authentication markers
+        """
+        combined = (process_result.stderr + process_result.stdout).lower()
+
+        # Missing repositories are never auth errors. Check first so a
+        # permanently absent repo is not misclassified as a retryable auth
+        # throttle.
+        if any(pattern in combined for pattern in _NOT_FOUND_GIT_ERROR_PATTERNS):
+            return False
+
+        return any(pattern in combined for pattern in _AUTH_ERROR_PATTERNS)
+
+    def _raise_for_retryable_git_error(
+        self, process_result: subprocess.CompletedProcess[str], error_msg: str
+    ) -> None:
+        """Raise the appropriate retryable error for a failed Git result.
+
+        Raises :class:`RefreshAuthError` for auth-style failures (which get a
+        small, bounded retry budget) and :class:`RefreshError` for transient
+        network/SSH failures (full retry budget). Returns normally when the
+        failure is not retryable, letting the caller treat it as a hard
+        failure.
+
+        Args:
+            process_result: Completed process result
+            error_msg: Human-readable error message for the raised exception
+
+        Raises:
+            RefreshAuthError: If the failure looks like an auth error
+            RefreshError: If the failure is a retryable transient error
+        """
+        if self._is_auth_git_error(process_result):
+            raise RefreshAuthError(error_msg)
+        if self._is_retryable_git_error(process_result):
+            raise RefreshError(error_msg)
+
     def _is_retryable_git_error(
         self, process_result: subprocess.CompletedProcess[str]
     ) -> bool:
@@ -1838,9 +1950,12 @@ class RefreshWorker:
 
         # Add jitter if enabled
         if self.retry_policy.jitter:
-            jitter_factor = 0.2  # 20% jitter
-            jitter = random.uniform(-jitter_factor * delay, jitter_factor * delay)
-            delay = max(0.1, delay + jitter)
+            # Full jitter: pick a random point in [0, delay]. This
+            # de-synchronises retries from a burst of workers that failed
+            # together (e.g. a Gerrit SSH throttle), preventing them from
+            # re-colliding on the next attempt. A small floor keeps a minimum
+            # spacing between attempts.
+            delay = max(0.1, random.uniform(0.0, delay))
 
         return delay
 

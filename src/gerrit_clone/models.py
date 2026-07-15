@@ -15,6 +15,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+# Absolute ceiling on concurrent SSH sessions to a Gerrit server for the
+# auto-computed default thread count. The real constraint is the server's
+# per-user SSH connection limit, not local CPU, so cap independently of core
+# count to avoid throttling on high-core machines. Users can still override the
+# default explicitly with ``--threads``.
+_MAX_GERRIT_THREADS = 8
+
 
 class ProjectState(str, Enum):
     """Gerrit project states."""
@@ -501,8 +508,10 @@ class Config:
         server's SSH front-end with too many concurrent handshakes. Bursts of
         parallel SSH connections are frequently throttled by Gerrit and
         surface as transient "Could not read from remote repository"
-        failures. Users who want the previous, more aggressive concurrency
-        can still pass ``--threads`` explicitly.
+        failures. The halved value is additionally capped at
+        ``_MAX_GERRIT_THREADS`` since the binding constraint is the server's
+        per-user SSH connection limit rather than local CPU. Users who want a
+        different concurrency can still pass ``--threads`` explicitly.
 
         For GitHub sources the halving does not apply; instead a 2x multiplier
         is used since operations are network-limited rather than
@@ -555,9 +564,12 @@ class Config:
         # Halve the dynamically calculated default (floor of 1) for Gerrit (SSH)
         # sources to avoid saturating Gerrit's SSH server with concurrent
         # handshakes, which can trigger transient "Could not read from remote
-        # repository" errors. GitHub sources are unaffected: they are handled
-        # above with their own higher, network-bound concurrency.
-        return max(1, base_threads // 2)
+        # repository" errors. The result is additionally capped at
+        # _MAX_GERRIT_THREADS because the real limit is the server's per-user
+        # SSH connection count, not local core count. GitHub sources are
+        # unaffected: they are handled above with their own higher, network-bound
+        # concurrency.
+        return max(1, min(base_threads // 2, _MAX_GERRIT_THREADS))
 
     @property
     def protocol(self) -> str:

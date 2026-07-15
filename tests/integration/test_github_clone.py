@@ -93,6 +93,9 @@ class TestGitHubClone:
             include_projects=["gerrit-clone-action"],  # Known repo
             threads=1,
             mirror=False,  # Use regular clone (not bare) for testing
+            # Clone over HTTPS with the token so this passes on fork PRs,
+            # which do not receive the SSH deploy secret.
+            use_https=True,
         )
 
         # Discover and verify the repository exists
@@ -133,6 +136,7 @@ class TestGitHubClone:
             include_projects=["gerrit-clone-action"],
             depth=1,
             threads=1,
+            use_https=True,
         )
 
         # Clone the repository
@@ -157,6 +161,7 @@ class TestGitHubClone:
             path=tmp_clone_dir,
             threads=4,  # Use multiple threads
             skip_archived=True,
+            use_https=True,
         )
 
         # Clone repositories (limit to first 5 for speed)
@@ -187,6 +192,7 @@ class TestGitHubClone:
             path=tmp_clone_dir,
             include_projects=["gerrit-clone-action"],
             threads=1,
+            use_https=True,
         )
 
         # First clone
@@ -227,6 +233,7 @@ class TestGitHubClone:
             include_projects=["gerrit-clone-action"],
             threads=1,
             auto_refresh=False,  # Disable auto-refresh
+            use_https=True,
         )
 
         # First clone
