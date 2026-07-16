@@ -13,7 +13,6 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-# Handle Rich imports with TYPE_CHECKING
 if TYPE_CHECKING:
     from rich.console import Console, Group
     from rich.live import Live
@@ -97,7 +96,6 @@ class ProgressTracker:
         self._mode = force_mode or self._detect_progress_mode()
         logger.debug(f"Progress tracker mode: {self._mode.value}")
 
-        # Initialize components based on mode
         if self._mode in (ProgressMode.RICH_PERIODIC, ProgressMode.RICH_SIMPLE):
             if not RICH_AVAILABLE:
                 logger.warning("Rich not available, falling back to text mode")
@@ -133,14 +131,12 @@ class ProgressTracker:
         if not RICH_AVAILABLE:
             return ProgressMode.TEXT_ONLY
 
-        # Check terminal capabilities
         if not sys.stderr.isatty():
             # Not a terminal - use simple mode or text only
             if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
                 return ProgressMode.TEXT_ONLY
             return ProgressMode.RICH_SIMPLE
 
-        # Check terminal size
         try:
             size = os.get_terminal_size()
             if size.columns < 80 or size.lines < 24:
@@ -148,7 +144,6 @@ class ProgressTracker:
         except OSError:
             return ProgressMode.RICH_SIMPLE
 
-        # Check environment variables that suggest non-interactive
         non_interactive_vars = [
             "CI",
             "GITHUB_ACTIONS",
@@ -168,7 +163,6 @@ class ProgressTracker:
         if not RICH_AVAILABLE or not self.console:
             return
 
-        # Create progress bar
         columns = [
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -183,7 +177,6 @@ class ProgressTracker:
             transient=self._mode == ProgressMode.RICH_SIMPLE,
         )
 
-        # Initialize Live display for fixed progress area
         self._live = None
         self._last_update_time = datetime.now(UTC)
         self._update_interval = 0.5  # Update every 0.5 seconds for responsiveness
@@ -199,7 +192,6 @@ class ProgressTracker:
             self._projects = {p.name: p for p in projects}
             self._results = {}
 
-            # Initialize results
             for project in projects:
                 target_path = self.config.path / project.name
                 self._results[project.name] = CloneResult(
@@ -211,7 +203,6 @@ class ProgressTracker:
                     error_message=None,
                 )
 
-        # Start mode-specific display
         if self._mode == ProgressMode.RICH_PERIODIC:
             self._start_rich_periodic(projects)
         elif self._mode == ProgressMode.RICH_SIMPLE:
@@ -226,12 +217,10 @@ class ProgressTracker:
             return
 
         try:
-            # Create main progress task with elapsed time field
             self._main_task = self._progress.add_task(
                 "Cloning repositories", total=len(projects), elapsed="0:00"
             )
 
-            # Initialize Live display for fixed progress area
             display_content = self._create_display()
             self._live = Live(
                 display_content,
@@ -261,7 +250,6 @@ class ProgressTracker:
             return
 
         try:
-            # Create main progress task with elapsed time field
             self._main_task = self._progress.add_task(
                 "Cloning repositories", total=len(projects), elapsed="0:00"
             )
@@ -331,7 +319,6 @@ class ProgressTracker:
         # Always call _stop_display for proper cleanup
         self._stop_display()
 
-        # Log final summary
         if self._mode == ProgressMode.TEXT_ONLY:
             self._show_final_summary()
 
@@ -396,7 +383,6 @@ class ProgressTracker:
                             result.completed_at - result.started_at
                         ).total_seconds()
 
-            # Update progress display
             if self._main_task and self._progress:
                 if old_status == CloneStatus.PENDING and status in (
                     CloneStatus.SUCCESS,
@@ -404,13 +390,10 @@ class ProgressTracker:
                     CloneStatus.SKIPPED,
                     CloneStatus.ALREADY_EXISTS,
                 ):
-                    # Update progress count
                     self._update_progress_count()
 
-        # Update display after progress update
         self._update_display()
 
-        # Log status change in text mode
         if self._mode == ProgressMode.TEXT_ONLY:
             self._log_project_status(project_name, status, error)
 
@@ -423,7 +406,6 @@ class ProgressTracker:
         with self._lock:
             if result.project.name in self._results:
                 self._results[result.project.name] = result
-                # Update progress count
                 self._update_progress_count()
 
         self._update_display()
@@ -666,7 +648,6 @@ class ProgressTracker:
 
         summary = self._get_summary_unsafe()
 
-        # Create status line
         status_parts = []
         if summary["success"] > 0:
             status_parts.append(f"[green]✓ {summary['success']}[/green]")
@@ -685,10 +666,8 @@ class ProgressTracker:
             " | ".join(status_parts) if status_parts else "[dim]No activity[/dim]"
         )
 
-        # Create main content with progress bar
         content_parts: list[Any] = []
         if self._progress:
-            # Create fresh progress bar with current values
             summary = self._get_summary_unsafe()
 
             # Calculate manual elapsed time to avoid reset
@@ -746,7 +725,6 @@ class ProgressTracker:
         else:
             display_content = Group(main_content, "", log_line)
 
-        # Create panel with status
         return Panel(
             display_content,
             title="Repository Clone Progress",

@@ -232,7 +232,6 @@ def show_final_results(
     else:
         duration_str = "unknown"
 
-    # Build results content
     content_lines = []
 
     # Summary statistics
@@ -253,11 +252,9 @@ def show_final_results(
     if batch_result.total_count > 0:
         content_lines.append(f"[bold]Success Rate:[/bold] {batch_result.success_rate:.1f}%")
 
-    # Log file reference
     if log_file_path:
         content_lines.append(f"[dim]Log File:[/dim] {log_file_path}")
 
-    # Create panel
     title_color = "green" if batch_result.failed_count == 0 else "yellow"
 
     summary_text = Text.from_markup("\n".join(content_lines))
@@ -281,7 +278,6 @@ def handle_crash_display(
         exception: Exception that caused the crash
         log_file_path: Path to log file, if available
     """
-    # Get crash context
     tb = traceback.extract_tb(exception.__traceback__)
     crash_context = "unknown location"
 
@@ -290,7 +286,6 @@ def handle_crash_display(
         filename = last_frame.filename.split("/")[-1]
         crash_context = f"{last_frame.name}() at {filename}:{last_frame.lineno}"
 
-    # Build crash content
     content_lines = [
         f"[bold red]Exception:[/bold red] {type(exception).__name__}",
         f"[bold red]Location:[/bold red] {crash_context}",
@@ -300,7 +295,6 @@ def handle_crash_display(
     if log_file_path:
         content_lines.append(f"[dim]Log File:[/dim] {log_file_path}")
 
-    # Create crash panel
     crash_text = Text.from_markup("\n".join(content_lines))
     panel = Panel(
         crash_text,

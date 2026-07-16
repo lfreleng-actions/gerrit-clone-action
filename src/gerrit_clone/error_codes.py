@@ -16,6 +16,7 @@ import urllib.error
 from enum import IntEnum
 from typing import NoReturn
 
+import httpx
 from rich.console import Console
 
 from gerrit_clone.logging import get_logger
@@ -111,7 +112,6 @@ class GerritCloneError(Exception):
         """Display the error message and exit with the appropriate code."""
         console = Console(stderr=True)
 
-        # Log the error with details
         if self.original_exception:
             logger.error(
                 "Exit code %d: %s (Exception: %s)",
@@ -262,27 +262,15 @@ def is_network_error(exception: Exception) -> bool:
     Returns:
         True if exception indicates network connectivity issues
     """
-    # Try to import requests exceptions if available (optional dependency)
-    try:
-        from requests.exceptions import (  # noqa: PLC0415
-            ConnectionError as RequestsConnectionError,
-        )
-        from requests.exceptions import (  # noqa: PLC0415
-            Timeout as RequestsTimeout,
-        )
+    # httpx is the project's HTTP client; treat its transport and timeout
+    # errors (plus urllib and the builtin TimeoutError) as network errors.
+    if isinstance(
+        exception,
+        (httpx.TransportError, TimeoutError, urllib.error.URLError),
+    ):
+        return True
 
-        # Check for common network-related exceptions
-        if isinstance(
-            exception,
-            (RequestsConnectionError, RequestsTimeout, urllib.error.URLError),
-        ):
-            return True
-    except ImportError:
-        # requests not installed, check only urllib errors
-        if isinstance(exception, urllib.error.URLError):
-            return True
-
-    # Check for specific error messages that indicate network issues
+    # Fall back to matching known network-error phrases in the message.
     error_str = str(exception).lower()
     network_indicators = [
         "connection refused",

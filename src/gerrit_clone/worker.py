@@ -77,7 +77,6 @@ def _file_lock(
             try:
                 # Try to create lock file exclusively (atomic operation)
                 with lock_file_path.open("x") as lock_file:
-                    # Write process info for debugging
                     lock_file.write(f"pid:{os.getpid()}\ntime:{time.time()}\n")
                     lock_file.flush()
                 acquired = True
@@ -95,7 +94,11 @@ def _file_lock(
                                 lock_file_path.unlink()
                                 continue  # Try again
                     except OSError:
-                        pass
+                        logger.debug(
+                            "Could not inspect or remove stale lock %s",
+                            lock_file_path,
+                            exc_info=True,
+                        )
 
                     raise OSError(
                         f"Could not acquire lock within {timeout}s: {lock_file_path}"
@@ -144,7 +147,6 @@ class CloneWorker:
         target_path = get_project_path(project.name, self.config.path)
         started_at = datetime.now(UTC)
 
-        # Initialize result object
         result = CloneResult(
             project=project,
             status=CloneStatus.PENDING,
@@ -229,7 +231,6 @@ class CloneWorker:
                     f"No early ancestor detected for candidate nested project {project.name} (depth={depth})"
                 )
 
-            # Check for path conflicts at the precise target
             is_nested = result.nested_under is not None
             conflict = check_path_conflicts(target_path, is_nested_repo=is_nested)
             if conflict is not None:
@@ -273,7 +274,6 @@ class CloneWorker:
                         return result
                     # Continue with normal clone after cleanup
                 elif conflict == "nested_file_conflict":
-                    # Handle nested repo file conflict
                     move_conflicting_enabled = getattr(
                         self.config, "move_conflicting", True
                     )
@@ -373,7 +373,6 @@ class CloneWorker:
                         f"Could not apply nested protection for {project.name}: {e}"
                     )
 
-            # Update status to cloning
             result.status = CloneStatus.CLONING
 
             # Instrumentation: mark potential nested candidate if depth > 0 and still no ancestor
@@ -389,7 +388,6 @@ class CloneWorker:
                 f"Clone execution completed for {project.name}, success: {success}"
             )
 
-            # Handle success/failure
             if success:
                 result.status = CloneStatus.SUCCESS
                 if ancestor_repo and allow_nested:
@@ -404,7 +402,6 @@ class CloneWorker:
         except Exception as e:
             result.status = CloneStatus.FAILED
             result.error_message = str(e)
-            # Log at error level for top-level clone failures
             logger.error(f"Failed to clone [project]{project.name}[/project]: {e}")
 
         finally:
@@ -439,7 +436,6 @@ class CloneWorker:
 
                 # Don't retry non-retryable errors
                 if not self._is_filesystem_error_retryable(error_msg):
-                    # Log at error level for final non-retryable failures
                     logger.error(
                         f"Non-retryable error for {project.name}: {error_msg[:100]}..."
                     )
@@ -462,7 +458,6 @@ class CloneWorker:
 
             except Exception as e:
                 result.error_message = str(e)
-                # Log at error level for unexpected errors during retry phase
                 logger.error(f"Unexpected error cloning {project.name}: {e}")
                 return False
 
@@ -777,7 +772,6 @@ class CloneWorker:
                     )
                     raise CloneError(error_msg)  # Will trigger retry
                 else:
-                    # Log at error level for non-retryable errors
                     logger.error(
                         f"Non-retryable clone error for [project]{project.name}[/project]: {error_msg}"
                     )
@@ -875,7 +869,6 @@ class CloneWorker:
                 return
             except subprocess.SubprocessError as e:
                 error_msg = str(e)
-                # Check for config lock errors that warrant retry
                 if (
                     "could not lock config file" in error_msg.lower()
                     or "no such file or directory" in error_msg.lower()
@@ -948,11 +941,9 @@ class CloneWorker:
         if self.config.git_ssh_command:
             env["GIT_SSH_COMMAND"] = self.config.git_ssh_command
 
-        # Create thread-specific git configuration directory
         thread_id = threading.get_ident()
         git_config_dir = Path(tempfile.mkdtemp(prefix=f"git_config_{thread_id}_"))
 
-        # Create minimal isolated git configuration
         self._create_isolated_git_config(git_config_dir)
 
         # Essential git environment isolation to prevent config file contention
@@ -992,7 +983,6 @@ class CloneWorker:
 
         # Common error patterns with enhanced debugging info
         if "Permission denied" in error_output:
-            # Extract more context from SSH errors
             ssh_user = getattr(self.config, "ssh_user", "git")
             identity_file = getattr(self.config, "ssh_identity_file", "default")
             return f"Permission denied - SSH auth failed for {ssh_user}@{self.config.host}:{self.config.port} (key: {identity_file}) accessing {project_name}"
@@ -1103,7 +1093,6 @@ class CloneWorker:
             "access denied",
         ]
 
-        # Check for fatal file system errors after pack transfer
         if (
             "fatal: could not open" in error_output
             and "total" in error_output

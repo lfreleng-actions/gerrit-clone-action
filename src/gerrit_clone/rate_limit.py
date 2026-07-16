@@ -37,9 +37,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-# ---------------------------------------------------------------------------
 # RateLimitBudget - primary rate-limit tracking
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -242,8 +240,9 @@ class RateLimitBudget:
             response = await client.get("https://api.github.com/rate_limit")
             if response.status_code == 200:
                 data = response.json()
-                core = data.get("resources", {}).get("core", {})
-                graphql = data.get("resources", {}).get("graphql", {})
+                resources = data.get("resources", {})
+                core = resources.get("core", {})
+                graphql = resources.get("graphql", {})
 
                 snap = RateLimitSnapshot(
                     limit=core.get("limit", 5000),
@@ -290,8 +289,9 @@ class RateLimitBudget:
             response = client.get("https://api.github.com/rate_limit")
             if response.status_code == 200:
                 data = response.json()
-                core = data.get("resources", {}).get("core", {})
-                graphql = data.get("resources", {}).get("graphql", {})
+                resources = data.get("resources", {})
+                core = resources.get("core", {})
+                graphql = resources.get("graphql", {})
 
                 self._snapshot = RateLimitSnapshot(
                     limit=core.get("limit", 5000),
@@ -354,9 +354,7 @@ class RateLimitBudget:
         return wait
 
 
-# ---------------------------------------------------------------------------
 # TokenBucketLimiter - async token-bucket for secondary rate limits
-# ---------------------------------------------------------------------------
 
 
 class TokenBucketLimiter:
@@ -677,9 +675,7 @@ class TokenBucketLimiter:
                 )
 
 
-# ---------------------------------------------------------------------------
 # AsyncProgressCounter - batch operation progress reporting
-# ---------------------------------------------------------------------------
 
 
 class AsyncProgressCounter:
@@ -747,9 +743,7 @@ class AsyncProgressCounter:
             )
 
 
-# ---------------------------------------------------------------------------
 # Helper: parse Retry-After from a response
-# ---------------------------------------------------------------------------
 
 
 def parse_retry_after(response: Any) -> float | None:

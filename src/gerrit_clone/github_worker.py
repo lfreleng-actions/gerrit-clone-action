@@ -124,7 +124,6 @@ def _clone_with_gh_cli(
     """
     logger.debug(f"Cloning {project.name} with gh CLI")
 
-    # Build gh repo clone command
     cmd = ["gh", "repo", "clone"]
 
     # Add repository identifier (org/repo or full URL)
@@ -153,7 +152,6 @@ def _clone_with_gh_cli(
                 cmd.append("--")
             cmd.extend(["--branch", config.branch])
 
-    # Execute clone
     try:
         logger.debug(f"Executing: {' '.join(cmd)}")
         result = subprocess.run(
@@ -180,7 +178,6 @@ def _clone_with_gh_cli(
             error_msg = result.stderr.strip() or result.stdout.strip()
             logger.error(f"✗ Failed to clone {project.name}: {error_msg}")
 
-            # Clean up failed clone directory
             if target_path.exists():
                 shutil.rmtree(target_path, ignore_errors=True)
 
@@ -200,7 +197,6 @@ def _clone_with_gh_cli(
         error_msg = f"Clone timeout after {config.clone_timeout}s"
         logger.error(f"✗ {project.name}: {error_msg}")
 
-        # Clean up
         if target_path.exists():
             shutil.rmtree(target_path, ignore_errors=True)
 
@@ -219,7 +215,6 @@ def _clone_with_gh_cli(
         error_msg = f"Clone error: {e}"
         logger.error(f"✗ {project.name}: {error_msg}")
 
-        # Clean up
         if target_path.exists():
             shutil.rmtree(target_path, ignore_errors=True)
 
@@ -295,12 +290,10 @@ def _clone_with_git(
             log_url = f"https://***@github.com/{project.name}.git"
     logger.debug(f"Cloning {project.name} with git from {log_url}")
 
-    # Setup environment for git
     env = _build_git_env(config)
 
     # Use atomic clone path for safety (automatic cleanup on failure)
     with AtomicClonePath(target_path) as atomic_path:
-        # Build clone command using shared utility
         cmd = build_base_clone_command(clone_url, atomic_path.temp_path, config)
 
         # GitHub-specific: add --single-branch when user explicitly requests a branch
@@ -308,7 +301,6 @@ def _clone_with_git(
         if not config.mirror and config.branch:
             cmd.insert(-2, "--single-branch")
 
-        # Execute clone
         try:
             logger.debug(f"Executing: {' '.join(cmd)}")
             result = subprocess.run(
@@ -485,10 +477,8 @@ def _remove_token_from_remote_url(
         RuntimeError: If token removal fails (security-critical operation)
     """
     try:
-        # Get the clean HTTPS URL without token
         clean_url = project.clone_url or project.https_url(config.base_url)
 
-        # Update the remote URL to remove token
         subprocess.run(
             ["git", "remote", "set-url", "origin", clean_url],
             cwd=repo_path,

@@ -184,7 +184,6 @@ class RefreshWorker:
         started_at = datetime.now(UTC)
         project_name = self._get_project_name(repo_path)
 
-        # Initialize result object
         result = RefreshResult(
             path=repo_path,
             project_name=project_name,
@@ -194,7 +193,6 @@ class RefreshWorker:
         )
 
         try:
-            # Validate it's a Git repository
             if not self._is_git_repository(repo_path):
                 result.status = RefreshStatus.NOT_GIT_REPO
                 result.error_message = "Not a Git repository"
@@ -205,13 +203,11 @@ class RefreshWorker:
                 logger.debug(f"⊘ {project_name}: Not a Git repository")
                 return result
 
-            # Get repository state
             state = self._check_repository_state(repo_path)
             result.current_branch = state.get("branch")
             result.detached_head = state.get("detached_head", False)
             result.had_uncommitted_changes = state.get("has_uncommitted", False)
 
-            # Get remote URL
             remote_url = self._get_remote_url(repo_path)
             result.remote_url = remote_url
 
@@ -336,7 +332,6 @@ class RefreshWorker:
                         )
                         # Try switching to default branch as fallback
                         if self._fix_detached_head(repo_path, result):
-                            # Update state after successful default branch checkout
                             state = self._check_repository_state(repo_path)
                             result.current_branch = state.get("branch")
                             result.detached_head = state.get("detached_head", False)
@@ -438,7 +433,6 @@ class RefreshWorker:
                     )
                     return result
 
-                # Handle branch without upstream tracking
                 if not state.get("has_upstream", False):
                     result.status = RefreshStatus.SKIPPED
                     result.error_message = f"Branch '{result.current_branch}' has no upstream tracking branch"
@@ -490,10 +484,8 @@ class RefreshWorker:
                         )
                         return result
 
-            # Update status to refreshing
             result.status = RefreshStatus.REFRESHING
 
-            # Execute refresh with retry logic
             success = self._execute_adaptive_refresh(repo_path, result)
 
             if success:
@@ -660,7 +652,6 @@ class RefreshWorker:
                 # Fetch only, don't merge
                 success = self._execute_git_fetch(repo_path, result)
             else:
-                # Fetch and merge/rebase
                 success = self._execute_git_pull(repo_path, result)
 
             attempt_duration = (datetime.now(UTC) - attempt_start).total_seconds()
@@ -780,7 +771,6 @@ class RefreshWorker:
             )
 
             if process_result.returncode == 0:
-                # Parse pull output to count commits and files
                 output = process_result.stdout + process_result.stderr
                 result.commits_pulled = self._count_pulled_commits(output)
                 result.files_changed = self._count_changed_files(output)
@@ -897,7 +887,6 @@ class RefreshWorker:
         }
 
         try:
-            # Get current branch
             branch_result = subprocess.run(
                 ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                 cwd=repo_path,
@@ -933,7 +922,6 @@ class RefreshWorker:
                     if upstream_result.returncode == 0:
                         state["has_upstream"] = True
 
-            # Check for uncommitted changes
             status_result = subprocess.run(
                 ["git", "status", "--porcelain"],
                 cwd=repo_path,
@@ -1020,7 +1008,6 @@ class RefreshWorker:
             True if on meta/config branch
         """
         try:
-            # Get the full symbolic ref
             result = subprocess.run(
                 ["git", "symbolic-ref", "-q", "HEAD"],
                 cwd=repo_path,
@@ -1150,7 +1137,6 @@ class RefreshWorker:
             )
 
             if ls_remote_result.returncode == 0:
-                # Parse output like "ref: refs/heads/master	HEAD"
                 for line in ls_remote_result.stdout.strip().split("\n"):
                     if line.startswith("ref:"):
                         ref = line.split()[1]
@@ -1253,13 +1239,11 @@ class RefreshWorker:
                 logger.debug(
                     f"{repo_path.name}: Gerrit parent project (meta-only), no code branches to refresh"
                 )
-                # Update result to indicate this is a skip, not a failure
                 result.error_message = (
                     "Gerrit parent project (meta-only, no code branches)"
                 )
                 return False
 
-            # Get default branch
             default_branch = self._get_default_branch(repo_path)
 
             if not default_branch:

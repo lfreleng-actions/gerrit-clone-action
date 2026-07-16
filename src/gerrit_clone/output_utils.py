@@ -165,13 +165,11 @@ def format_rate_limit_table(
 
     # -- Budget fraction from snapshot --
     if budget_snapshot is not None:
-        try:
-            fraction = budget_snapshot.budget_fraction
+        fraction = getattr(budget_snapshot, "budget_fraction", None)
+        if fraction is not None:
             table.add_row(
                 "Budget Fraction",
                 f"{fraction:.1%}",
             )
-        except AttributeError:
-            pass
 
     return table

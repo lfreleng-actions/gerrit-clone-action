@@ -102,7 +102,8 @@ def _format_version_string(command: str = "", styled: bool = True) -> str:
 if "--help" in sys.argv:
     try:
         print(_format_version_string(styled=False))
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed to format version string: %s", exc, exc_info=True)
         print("⚠️ gerrit-clone version information not available")
 
 
@@ -568,10 +569,8 @@ def clone(
     # Configure graceful interrupt handling for multi-threaded operations
     handle_sigint_gracefully()
 
-    # Set up console for error handling
     console = Console(stderr=True)
 
-    # Initialize variables for exception handler scope
     file_logger = None
     error_collector = None
     log_file_path = None
@@ -603,7 +602,6 @@ def clone(
                 f"[cyan]ℹ[/cyan] Auto-detected GitHub source from host: {host}"  # noqa: RUF001
             )
 
-        # Validate GitHub-specific requirements
         if detected_source_type == SourceType.GITHUB and not detected_github_org:
             console.print(
                 "[red]Error:[/red] GitHub organization/user not specified. "
@@ -611,7 +609,6 @@ def clone(
             )
             raise typer.Exit(ExitCode.CONFIGURATION_ERROR)
 
-        # Validate mutually exclusive options
         if verbose and quiet:
             console.print(
                 "[red]Error:[/red] --verbose and --quiet cannot be used together"
@@ -778,7 +775,6 @@ def clone(
                         "[cyan]ℹ[/cyan] Using GitHub API discovery for GitHub source"  # noqa: RUF001
                     )
 
-        # Load and validate configuration
         try:
             config = load_config(
                 host=host,
@@ -840,7 +836,6 @@ def clone(
         if not quiet:
             _show_startup_banner(console, config)
 
-        # Execute clone operation with Rich status integration
         try:
             batch_result = clone_repositories(config)
         except DiscoveryError as e:
@@ -1010,7 +1005,6 @@ def clone(
             error_collector.write_summary_to_file(log_file_path)
         raise
     except Exception as e:
-        # Get the crash context from the traceback
         tb = traceback.extract_tb(e.__traceback__)
         crash_context = "unknown"
         crash_file = "unknown"
@@ -1331,12 +1325,10 @@ def refresh(
 
     console = Console(stderr=True)
 
-    # Validate mutually exclusive options
     if verbose and quiet:
         console.print("[red]Error:[/red] --verbose and --quiet cannot be used together")
         raise typer.Exit(ExitCode.CONFIGURATION_ERROR)
 
-    # Validate strategy
     if strategy not in ("merge", "rebase"):
         console.print(
             f"[red]❌ Invalid pull strategy: {strategy}. Must be 'merge' or 'rebase'.[/red]"
@@ -1348,7 +1340,6 @@ def refresh(
         console.print(_format_version_string("refresh"))
         console.print()
 
-    # Initialize logging
     cli_args = cli_args_to_dict(**locals())
 
     from gerrit_clone.file_logging import get_default_log_path  # noqa: PLC0415
@@ -1409,7 +1400,6 @@ def refresh(
         console.print()
 
     try:
-        # Execute refresh
         result = refresh_repositories(
             base_path=output_path,
             config=None,
@@ -1944,13 +1934,11 @@ def mirror(
 
     console = Console(stderr=True)
 
-    # Initialize variables for exception handler scope
     file_logger = None
     error_collector = None
     log_file_path = None
 
     try:
-        # Validate mutually exclusive options
         if verbose and quiet:
             console.print(
                 "[red]Error:[/red] --verbose and --quiet cannot be used together"
@@ -2037,7 +2025,6 @@ def mirror(
         if verbose and log_file_path:
             console.print(f"📝 Logging to: [cyan]{log_file_path}[/cyan]")
 
-        # Initialize GitHub API
         if not quiet:
             console.print("🔑 Authenticating with GitHub...")
 
@@ -2079,13 +2066,11 @@ def mirror(
                 f"🚫 Exclude filters: [cyan]{', '.join(exclude_filters)}[/cyan]"
             )
 
-        # Parse content filters
         remove_file_patterns = (
             normalize_file_patterns([remove_files]) if remove_files else None
         )
         git_filter_projects = parse_git_filter_spec(git_filter) if git_filter else None
 
-        # Build Gerrit configuration
         from gerrit_clone.models import Config  # noqa: PLC0415
 
         # Validate discovery method (None means "derive in Config from the
@@ -2143,7 +2128,7 @@ def mirror(
             console.print(f"🌐 Connecting to Gerrit: [cyan]{server}[/cyan]")
 
         # Discover projects
-        all_projects, discovery_stats = discover_projects(config)
+        all_projects, _discovery_stats = discover_projects(config)
 
         if not all_projects:
             console.print("[yellow]No projects found on Gerrit server[/yellow]")
@@ -2168,7 +2153,6 @@ def mirror(
                 f"📦 Found [cyan]{len(projects_to_mirror)}[/cyan] projects to mirror"
             )
 
-        # Create mirror manager
         mirror_manager = MirrorManager(
             config=config,
             github_api=github_api,
@@ -2183,7 +2167,6 @@ def mirror(
             redact_secrets=redact_secrets,
         )
 
-        # Start mirroring
         started_at = datetime.now(UTC)
         if not quiet:
             console.print("🚀 Starting mirror operation...")
@@ -2192,7 +2175,6 @@ def mirror(
 
         completed_at = datetime.now(UTC)
 
-        # Create batch result
         batch_result = MirrorBatchResult(
             results=results,
             started_at=started_at,
@@ -2201,7 +2183,6 @@ def mirror(
             gerrit_host=server,
         )
 
-        # Write manifest
         manifest_path = output_path / manifest_filename
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         with manifest_path.open("w") as f:
@@ -2244,7 +2225,6 @@ def mirror(
             if errors or warnings:
                 show_error_summary(console, errors, warnings)
 
-        # Write error summary to log file
         if error_collector and log_file_path:
             error_collector.write_summary_to_file(log_file_path)
 
@@ -2404,20 +2384,17 @@ def reset(
     """
     console = Console(stderr=True)
 
-    # Initialize variables for exception handler scope
     file_logger = None
     error_collector = None
     log_file_path = None
 
     try:
-        # Validate mutually exclusive options
         if verbose and quiet:
             console.print(
                 "[red]Error:[/red] --verbose and --quiet cannot be used together"
             )
             raise typer.Exit(ExitCode.CONFIGURATION_ERROR)
 
-        # Validate GitHub token
         if not github_token:
             console.print(
                 "[red]❌ GitHub token required. "
@@ -2456,7 +2433,6 @@ def reset(
         if verbose and log_file_path:
             console.print(f"📝 Logging to: [cyan]{log_file_path}[/cyan]")
 
-        # Initialize reset manager
         manager = ResetManager(
             org=org,
             github_token=github_token,
@@ -2465,7 +2441,6 @@ def reset(
             include_automation_prs=include_automation_prs,
         )
 
-        # Check token permissions using the GitHub API
         has_permissions = asyncio.run(manager.check_token_permissions())
         if not has_permissions:
             console.print(
@@ -2474,7 +2449,6 @@ def reset(
             )
             raise typer.Exit(ExitCode.CONFIGURATION_ERROR)
 
-        # Execute reset operation
         result = asyncio.run(
             manager.execute_reset(
                 compare=compare,
@@ -2505,7 +2479,6 @@ def reset(
                         "had local/remote differences"
                     )
 
-            # Write error summary to log file
             if error_collector and log_file_path:
                 error_collector.write_summary_to_file(log_file_path)
             raise typer.Exit(0)
@@ -2519,7 +2492,6 @@ def reset(
                     )
                 else:
                     console.print("\n❌ No repositories were deleted")
-            # Write error summary to log file
             if error_collector and log_file_path:
                 error_collector.write_summary_to_file(log_file_path)
             raise typer.Exit(0)

@@ -43,7 +43,6 @@ def validate_project_name(project_name: str) -> None:
     if project_name.startswith("/"):
         raise PathValidationError("Project name cannot start with '/'")
 
-    # Check for dangerous directory names
     dangerous_names = {".", "..", ".git"}
     if project_name in dangerous_names:
         raise PathValidationError(f"Project name cannot be '{project_name}'")
@@ -89,10 +88,8 @@ def sanitize_project_name(project_name: str) -> str:
     if not project_name or not project_name.strip():
         raise PathValidationError("Project name cannot be empty")
 
-    # Start with the original name
     sanitized = project_name.strip()
 
-    # Handle Windows reserved names
     reserved_names = {
         "CON",
         "PRN",
@@ -145,7 +142,6 @@ def sanitize_project_name(project_name: str) -> str:
         sanitized = sanitized.lstrip(".")
     sanitized = sanitized.rstrip(".")
 
-    # Handle dangerous directory names
     if sanitized in {".", "..", ".git"}:
         sanitized = f"_{sanitized}_safe"
 

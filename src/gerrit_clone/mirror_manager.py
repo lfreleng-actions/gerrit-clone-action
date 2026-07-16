@@ -12,7 +12,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-class MirrorStatus(str, Enum):
+class MirrorStatus(StrEnum):
     """Status values for mirror operations."""
 
     PENDING = "pending"
@@ -235,7 +235,6 @@ class MirrorManager:
             ValueError: If ``clone_url`` is not HTTPS when a token is set.
         """
         if self.github_token:
-            # Validate the clone URL scheme via urllib.parse
             parsed = urlparse(github_repo.clone_url)
             if parsed.scheme != "https":
                 raise ValueError(
@@ -285,13 +284,11 @@ class MirrorManager:
         """
         push_url = self._build_push_url(github_repo)
 
-        # Log the URL without exposing the token
         if self.github_token:
             logger.debug(f"Pushing to GitHub (HTTPS): {github_repo.clone_url}")
         else:
             logger.debug(f"Pushing to GitHub (SSH): {push_url}")
 
-        # Build git push command — no secrets on the command line
         cmd = ["git", "-C", str(local_path), "push", "--mirror", push_url]
 
         try:
@@ -406,7 +403,6 @@ class MirrorManager:
             local_path: Local (bare) clone path
             github_repo: Target GitHub repository that was just pushed to
         """
-        # --- Step 1: try the fast path (HEAD is a normal branch) ----------
         try:
             branch = get_current_branch(local_path)
         except (FileNotFoundError, ValueError):
@@ -419,7 +415,6 @@ class MirrorManager:
             if head_ref and head_ref.startswith("refs/heads/"):
                 branch = head_ref[len("refs/heads/") :]
 
-        # --- Step 2: if HEAD isn't a branch, classify and try fallback ----
         if not branch:
             if is_gerrit_parent_project(local_path):
                 # Gerrit parent project — no branches at all.  This is
@@ -462,7 +457,6 @@ class MirrorManager:
                 )
                 return
 
-        # --- Step 3: apply the default branch on GitHub -------------------
         # Skip the API call when GitHub already has the correct default
         # branch.  On a routine resync every repo would otherwise incur
         # a redundant PATCH request, wasting REST API rate-limit budget.
@@ -576,7 +570,6 @@ class MirrorManager:
 
         logger.info(f"Starting mirror of {len(projects)} projects")
 
-        # Step 0: Clean up existing directories if overwrite is enabled
         if self.overwrite and self.config.path.exists():
             logger.info("🧹 Overwrite enabled - cleaning existing directories...")
             self._cleanup_existing_repos(projects)
@@ -585,7 +578,6 @@ class MirrorManager:
         logger.info("📊 Checking rate-limit budget before batch operations...")
         self.github_api.budget.preflight_check_sync(self.github_api.client)
 
-        # Step 1: Clone from Gerrit using existing CloneManager
         # This handles all the dependency ordering and safe parallel operations
         logger.info("📥 Cloning repositories from Gerrit...")
         clone_results = self.clone_manager.clone_projects(projects)
@@ -676,7 +668,6 @@ class MirrorManager:
                 f"aborting batch: {sorted(filter_failed_projects)}"
             )
 
-        # Step 2: Batch fetch existing GitHub repos (GraphQL with retry)
         logger.info("🔍 Fetching existing GitHub repositories (GraphQL)...")
         existing_repos = self.github_api.list_all_repos_graphql(self.github_org)
 
@@ -686,7 +677,6 @@ class MirrorManager:
         )
         logger.info(f"Found {len(existing_repos)} existing GitHub repositories")
 
-        # Step 3: Plan operations (in-memory, instant)
         logger.info("📋 Planning GitHub operations...")
         repos_to_delete: list[str] = []
         repos_to_create: list[dict[str, Any]] = []
@@ -738,7 +728,6 @@ class MirrorManager:
             f"Reuse {len(repos_lookup)}"
         )
 
-        # Step 4: Execute batch operations
         # Create a shared TokenBucketLimiter so rate-limit state
         # (including reduced rate from 403 responses) persists
         # across the delete → create transition.
@@ -809,7 +798,6 @@ class MirrorManager:
                 else:
                     logger.error(f"❌ Failed to create {name}: {error}")
 
-        # Step 5: Push to GitHub (can be parallelized further if needed)
         logger.info("📤 Pushing repositories to GitHub...")
         mirror_results: list[MirrorResult] = []
         push_success = 0
@@ -873,7 +861,6 @@ class MirrorManager:
             push_skipped,
         )
 
-        # Step 6: Repair pass — fix repos with no default branch
         if self.fix_default_branch:
             self._fix_default_branches(
                 clone_results,
@@ -963,7 +950,6 @@ class MirrorManager:
             len(repos_needing_fix),
         )
 
-        # Build a lookup from GitHub name → local clone path
         clone_path_lookup: dict[str, Path] = {}
         for cr in clone_results:
             if cr.success and cr.path:
@@ -987,7 +973,6 @@ class MirrorManager:
                 no_clone_count += 1
                 continue
 
-            # Check for Gerrit parent project
             if is_gerrit_parent_project(local_path):
                 logger.info(
                     "ℹ️  %s/%s is a Gerrit parent project "  # noqa: RUF001
@@ -1020,7 +1005,6 @@ class MirrorManager:
             if not branch:
                 branch = branches[0]
 
-            # Get the GitHubRepo object to call the API
             github_repo = repos_lookup.get(github_name)
             if not github_repo:
                 logger.debug(

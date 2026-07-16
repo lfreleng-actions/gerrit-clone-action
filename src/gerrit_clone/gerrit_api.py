@@ -116,14 +116,12 @@ class GerritAPIClient:
         discovering_projects(self.config.host, method="http")
 
         try:
-            # Execute with retry for transient failures
             response_data = execute_with_retry(
                 self._fetch_projects_request,
                 self.config.retry_policy,
                 f"fetch projects from {self.config.host}",
             )
 
-            # Parse projects from response
             projects = self._parse_projects_response(response_data)
 
             logger.debug("Found %d projects to process", len(projects))
@@ -154,7 +152,6 @@ class GerritAPIClient:
             # Make request to projects API
             response = self.client.get("/projects/?d")
 
-            # Handle different HTTP status codes
             if response.status_code == 200:
                 return self._parse_json_response(response.text)
             elif response.status_code == 401:
@@ -243,7 +240,6 @@ class GerritAPIClient:
             # Remove Gerrit's magic prefix if present
             clean_text = self._strip_gerrit_prefix(response_text)
 
-            # Parse JSON
             result = json.loads(clean_text)
             return result if isinstance(result, dict) else {}
 
@@ -273,7 +269,6 @@ class GerritAPIClient:
             if isinstance(project_info, dict):
                 state_str = project_info.get("state", "ACTIVE")
 
-            # Parse state enum
             try:
                 state = ProjectState(state_str)
             except ValueError:
@@ -283,19 +278,16 @@ class GerritAPIClient:
                 )
                 state = ProjectState.ACTIVE
 
-            # Extract description
             description = None
             if isinstance(project_info, dict):
                 description = project_info.get("description")
 
-            # Extract web links
             web_links = None
             if isinstance(project_info, dict) and "web_links" in project_info:
                 web_links = project_info["web_links"]
                 if not isinstance(web_links, list):
                     web_links = None
 
-            # Create project object
             return Project(
                 name=project_name,
                 state=state,
@@ -333,7 +325,6 @@ class GerritAPIClient:
                     logger.debug(f"Skipping system project: {project_name}")
                     continue
 
-                # Parse individual project
                 project = self._parse_project_data(project_name, project_info)
                 projects.append(project)
 

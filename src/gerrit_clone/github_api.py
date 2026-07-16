@@ -168,7 +168,6 @@ class GitHubAPI:
             # Record rate-limit headers from EVERY response
             self._budget.update_from_headers_sync(response.headers)
 
-            # Handle errors using shared method
             self._handle_response_errors(response, endpoint)
 
             response.raise_for_status()
@@ -218,7 +217,6 @@ class GitHubAPI:
         elif response.status_code == 404:
             raise GitHubNotFoundError(f"Resource not found: {endpoint}")
         elif response.status_code == 403:
-            # Check for rate limiting using official GitHub headers
             rate_limit_remaining = response.headers.get(
                 "X-RateLimit-Remaining"
             )
@@ -563,10 +561,6 @@ class GitHubAPI:
         """
         self._request("DELETE", f"/repos/{owner}/{repo_name}")
 
-    # -----------------------------------------------------------------
-    # Async single-repo operations (used by batch methods)
-    # -----------------------------------------------------------------
-
     async def _delete_repo_async_with_client(
         self,
         client: httpx.AsyncClient,
@@ -611,7 +605,6 @@ class GitHubAPI:
             try:
                 response = await client.delete(url)
 
-                # Update budget from headers on EVERY response
                 if budget:
                     await budget.update_from_headers(
                         response.headers
@@ -816,7 +809,6 @@ class GitHubAPI:
             try:
                 response = await client.post(url, json=payload)
 
-                # Update budget from headers on EVERY response
                 if budget:
                     await budget.update_from_headers(
                         response.headers
@@ -989,9 +981,7 @@ class GitHubAPI:
             await progress.record(success=False, name=name)
         return None, error
 
-    # -----------------------------------------------------------------
     # GraphQL - list all repos with retry
-    # -----------------------------------------------------------------
 
     def list_all_repos_graphql(
         self,
@@ -1164,8 +1154,11 @@ class GitHubAPI:
                             continue
                         break
 
-                    org_data = data.get("data", {}).get(
-                        "organization"
+                    data_payload = data.get("data")
+                    org_data = (
+                        data_payload.get("organization")
+                        if data_payload
+                        else None
                     )
                     if not org_data:
                         logger.warning(
@@ -1319,9 +1312,7 @@ class GitHubAPI:
         )
         return repos_map
 
-    # -----------------------------------------------------------------
     # Batch operations with token-bucket rate limiting
-    # -----------------------------------------------------------------
 
     async def batch_delete_repos(
         self,
@@ -1642,9 +1633,7 @@ class GitHubAPI:
             return results_map
 
 
-# -------------------------------------------------------------------
 # Module-level helpers
-# -------------------------------------------------------------------
 
 
 def sanitize_description(

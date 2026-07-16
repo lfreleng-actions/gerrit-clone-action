@@ -177,7 +177,6 @@ class ConfigManager:
         # Merge configurations with precedence
         merged = self._merge_configs(file_config, env_config, cli_config)
 
-        # Build and validate final configuration
         return self._build_config(merged)
 
     def _load_file_config(
@@ -228,7 +227,6 @@ class ConfigManager:
         """Load configuration from environment variables."""
         config: dict[str, Any] = {}
 
-        # Load each configuration section
         self._load_connection_env_vars(config)
         self._load_clone_behavior_env_vars(config)
         self._load_security_env_vars(config)
@@ -354,7 +352,6 @@ class ConfigManager:
 
     def _build_config(self, config_dict: dict[str, Any]) -> Config:
         """Build Config object from merged configuration dictionary."""
-        # Extract retry policy settings
         retry_config = {}
         if "retry_attempts" in config_dict:
             retry_config["max_attempts"] = config_dict.pop("retry_attempts")
@@ -365,14 +362,11 @@ class ConfigManager:
         if "retry_max_delay" in config_dict:
             retry_config["max_delay"] = config_dict.pop("retry_max_delay")
 
-        # Create retry policy
         retry_policy = RetryPolicy(**retry_config) if retry_config else RetryPolicy()
 
-        # Handle path conversion
         if "path" in config_dict:
             config_dict["path"] = Path(config_dict["path"])
 
-        # Handle ssh_identity_file conversion
         if "ssh_identity_file" in config_dict:
             config_dict["ssh_identity_file"] = Path(config_dict["ssh_identity_file"])
 
@@ -394,7 +388,6 @@ class ConfigManager:
                 else:
                     config_dict.pop("discovery_method")
 
-        # Handle source_type conversion
         if "source_type" in config_dict:
             st = config_dict["source_type"]
             if isinstance(st, str):
@@ -447,7 +440,6 @@ class ConfigManager:
             if isinstance(val, str):
                 config_dict[key] = [val]
 
-        # Validate required fields
         if "host" not in config_dict:
             raise ConfigurationError(
                 "host is required (set via --host, GERRIT_HOST, or config file)"
