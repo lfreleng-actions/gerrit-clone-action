@@ -571,7 +571,6 @@ def clone(
 
     console = Console(stderr=True)
 
-    # Initialize variables for exception handler scope
     file_logger = None
     error_collector = None
     log_file_path = None
@@ -1935,7 +1934,6 @@ def mirror(
 
     console = Console(stderr=True)
 
-    # Initialize variables for exception handler scope
     file_logger = None
     error_collector = None
     log_file_path = None
@@ -2386,7 +2384,6 @@ def reset(
     """
     console = Console(stderr=True)
 
-    # Initialize variables for exception handler scope
     file_logger = None
     error_collector = None
     log_file_path = None

@@ -405,6 +405,7 @@ class Config:
                     logger.debug(
                         f"API discovery failed for {self.host}, using basic URL: {e}"
                     )
+                    # aislop-ignore-next-line hardcoded-url -- URL built from configured host, not a hardcoded endpoint
                     self.base_url = f"https://{self.host}"
             elif self.source_type == SourceType.GITHUB:
                 # For GitHub, use api.github.com or GitHub Enterprise URL.

@@ -72,7 +72,7 @@ class GerritAPIDiscovery:
             host: Gerrit server hostname
 
         Returns:
-            The discovered base URL (e.g., "https://host/r")
+            The discovered base URL, e.g. the host followed by "/r".
 
         Raises:
             GerritDiscoveryError: If no valid API endpoint is found
@@ -91,6 +91,7 @@ class GerritAPIDiscovery:
 
         # Test each potential path
         for path in test_paths:
+            # aislop-ignore-next-line hardcoded-url -- URL built from caller-supplied host, not a hardcoded endpoint
             base_url = f"https://{host}{path}"
             logger.debug(f"Testing API endpoint: {base_url}")
 
@@ -116,6 +117,7 @@ class GerritAPIDiscovery:
         """
         try:
             logger.debug(f"Checking for redirects from https://{host}")
+            # aislop-ignore-next-line hardcoded-url -- URL built from caller-supplied host, not a hardcoded endpoint
             response = self.client.get(f"https://{host}", follow_redirects=False)
 
             if response.status_code in (301, 302, 303, 307, 308):
@@ -140,7 +142,7 @@ class GerritAPIDiscovery:
         """Test if the projects API is available at the given base URL.
 
         Args:
-            base_url: Base URL to test (e.g., "https://host/r")
+            base_url: Base URL to test, e.g. the host followed by "/r".
 
         Returns:
             True if the API is working, False otherwise

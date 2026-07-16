@@ -284,13 +284,11 @@ class MirrorManager:
         """
         push_url = self._build_push_url(github_repo)
 
-        # Log the URL without exposing the token
         if self.github_token:
             logger.debug(f"Pushing to GitHub (HTTPS): {github_repo.clone_url}")
         else:
             logger.debug(f"Pushing to GitHub (SSH): {push_url}")
 
-        # Build git push command — no secrets on the command line
         cmd = ["git", "-C", str(local_path), "push", "--mirror", push_url]
 
         try:
