@@ -1137,7 +1137,6 @@ class RefreshWorker:
             )
 
             if ls_remote_result.returncode == 0:
-                # Parse output like "ref: refs/heads/master	HEAD"
                 for line in ls_remote_result.stdout.strip().split("\n"):
                     if line.startswith("ref:"):
                         ref = line.split()[1]
@@ -1240,7 +1239,6 @@ class RefreshWorker:
                 logger.debug(
                     f"{repo_path.name}: Gerrit parent project (meta-only), no code branches to refresh"
                 )
-                # Update result to indicate this is a skip, not a failure
                 result.error_message = (
                     "Gerrit parent project (meta-only, no code branches)"
                 )

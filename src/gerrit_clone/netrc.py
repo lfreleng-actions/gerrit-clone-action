@@ -264,7 +264,6 @@ class NetrcParser:
                         self._unescape_quoted_string(placeholders[raw_token])
                     )
                 elif "\x00QUOTED" in raw_token:
-                    # Handle case where placeholder is part of larger token
                     processed_token = raw_token
                     for placeholder, quoted in placeholders.items():
                         if placeholder in processed_token:
