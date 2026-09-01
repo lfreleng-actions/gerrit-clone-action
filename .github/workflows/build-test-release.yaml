@@ -39,6 +39,7 @@ jobs:
       contents: write       # Create the GitHub release / attach assets
       id-token: write       # OIDC for build provenance attestations
       attestations: write   # Build provenance attestations
+      issues: read          # Grype reads CVE bypass issues
     # Pinned to python-workflows v0.1.1 release commit
     # yamllint disable-line rule:line-length
     uses: lfreleng-actions/python-workflows/.github/workflows/build-test-release.yaml@23636ccc7d19974aa0d164a47ebc5fe2735ec5ed  # v0.3.1

@@ -30,6 +30,7 @@ jobs:
     permissions:
       contents: read  # Check out the repository to build and test.
       pull-requests: read  # Read PR metadata for status reporting.
+      issues: read  # Grype reads maintainer-approved CVE bypass issues.
     # Pinned to python-workflows v0.1.0 release commit
     # yamllint disable-line rule:line-length
     uses: lfreleng-actions/python-workflows/.github/workflows/build-test.yaml@23636ccc7d19974aa0d164a47ebc5fe2735ec5ed  # v0.3.1
