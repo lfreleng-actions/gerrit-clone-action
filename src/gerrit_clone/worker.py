@@ -30,10 +30,12 @@ from gerrit_clone.clone_retry_policy import (
     is_filesystem_error_retryable,
     is_retryable_clone_error,
 )
+from gerrit_clone.clone_timeout import claim_new_target
 from gerrit_clone.clone_utils import build_base_clone_command
 from gerrit_clone.logging import get_logger
 from gerrit_clone.models import CloneResult, CloneStatus, Config, Project
 from gerrit_clone.pathing import check_path_conflicts, get_project_path
+from gerrit_clone.subprocess_tracking import run_tracked
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -282,17 +284,16 @@ class CloneWorker:
             ):
                 self._late_nested_checks += 1
 
-            # Execute git clone directly to target path - Git handles its own atomicity
-            process_result = subprocess.run(
+            # Claimed as it is taken, so a timeout may discard what this
+            # clone leaves behind; an existing destination belongs to
+            # whoever put it there. Tracked so a batch that gives up can
+            # terminate the child rather than wait for it.
+            claim_new_target(target_path, project.name)
+            process_result = run_tracked(
                 cmd,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
                 timeout=self.config.clone_timeout,
                 env=env,
                 cwd=self.config.path,
-                check=False,
             )
             log_ssh_debug_output(self.config, process_result)
 

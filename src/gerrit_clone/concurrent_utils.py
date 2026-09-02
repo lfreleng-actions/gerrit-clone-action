@@ -13,6 +13,11 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 from gerrit_clone.logging import get_logger
+from gerrit_clone.subprocess_tracking import (
+    abandon_generation,
+    enter_generation,
+    new_generation,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -62,8 +67,12 @@ class _TrackedThreadPoolExecutor(ThreadPoolExecutor):
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self._generation = new_generation()
+        kwargs.setdefault("initializer", enter_generation)
+        kwargs.setdefault("initargs", (self._generation,))
         super().__init__(*args, **kwargs)
         self._tracked_futures: set[Future[Any]] = set()
+        self._abandoned = False
 
     def submit(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Future[Any]:  # type: ignore[override]
         """Submit a callable and track the returned future."""
@@ -83,6 +92,41 @@ class _TrackedThreadPoolExecutor(ThreadPoolExecutor):
                 cancelled_count += 1
         return cancelled_count
 
+    @property
+    def generation(self) -> int:
+        """Identity of this pool, carried by its worker threads."""
+        return self._generation
+
+    @property
+    def abandoned(self) -> bool:
+        """Whether outstanding work has been given up on."""
+        return self._abandoned
+
+    def abandon(self) -> int:
+        """Give up on outstanding work without waiting for it.
+
+        Cancels every future that has not started, terminates the child
+        processes that running tasks registered, and marks the executor
+        so that leaving :func:`interruptible_executor` does not wait for
+        those tasks to finish.
+
+        Cancelling a future cannot reach a task already inside
+        ``subprocess.run``, and ``shutdown(wait=False)`` only stops the
+        executor waiting, so terminating the child is the only thing
+        that actually stops the work.
+
+        Only this pool's own children are affected: abandonment is
+        scoped to the generation its worker threads carry, so a batch
+        that gives up cannot disturb a concurrent or later one.
+
+        Returns:
+            Number of futures successfully cancelled
+        """
+        self._abandoned = True
+        cancelled_count = self.cancel_all_pending()
+        abandon_generation(self._generation)
+        return cancelled_count
+
 
 @contextmanager
 def interruptible_executor(
@@ -93,10 +137,16 @@ def interruptible_executor(
 
     When interrupted with Ctrl+C, this context manager:
     1. Cancels all pending futures immediately
-    2. Shuts down the executor without waiting for running tasks
-    3. Re-raises KeyboardInterrupt for the caller to handle
+    2. Terminates the child processes running tasks registered
+    3. Shuts down the executor without waiting for running tasks
+    4. Re-raises KeyboardInterrupt for the caller to handle
 
     This ensures a single Ctrl+C press cleanly stops all workers.
+
+    A caller that gives up for its own reasons -- an overall timeout,
+    say -- can take the same exit by calling ``executor.abandon()``
+    before leaving the block.  Otherwise the block waits for running
+    tasks to finish, which is the right default.
 
     Args:
         max_workers: Maximum number of worker threads
@@ -127,8 +177,10 @@ def interruptible_executor(
     except KeyboardInterrupt:
         interrupted = True
 
-        # Cancel all pending futures immediately
-        cancelled_count = executor.cancel_all_pending()
+        # Cancel pending futures and stop the git processes that running
+        # tasks started.  Those children are in their own process group,
+        # so the terminal's SIGINT does not reach them.
+        cancelled_count = executor.abandon()
         logger.debug(f"Cancelled {cancelled_count} pending tasks")
 
         # Shutdown executor without waiting for running tasks
@@ -141,9 +193,26 @@ def interruptible_executor(
         raise
 
     finally:
-        if not interrupted:
-            # Normal shutdown - wait for completion
-            executor.shutdown(wait=True)
+        if interrupted:
+            pass
+        elif executor.abandoned:
+            # Leave promptly, as the caller asked.
+            executor.shutdown(wait=False, cancel_futures=True)
+        else:
+            # Normal shutdown - wait for completion.  cancel_futures is
+            # deliberately absent: queued work must still run.
+            try:
+                executor.shutdown(wait=True)
+            except KeyboardInterrupt:
+                # Ctrl+C *during* the wait.  The except branch above has
+                # already been passed, and the children sit in their own
+                # sessions where the terminal's SIGINT cannot reach
+                # them, so they would keep running to their own
+                # timeouts.  Take the abandon exit instead.
+                executor.abandon()
+                executor.shutdown(wait=False, cancel_futures=True)
+                suppress_logging_after_interrupt()
+                raise
 
 
 def handle_sigint_gracefully() -> None:

@@ -15,6 +15,7 @@ import subprocess
 from typing import TYPE_CHECKING
 
 from gerrit_clone.logging import get_logger
+from gerrit_clone.subprocess_tracking import run_tracked
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -66,13 +67,21 @@ def remove_token_from_remote_url(
     try:
         clean_url = project.clone_url or project.https_url(config.base_url)
 
-        subprocess.run(
+        # Tracked and bounded: this runs after the clone, so a batch
+        # that has given up must be able to stop it, and an unbounded
+        # call here could hang the worker indefinitely.
+        result = run_tracked(
             ["git", "remote", "set-url", "origin", clean_url],
             cwd=repo_path,
-            capture_output=True,
-            text=True,
-            check=True,
+            timeout=config.clone_timeout,
         )
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(
+                result.returncode,
+                result.args,
+                output=result.stdout,
+                stderr=result.stderr,
+            )
         logger.debug(f"Removed token from remote URL for {project.name}")
     except subprocess.CalledProcessError as e:
         # CRITICAL: Token removal failed - this is a security issue

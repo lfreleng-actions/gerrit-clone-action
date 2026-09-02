@@ -25,6 +25,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from gerrit_clone.logging import get_logger
+from gerrit_clone.subprocess_tracking import (
+    ProcessAbandonedError,
+    batch_abandoned,
+    run_tracked,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -349,21 +354,40 @@ def set_ssh_remote(
 
     for attempt in range(1, max_attempts + 1):
         try:
-            subprocess.run(
+            # Tracked like the clone itself: a batch that gives up must
+            # be able to stop this too, or it outlives the batch and
+            # races the cleanup of the directory it is working in.
+            result = run_tracked(
                 ["git", "remote", "set-url", "origin", ssh_url],
                 cwd=repo_path,
-                check=True,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
                 timeout=10,
                 env=env,  # Use isolated environment
             )
+            if result.returncode != 0:
+                # A terminated command carries a negative return code,
+                # which is indistinguishable from git having failed on
+                # its own.  Only the tracker knows the difference.
+                if batch_abandoned():
+                    raise ProcessAbandonedError(
+                        f"Setting the SSH remote for {project_name} was abandoned"
+                    )
+                raise subprocess.CalledProcessError(
+                    result.returncode,
+                    result.args,
+                    output=result.stdout,
+                    stderr=result.stderr,
+                )
             logger.debug(
                 f"Set SSH remote for [project]{project_name}[/project]: {ssh_url}"
             )
             return
+        except ProcessAbandonedError:
+            # Every other failure here is reported and shrugged off, the
+            # clone itself having worked.  This one is not: the batch
+            # has given up, and swallowing it would have the worker
+            # report success for a repository still on HTTPS, which the
+            # timeout cleanup would then keep.
+            raise
         except subprocess.SubprocessError as e:
             error_text = _subprocess_error_text(e)
             if not _is_config_lock_error(error_text):

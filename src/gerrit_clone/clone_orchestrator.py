@@ -26,6 +26,7 @@ from gerrit_clone.clone_ordering import (
 )
 from gerrit_clone.clone_reporting import log_project_result
 from gerrit_clone.clone_results import build_failure_result
+from gerrit_clone.clone_timeout import record_timeout_results, release_claims
 from gerrit_clone.concurrent_utils import interruptible_executor
 from gerrit_clone.github_worker import clone_github_repository
 from gerrit_clone.logging import get_logger
@@ -318,39 +319,16 @@ class CloneManager:
         future_to_project: dict[Future[CloneResult], Project],
         results: list[CloneResult],
         overall_timeout: int,
+        generation: int | None = None,
     ) -> None:
         """Cancel outstanding clones and synthesise timeout results."""
-        logger.error(f"Clone operations timed out after {overall_timeout}s")
-
-        # Outstanding work is derived from what has actually been recorded,
-        # never from future state. Two separate races make future.done()
-        # unreliable here: cancel() succeeds only while a future is queued
-        # and then reports done(), and a future can finish after
-        # as_completed() raised without ever having been yielded to us.
-        # Either way the project has no result, so filtering on done()
-        # would silently drop it from the report.
-        recorded = {result.project.name for result in results}
-        outstanding = [
-            (future, project)
-            for future, project in future_to_project.items()
-            if project.name not in recorded
-        ]
-
-        for future, project in outstanding:
-            future.cancel()
-            logger.warning(f"Cancelled clone for {project.name}")
-
-        for _future, project in outstanding:
-            results.append(
-                build_failure_result(
-                    self.config,
-                    project,
-                    f"Operation timed out after {overall_timeout}s",
-                )
-            )
-
-        # Don't raise exception, return partial results
-        logger.warning(f"Returning {len(results)} partial results due to timeout")
+        record_timeout_results(
+            self.config,
+            future_to_project,
+            results,
+            overall_timeout,
+            generation,
+        )
 
     def _execute_bulk_clone(self, projects: list[Project]) -> list[CloneResult]:
         """Execute bulk clone operation with proper thread management.
@@ -386,27 +364,47 @@ class CloneManager:
         clone_pool = interruptible_executor(
             max_workers=thread_count, thread_name_prefix="clone"
         )
-        with isolated_git_config_scope(), clone_pool as executor:
-            # Submit all clone tasks
-            logger.debug(f"Submitting {len(projects)} clone tasks to thread pool")
-            future_to_project = {
-                executor.submit(self._clone_project_with_progress, project): project
-                for project in projects
-            }
-            logger.debug(
-                f"All {len(future_to_project)} tasks submitted, waiting for completion"
-            )
+        generation: int | None = None
+        try:
+            with isolated_git_config_scope(), clone_pool as executor:
+                generation = executor.generation
+                # Submit all clone tasks
+                logger.debug(f"Submitting {len(projects)} clone tasks to thread pool")
+                future_to_project = {
+                    executor.submit(self._clone_project_with_progress, project): project
+                    for project in projects
+                }
+                logger.debug(
+                    f"All {len(future_to_project)} tasks submitted, waiting for completion"
+                )
 
-            # Add overall timeout to prevent hanging indefinitely
-            # Use a generous timeout: individual timeout * 2 + buffer for all projects
-            overall_timeout = (self.config.clone_timeout * 2) + 60
-            logger.debug(f"Setting overall operation timeout to {overall_timeout}s")
+                # Add overall timeout to prevent hanging indefinitely
+                # Use a generous timeout: individual timeout * 2 + buffer for all projects
+                overall_timeout = (self.config.clone_timeout * 2) + 60
+                logger.debug(f"Setting overall operation timeout to {overall_timeout}s")
 
-            # Collect results as they complete with timeout
-            try:
-                self._consume_clone_futures(future_to_project, results, overall_timeout)
-            except TimeoutError:
-                self._handle_clone_timeout(future_to_project, results, overall_timeout)
+                # Collect results as they complete with timeout
+                try:
+                    self._consume_clone_futures(
+                        future_to_project, results, overall_timeout
+                    )
+                except TimeoutError:
+                    # Cancelling futures only stops the queued ones; a clone
+                    # already inside git keeps running, and leaving the
+                    # block would wait for it. Abandon before reporting.
+                    cancelled = executor.abandon()
+                    logger.warning(
+                        f"Abandoned {cancelled} queued clone(s) "
+                        f"and stopped those already running"
+                    )
+                    self._handle_clone_timeout(
+                        future_to_project, results, overall_timeout, generation
+                    )
+        finally:
+            # Reservations belong to the batch that took them, and
+            # must be given up even when the block is left by the
+            # Ctrl+C that interruptible_executor re-raises.
+            release_claims(generation)
 
         return results
 

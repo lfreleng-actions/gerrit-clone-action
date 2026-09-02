@@ -15,6 +15,7 @@ import subprocess
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from gerrit_clone.clone_timeout import TargetOwnedError, claim_new_target
 from gerrit_clone.clone_utils import (
     analyze_git_clone_error,
     build_base_clone_command,
@@ -29,6 +30,7 @@ from gerrit_clone.github_token_hygiene import remove_token_from_remote_url
 from gerrit_clone.logging import get_logger
 from gerrit_clone.models import CloneResult, CloneStatus, Config, Project
 from gerrit_clone.pathing import AtomicClonePath
+from gerrit_clone.subprocess_tracking import run_tracked
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -157,6 +159,19 @@ def _clone_with_git(
 
     env = build_git_env(config)
 
+    # Reserved as it is taken, so a timeout may discard what this clone
+    # leaves behind.  Reached only once the already-exists checks above
+    # have passed, so the destination is absent; a refusal means another
+    # batch is already cloning there and this one must stand down rather
+    # than write to a path it does not own.
+    try:
+        claim_new_target(target_path, project.name)
+    except TargetOwnedError as exc:
+        logger.error(f"✗ {project.name}: {exc}")
+        return build_clone_result(
+            project, target_path, started_at, CloneStatus.FAILED, str(exc)
+        )
+
     # Use atomic clone path for safety (automatic cleanup on failure)
     with AtomicClonePath(target_path) as atomic_path:
         cmd = build_base_clone_command(clone_url, atomic_path.temp_path, config)
@@ -168,13 +183,13 @@ def _clone_with_git(
 
         try:
             logger.debug(f"Executing: {' '.join(cmd)}")
-            result = subprocess.run(
+            # Tracked so a batch that gives up can terminate the child
+            # rather than wait for it; see
+            # gerrit_clone.subprocess_tracking.
+            result = run_tracked(
                 cmd,
-                capture_output=True,
-                text=True,
                 timeout=config.clone_timeout,
                 env=env,
-                check=False,
             )
 
             if result.returncode != 0:
