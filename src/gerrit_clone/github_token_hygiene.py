@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 The Linux Foundation
 
-"""Removal of authentication tokens from a freshly cloned repository.
+"""Check that a freshly cloned repository holds no authentication token.
 
-Tokens are embedded in the clone URL to authenticate HTTPS clones; this
-module strips them back out of ``.git/config`` afterwards and destroys
-the clone if that cannot be done.
+Clones authenticate through the process environment, so nothing this
+tool does puts a token in ``.git/config``.  This module is the check on
+that: it runs only when the remote URL turns out to hold the configured
+token anyway, which takes an externally supplied ``project.clone_url``
+that carried one in, and destroys the clone rather than leaving it.
 """
 
 from __future__ import annotations
@@ -44,16 +46,20 @@ def remove_token_from_remote_url(
     project: Project,
     config: Config,
 ) -> None:
-    """Remove authentication token from git remote URL after cloning.
+    """Rewrite the remote without its token, or destroy the clone.
 
-    Security measure to prevent token leakage:
-    - Tokens are embedded in URLs for clone authentication
-    - After successful clone, the remote URL is updated to remove the token
-    - This prevents the token from being stored in .git/config
-    - Subsequent git operations will use credential helper or SSH
+    Reached only when the remote URL holds the configured token, which
+    this tool never puts there -- so the URL came in that way, through
+    an externally supplied ``project.clone_url``.
 
-    This operation is CRITICAL for security - if token removal fails, the clone
-    operation will fail to prevent credential leakage in .git/config.
+    In that case there is no clean replacement to write: the only
+    candidate is that same value.  So this refuses, and the clone is
+    destroyed rather than kept with a credential in ``.git/config``.
+    Sanitising the URL instead, and cloning successfully, is the
+    subject of issue #277.
+
+    Failure here is deliberately fatal to the clone: a repository left
+    on disk holding a token is the outcome being prevented.
 
     Args:
         repo_path: Path to cloned repository
@@ -65,6 +71,13 @@ def remove_token_from_remote_url(
     """
     try:
         clean_url = project.clone_url or project.https_url(config.base_url)
+        if config.github_token and config.github_token in clean_url:
+            # The replacement comes from ``project.clone_url``, which is
+            # the externally supplied value that carried the token in,
+            # so writing it back would leave the credential exactly
+            # where it is.  Refusing takes the destroy-the-clone path
+            # below, rather than reporting a scrub that never happened.
+            raise ValueError("the only available remote URL still contains the token")
 
         subprocess.run(
             ["git", "remote", "set-url", "origin", clean_url],

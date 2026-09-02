@@ -62,7 +62,10 @@ def build_base_clone_command(
         if config.branch is not None:
             cmd.extend(["--branch", config.branch])
 
-    # Add clone URL and target path
+    # Add clone URL and target path.  ``--`` first, so an externally
+    # supplied URL beginning with ``-`` is read as a repository rather
+    # than as an option.
+    cmd.append("--")
     cmd.append(clone_url)
     cmd.append(str(target_path))
 

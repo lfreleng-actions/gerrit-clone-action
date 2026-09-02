@@ -1453,8 +1453,22 @@ cloned, while maintaining visibility into discovery issues between the two metho
 
 - Python 3.11+ (tested on 3.11, 3.12, 3.13, 3.14)
 - uv package manager (for development)
-- Git (for clone operations)
+- Git 2.31+ (for clone operations)
+- libcurl 7.58+ (for HTTPS token authentication)
 - SSH client (for authentication)
+
+> **Note:** Git 2.31 (March 2021) introduced the `GIT_CONFIG_COUNT` /
+> `GIT_CONFIG_KEY_*` / `GIT_CONFIG_VALUE_*` environment variables. Both the
+> clone and mirror-push paths use them to pass a GitHub token to `git`, so the
+> token stays out of the command line and out of the host's process listing.
+> Older Git releases ignore those variables, and HTTPS token authentication
+> will fail.
+>
+> The token travels as an `Authorization` header scoped to the source host.
+> Git hands that to libcurl as a custom header, and libcurl before 7.58
+> (January 2018, CVE-2018-1000007) forwards a custom `Authorization` to a
+> different host across a redirect. Every current distribution ships a later
+> release; the floor matters only for a long-lived self-hosted runner.
 
 ### Setup
 

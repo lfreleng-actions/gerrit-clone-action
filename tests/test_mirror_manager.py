@@ -583,7 +583,11 @@ class TestMirrorManager:
         call_env = call_args[1].get("env")
         assert call_env is not None
         assert call_env.get("GIT_CONFIG_COUNT") == "1"
-        assert call_env.get("GIT_CONFIG_KEY_0") == "http.extraheader"
+        # Scoped to the push URL's origin, so the credential is not
+        # offered to any other host git ends up talking to.
+        assert call_env.get("GIT_CONFIG_KEY_0") == (
+            "http.https://github.com.extraheader"
+        )
         assert "AUTHORIZATION: basic " in call_env.get("GIT_CONFIG_VALUE_0", "")
         # Verify our code did not explicitly inject GIT_SSH_COMMAND.
         # The merged env inherits os.environ, so we check that any
@@ -633,7 +637,11 @@ class TestMirrorManager:
         assert call_env is not None
         # Verify GIT_CONFIG env vars are present for token auth
         assert call_env.get("GIT_CONFIG_COUNT") == "1"
-        assert call_env.get("GIT_CONFIG_KEY_0") == "http.extraheader"
+        # Scoped to the push URL's origin, so the credential is not
+        # offered to any other host git ends up talking to.
+        assert call_env.get("GIT_CONFIG_KEY_0") == (
+            "http.https://github.com.extraheader"
+        )
         # Verify our code did not explicitly set GIT_SSH_COMMAND.
         # The merged env inherits os.environ, so we check that the
         # value (if present) was NOT injected by our code — i.e. it

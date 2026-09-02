@@ -5,11 +5,15 @@
 
 from __future__ import annotations
 
+import base64
 import subprocess
 from pathlib import Path
 from subprocess import TimeoutExpired
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from gerrit_clone.github_token_hygiene import remove_token_from_remote_url
 from gerrit_clone.github_worker import (
     _is_gh_cli_available,
     clone_github_repository,
@@ -303,6 +307,83 @@ class TestCloneGitHubRepository:
         assert "--depth" not in cmd
 
     @patch("gerrit_clone.github_worker.subprocess.run")
+    def test_single_branch_is_an_option_not_the_repository(
+        self,
+        mock_run: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """``--single-branch`` must land before the ``--`` separator.
+
+        Inserted after it, git would read it as the repository argument
+        and the clone would fail.
+        """
+        mock_run.side_effect = _mock_successful_git_clone
+
+        project = Project(
+            name="test-repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            clone_url="https://github.com/org/test-repo.git",
+        )
+
+        config = Config(
+            host="github.com/org",
+            source_type=SourceType.GITHUB,
+            path=tmp_path,
+            mirror=False,
+            branch="develop",
+        )
+
+        result = clone_github_repository(project, config)
+
+        assert result.status == CloneStatus.SUCCESS
+        cmd = mock_run.call_args[0][0]
+        separator = cmd.index("--")
+        assert cmd.index("--single-branch") < separator
+        assert cmd[separator + 1] == "https://github.com/org/test-repo.git"
+
+    @patch("gerrit_clone.github_worker.subprocess.run")
+    def test_a_branch_named_like_the_separator_keeps_its_argument(
+        self,
+        mock_run: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """The separator has to be located by position, not by value.
+
+        ``git`` rejects ``--`` as a branch name, so this never reaches
+        a real clone -- but searching for the separator would find the
+        branch argument first and split ``--branch`` from its value,
+        turning a clean rejection into a malformed command.
+        """
+        mock_run.side_effect = _mock_successful_git_clone
+
+        project = Project(
+            name="test-repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            clone_url="https://github.com/org/test-repo.git",
+        )
+
+        config = Config(
+            host="github.com/org",
+            source_type=SourceType.GITHUB,
+            path=tmp_path,
+            mirror=False,
+            branch="--",
+        )
+
+        clone_github_repository(project, config)
+
+        cmd = mock_run.call_args[0][0]
+        # --branch keeps its own argument ...
+        assert cmd[cmd.index("--branch") + 1] == "--"
+        # ... and the trailing triple is intact, with the option ahead
+        # of the separator rather than between the pair above.
+        assert cmd[-3] == "--"
+        assert cmd[-2] == "https://github.com/org/test-repo.git"
+        assert cmd[-4] == "--single-branch"
+
+    @patch("gerrit_clone.github_worker.subprocess.run")
     def test_handles_clone_failure(
         self,
         mock_run: MagicMock,
@@ -485,12 +566,16 @@ class TestCloneGitHubRepository:
         assert (tmp_path / "nested").exists()
 
     @patch("gerrit_clone.github_worker.subprocess.run")
-    def test_embeds_token_in_https_url(
+    def test_keeps_token_out_of_the_clone_url(
         self,
         mock_run: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Test embeds GitHub token in HTTPS URL."""
+        """The token must never reach the git command line.
+
+        A URL argument is visible in the host's process listing for the
+        lifetime of the clone, which nothing can redact after the fact.
+        """
         mock_run.side_effect = _mock_successful_git_clone
 
         project = Project(
@@ -513,18 +598,58 @@ class TestCloneGitHubRepository:
 
         assert result.status == CloneStatus.SUCCESS
         cmd = mock_run.call_args_list[0][0][0]
-        # Verify token was embedded in URL
-        assert "https://ghp_test123456789@github.com/org/test-repo.git" in cmd
+        assert "https://github.com/org/test-repo.git" in cmd
+        assert "ghp_test123456789" not in " ".join(cmd)
+        assert "@github.com" not in " ".join(cmd)
 
     @patch("gerrit_clone.github_worker.subprocess.run")
-    def test_removes_token_from_remote_url_after_clone(
+    def test_authenticates_through_the_environment(
         self,
         mock_run: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Test removes token from remote URL after successful clone."""
+        """Token auth travels in GIT_CONFIG_*, as the push path does."""
+        mock_run.side_effect = _mock_successful_git_clone
 
-        # First call is git clone (success), second is git remote set-url
+        project = Project(
+            name="test-repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            clone_url="https://github.com/org/test-repo.git",
+        )
+
+        config = Config(
+            host="github.com/org",
+            source_type=SourceType.GITHUB,
+            path=tmp_path,
+            use_https=True,
+            github_token="ghp_test123456789",
+        )
+
+        result = clone_github_repository(project, config)
+
+        assert result.status == CloneStatus.SUCCESS
+        env = mock_run.call_args_list[0][1]["env"]
+        expected = base64.b64encode(b"x-access-token:ghp_test123456789").decode()
+        entries = {
+            env[f"GIT_CONFIG_KEY_{index}"]: env[f"GIT_CONFIG_VALUE_{index}"]
+            for index in range(int(env["GIT_CONFIG_COUNT"]))
+        }
+        # Scoped to the clone URL's origin rather than a global
+        # http.extraheader, which git would send to any host it reached.
+        auth_key = "http.https://github.com.extraheader"
+        assert entries[auth_key] == f"AUTHORIZATION: basic {expected}"
+        # The raw token itself is never placed in the environment.
+        assert "ghp_test123456789" not in " ".join(entries.values())
+
+    @patch("gerrit_clone.github_worker.subprocess.run")
+    def test_no_token_removal_needed_after_clone(
+        self,
+        mock_run: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A credential-free clone URL leaves nothing to strip afterwards."""
+
         def mock_git_calls(*args, **kwargs):
             cmd = args[0] if args else kwargs.get("cmd", [])
             if isinstance(cmd, list) and "clone" in cmd:
@@ -553,42 +678,8 @@ class TestCloneGitHubRepository:
         result = clone_github_repository(project, config)
 
         assert result.status == CloneStatus.SUCCESS
-
-        # Verify exactly two subprocess calls were made
-        assert mock_run.call_count == 2, (
-            "Should have two subprocess calls: git clone with token and git "
-            "remote set-url to remove token"
-        )
-
-        # Verify git clone was called with token embedded
-        clone_cmd = mock_run.call_args_list[0][0][0]
-        clone_url = None
-        for _, arg in enumerate(clone_cmd):
-            if arg.startswith("https://"):
-                clone_url = arg
-                break
-
-        assert clone_url is not None, "Clone command should contain an HTTPS URL"
-        assert "ghp_test123456789@github.com" in clone_url, (
-            f"Token should be embedded in clone URL: {clone_url}"
-        )
-        assert clone_url == "https://ghp_test123456789@github.com/org/test-repo.git", (
-            f"Clone URL should have token embedded: {clone_url}"
-        )
-
-        # Verify git remote set-url was called to remove token
-        remote_cmd = mock_run.call_args_list[1][0][0]
-        assert remote_cmd == [
-            "git",
-            "remote",
-            "set-url",
-            "origin",
-            "https://github.com/org/test-repo.git",
-        ], "Remote set-url should remove the token from the URL"
-
-        # Verify the URL in set-url does NOT contain the token
-        assert "ghp_test123456789" not in " ".join(remote_cmd), (
-            "Token should not be present in remote set-url command"
+        assert mock_run.call_count == 1, (
+            "Only the clone itself should run: the remote URL never held a token"
         )
 
     @patch("gerrit_clone.github_worker.subprocess.run")
@@ -621,9 +712,12 @@ class TestCloneGitHubRepository:
         # Verify environment variables were set
         env = mock_run.call_args_list[0][1]["env"]
         assert env["GIT_TERMINAL_PROMPT"] == "0"
-        assert env["GIT_CONFIG_COUNT"] == "1"
+        # Credential helpers stay disabled alongside the token header, so
+        # both entries share one GIT_CONFIG_COUNT block.
+        assert env["GIT_CONFIG_COUNT"] == "2"
         assert env["GIT_CONFIG_KEY_0"] == "credential.helper"
         assert env["GIT_CONFIG_VALUE_0"] == ""
+        assert env["GIT_CONFIG_KEY_1"] == "http.https://github.com.extraheader"
 
     @patch("gerrit_clone.github_worker.subprocess.run")
     def test_https_without_token_uses_credential_helper(
@@ -657,20 +751,63 @@ class TestCloneGitHubRepository:
         assert "https://github.com/org/test-repo.git" in cmd
         assert "@github.com" not in " ".join(cmd)
 
-    @patch("gerrit_clone.github_worker.subprocess.run")
+    def test_a_credentialed_project_url_is_not_written_back(
+        self, tmp_path: Path
+    ) -> None:
+        """The replacement comes from the value under suspicion.
+
+        ``project.clone_url`` is what carried the token in, so setting
+        the remote back to it would leave the credential in
+        .git/config while reporting a successful scrub.  Refusing takes
+        the destroy-the-clone path instead.
+        """
+        token = "ghp_test123456789"
+        repo_path = tmp_path / "repo"
+        (repo_path / ".git").mkdir(parents=True)
+
+        project = Project(
+            name="org/test-repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            clone_url=f"https://{token}@github.com/org/test-repo.git",
+        )
+        config = Config(
+            host="github.com/org",
+            source_type=SourceType.GITHUB,
+            path=tmp_path,
+            use_https=True,
+            github_token=token,
+        )
+
+        with patch("gerrit_clone.github_token_hygiene.subprocess.run") as mock_run:
+            with pytest.raises(RuntimeError) as excinfo:
+                remove_token_from_remote_url(repo_path, project, config)
+
+            # Never even attempted: there was no clean URL to write.
+            mock_run.assert_not_called()
+
+        assert "SECURITY" in str(excinfo.value)
+        assert token not in str(excinfo.value)
+        assert not repo_path.exists()
+
+    @patch("gerrit_clone.github_token_hygiene.subprocess.run")
     def test_handles_token_removal_failure_gracefully(
         self,
         mock_run: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Test that clone fails when token removal fails (security-critical)."""
-        # First call is git clone (success), second is git remote set-url (failure)
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stderr="", stdout=""),  # git clone
-            subprocess.CalledProcessError(
-                1, "git", stderr="error setting remote"
-            ),  # git remote set-url
-        ]
+        """Token removal is security-critical, so a failure destroys the clone.
+
+        Driven directly rather than through ``clone_github_repository``:
+        the resolved clone URL is credential-free, so the clone path no
+        longer reaches this. It stays as the check on that invariant.
+        """
+        mock_run.side_effect = subprocess.CalledProcessError(
+            1, "git", stderr="error setting remote"
+        )
+
+        repo_path = tmp_path / "test-repo"
+        repo_path.mkdir()
 
         project = Project(
             name="test-repo",
@@ -687,11 +824,10 @@ class TestCloneGitHubRepository:
             github_token="ghp_test123456789",
         )
 
-        result = clone_github_repository(project, config)
+        with pytest.raises(RuntimeError) as excinfo:
+            remove_token_from_remote_url(repo_path, project, config)
 
-        # Clone should FAIL if token removal fails (security-critical operation)
-        # We cannot leave credentials in .git/config
-        assert result.status == CloneStatus.FAILED
-        assert result.error_message is not None
-        assert "SECURITY" in result.error_message
-        assert "token" in result.error_message.lower()
+        assert "SECURITY" in str(excinfo.value)
+        assert "token" in str(excinfo.value).lower()
+        # The repository is destroyed rather than left holding a credential.
+        assert not repo_path.exists()

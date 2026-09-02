@@ -10,11 +10,11 @@ output.
 
 from __future__ import annotations
 
-import base64
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
+from gerrit_clone.git_credential_env import build_token_auth_env
 from gerrit_clone.logging import get_logger
 
 if TYPE_CHECKING:
@@ -83,29 +83,23 @@ def build_push_url(settings: PushSettings, github_repo: GitHubRepo) -> str:
         return github_repo.ssh_url
 
 
-def build_push_env(settings: PushSettings) -> dict[str, str]:
+def build_push_env(settings: PushSettings, push_url: str) -> dict[str, str]:
     """Build the git environment overrides used for a mirror push.
 
     Credentials are passed via ``GIT_CONFIG_COUNT`` /
     ``GIT_CONFIG_KEY_*`` / ``GIT_CONFIG_VALUE_*`` environment
     variables so the token never appears on the command line or
-    in ``/proc`` process listings.
+    in ``/proc`` process listings, and scoped to the push URL's origin
+    so it is not offered to any other host.  The clone path
+    authenticates the same way, through the same helper; see
+    :mod:`gerrit_clone.git_credential_env`.
     """
-    env: dict[str, str] = {}
     if settings.github_token:
-        # Pass credentials via GIT_CONFIG_* env vars (Git 2.31+).
-        # This avoids embedding the token in the URL *and* keeps
-        # it off the command line / process listing.
-        credentials = base64.b64encode(
-            f"x-access-token:{settings.github_token}".encode()
-        ).decode()
-        env["GIT_CONFIG_COUNT"] = "1"
-        env["GIT_CONFIG_KEY_0"] = "http.extraheader"
-        env["GIT_CONFIG_VALUE_0"] = f"AUTHORIZATION: basic {credentials}"
-    elif settings.git_ssh_command:
+        return build_token_auth_env(settings.github_token, push_url)
+    if settings.git_ssh_command:
         # Only set GIT_SSH_COMMAND when using SSH push
-        env["GIT_SSH_COMMAND"] = settings.git_ssh_command
-    return env
+        return {"GIT_SSH_COMMAND": settings.git_ssh_command}
+    return {}
 
 
 def log_push_success(github_repo: GitHubRepo, stdout: str, stderr: str) -> None:

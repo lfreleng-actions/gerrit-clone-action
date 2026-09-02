@@ -23,7 +23,11 @@ from gerrit_clone.clone_utils import (
 from gerrit_clone.git_utils import is_git_repository
 from gerrit_clone.github_clone_env import build_git_env
 from gerrit_clone.github_clone_results import build_clone_result
-from gerrit_clone.github_clone_url import redact_clone_url, resolve_clone_url
+from gerrit_clone.github_clone_url import (
+    UnsafeCloneUrlError,
+    redact_clone_url,
+    resolve_clone_url,
+)
 from gerrit_clone.github_gh_cli import clone_with_gh_cli
 from gerrit_clone.github_token_hygiene import remove_token_from_remote_url
 from gerrit_clone.logging import get_logger
@@ -44,13 +48,18 @@ def clone_github_repository(
 
     Supports multiple authentication methods:
     - SSH (default): Uses SSH keys configured in the environment
-    - HTTPS with token: Embeds GitHub token in URL for authentication
+    - HTTPS with token: Authenticates through the git process environment
     - HTTPS with credential helper: Falls back to git credential helper
     - GitHub CLI: Uses gh CLI authentication
 
     For HTTPS cloning with a token:
-    - Token is embedded in the clone URL: https://token@github.com/org/repo.git
-    - Token is removed from .git/config after successful clone for security
+    - The configured token is not put in the clone URL, so it never
+      reaches the process arguments; it is passed via ``GIT_CONFIG_*``
+      instead.  A credential already present in an externally supplied
+      ``project.clone_url`` is passed through as given, and is the
+      subject of issue #277.
+    - A clone whose remote URL still holds the configured token is
+      destroyed rather than kept, as defence in depth
     - GIT_TERMINAL_PROMPT=0 is set to prevent interactive credential prompts
 
     Args:
@@ -149,25 +158,39 @@ def _clone_with_git(
     Returns:
         CloneResult
     """
-    clone_url = resolve_clone_url(project, config)
+    try:
+        clone_url = resolve_clone_url(project, config)
+        env = build_git_env(config, clone_url)
+    except UnsafeCloneUrlError as exc:
+        # Fail closed: a URL git would read as an option, or one that is
+        # not on the configured host, must not be handed to git -- the
+        # second would have the token sent to that host.
+        error_msg = f"Refusing to clone {project.name}: {exc}"
+        logger.error(error_msg)
+        return build_clone_result(
+            project, target_path, started_at, CloneStatus.FAILED, error_msg
+        )
 
     # For logging, show URL without token
     log_url = redact_clone_url(clone_url, project, config.github_token)
     logger.debug(f"Cloning {project.name} with git from {log_url}")
-
-    env = build_git_env(config)
 
     # Use atomic clone path for safety (automatic cleanup on failure)
     with AtomicClonePath(target_path) as atomic_path:
         cmd = build_base_clone_command(clone_url, atomic_path.temp_path, config)
 
         # GitHub-specific: add --single-branch when user explicitly requests a branch
-        # Must insert before the URL (second to last position)
+        # Inserted before the ``--`` separator, so git reads it as an
+        # option rather than as the repository argument.  Positioned
+        # against the command's guaranteed ``["--", url, target]``
+        # tail rather than by searching for the separator: an option
+        # value earlier in the command could equal ``--`` and would be
+        # found first, splitting ``--branch`` from its argument.
         if not config.mirror and config.branch:
-            cmd.insert(-2, "--single-branch")
+            cmd.insert(-3, "--single-branch")
 
         try:
-            logger.debug(f"Executing: {' '.join(cmd)}")
+            logger.debug(f"Executing: {' '.join(cmd).replace(clone_url, log_url)}")
             result = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -192,10 +215,22 @@ def _clone_with_git(
 
             logger.debug(f"✓ Cloned {project.name}")
 
-            # Post-clone: remove token from remote URL for security
+            # Defence in depth.  This tool no longer puts the token in
+            # the URL, so this fires only for an externally supplied one
+            # that already carried it -- and for that case there is no
+            # clean replacement to write, the only candidate being the
+            # very value the token came in on.  So it refuses and
+            # destroys the clone rather than leaving the credential in
+            # .git/config; issue #277 is what would turn that into a
+            # sanitised clone instead.
+            #
+            # Keyed on the resolved URL rather than ``config.use_https``:
+            # the SSH branch falls back to an HTTPS URL when a project
+            # has no SSH URL, and that clone needs the check just as
+            # much.
             if (
                 config.github_token
-                and config.use_https
+                and clone_url.startswith("https://")
                 and config.github_token in clone_url
             ):
                 remove_token_from_remote_url(atomic_path.temp_path, project, config)

@@ -212,7 +212,7 @@ class MirrorManager:
         cmd = ["git", "-C", str(local_path), "push", "--mirror", push_url]
 
         try:
-            env = build_push_env(settings)
+            env = build_push_env(settings, push_url)
             result = subprocess.run(
                 cmd,
                 capture_output=True,

@@ -33,6 +33,7 @@ class TestBuildBaseCloneCommand:
             "--no-hardlinks",
             "--quiet",
             "--mirror",
+            "--",
             clone_url,
             str(target_path),
         ]
@@ -50,10 +51,26 @@ class TestBuildBaseCloneCommand:
             "clone",
             "--no-hardlinks",
             "--quiet",
+            "--",
             clone_url,
             str(target_path),
         ]
         assert "--mirror" not in cmd
+
+    def test_options_are_terminated_before_the_url(self) -> None:
+        """The URL is positional, so git must stop reading options first.
+
+        A clone URL is externally supplied; without ``--`` a value
+        beginning with ``-`` would be read as an option.
+        """
+        config = Config(host="gerrit.example.org", mirror=False, depth=1)
+        clone_url = "https://github.com/org/repo.git"
+        target_path = Path("/tmp/repos/repo")
+
+        cmd = build_base_clone_command(clone_url, target_path, config)
+
+        assert cmd[-3:] == ["--", clone_url, str(target_path)]
+        assert all(not arg.startswith("-") for arg in cmd[cmd.index("--") + 1 :])
 
     def test_clone_with_depth(self) -> None:
         """Test clone command with shallow clone depth."""
