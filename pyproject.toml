@@ -288,6 +288,15 @@ asyncio_default_fixture_loop_scope = "function"
 
 # Coverage configuration
 [tool.coverage.run]
+# Keep the transient coverage database out of the working tree.
+# coverage.py resolves a relative data_file against the current
+# directory, so the default '.coverage' lands wherever pytest runs and
+# can be picked up by tests that inspect on-disk content. TEMP is
+# set on Windows, where /tmp does not exist; elsewhere it is normally
+# unset and the /tmp fallback applies. An explicit value also
+# satisfies python-test-action's data_file configuration check.
+# COVERAGE_FILE (env) still takes precedence when set.
+data_file = "${TEMP-/tmp}/.coverage.gerrit-clone-action"
 source = ["gerrit_clone"]
 branch = true
 omit = [
