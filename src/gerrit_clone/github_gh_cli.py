@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from gerrit_clone.github_clone_results import build_clone_result
 from gerrit_clone.logging import get_logger
 from gerrit_clone.models import CloneStatus
+from gerrit_clone.subprocess_tracking import ProcessAbandonedError, run_tracked
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -88,12 +89,13 @@ def clone_with_gh_cli(
 
     try:
         logger.debug(f"Executing: {' '.join(cmd)}")
-        result = subprocess.run(
+        # Tracked for the same reason the git path is: a batch that
+        # gives up must be able to stop the child rather than wait for
+        # it, and gh spawns a git transfer of its own that has to go
+        # with it.  See gerrit_clone.subprocess_tracking.
+        result = run_tracked(
             cmd,
-            capture_output=True,
-            text=True,
             timeout=config.clone_timeout,
-            check=False,
         )
 
         if result.returncode == 0:
@@ -109,6 +111,11 @@ def clone_with_gh_cli(
             project, target_path, started_at, CloneStatus.FAILED, error_msg
         )
 
+    except ProcessAbandonedError:
+        # The batch gave up before this clone could start.  Reporting it
+        # as an ordinary failure would have the destination kept for a
+        # clone that is never going to run, so it propagates.
+        raise
     except subprocess.TimeoutExpired:
         error_msg = f"Clone timeout after {config.clone_timeout}s"
         logger.error(f"✗ {project.name}: {error_msg}")

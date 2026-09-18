@@ -15,11 +15,14 @@ import shutil
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from gerrit_clone.clone_reservations import TargetOwnedError, claim_target_path
 from gerrit_clone.logging import get_logger
 from gerrit_clone.models import CloneStatus
 from gerrit_clone.pathing import move_conflicting_path
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from gerrit_clone.models import CloneResult
 
 logger = get_logger(__name__)
@@ -35,6 +38,34 @@ def _finalize(result: CloneResult, started_at: datetime) -> None:
     completed_at = datetime.now(UTC)
     result.completed_at = completed_at
     result.duration_seconds = (completed_at - started_at).total_seconds()
+
+
+def _reserve_or_refuse(result: CloneResult, started_at: datetime) -> bool:
+    """Reserve the destination before anything at it is disturbed.
+
+    Clearing a path destroys what is there, so the reservation comes
+    first.  Only one batch can hold a destination; the ones refused have
+    lost the race and leave the winner's clone exactly as they found it,
+    rather than deleting it and discovering the loss afterwards.
+
+    Args:
+        result: Result to update if the reservation is refused
+        started_at: Time the clone attempt began
+
+    Returns:
+        True if another batch owns the path and the caller should stop
+    """
+    try:
+        claim_target_path(result.path, result.project.name)
+    except TargetOwnedError as exc:
+        result.status = CloneStatus.FAILED
+        result.error_message = str(exc)
+        _finalize(result, started_at)
+        logger.error(
+            f"Refusing to clear {result.path} for {result.project.name}: {exc}"
+        )
+        return True
+    return False
 
 
 def _mark_already_exists(result: CloneResult, started_at: datetime) -> bool:
@@ -69,6 +100,12 @@ def _clean_incomplete_clone(result: CloneResult, started_at: datetime) -> bool:
     """
     target_path = result.path
     project_name = result.project.name
+
+    # Whatever occupies this destination from here is this clone's, so a
+    # timeout must be able to discard it.  Taken before the removal, so
+    # a losing batch never touches the winner's directory.
+    if _reserve_or_refuse(result, started_at):
+        return True
 
     if result.nested_under:
         logger.debug(
@@ -138,9 +175,32 @@ def _resolve_nested_file_conflict(
             "",
         )
 
+    # Moving the obstruction is destructive too, so the destination is
+    # reserved before it happens, as above.
+    if _reserve_or_refuse(result, started_at):
+        return True
+
+    def reserve_backup(candidate: Path) -> bool:
+        # The obstruction is moved aside rather than deleted, so where
+        # it lands is a destination like any other: finding the name
+        # free says nothing about another clone being about to use it,
+        # and this rename would then replace that clone's work.  A name
+        # that cannot be taken is passed over for the next one, and a
+        # name that is taken is given up with the rest at batch end.
+        # A project whose own destination is the chosen name is refused
+        # its clone rather than quietly overwritten, which is the same
+        # answer the registry gives anywhere else.
+        try:
+            claim_target_path(candidate, result.project.name)
+        except TargetOwnedError:
+            return False
+        return True
+
     try:
         # Try to move the conflicting file/directory
-        if move_conflicting_path(result.path, _is_nested_repo=True):
+        if move_conflicting_path(
+            result.path, _is_nested_repo=True, reserve=reserve_backup
+        ):
             parent_name = result.nested_under or "parent"
             logger.warning(
                 f"⚠️ Moved conflicting content in parent repository '{parent_name}' to allow cloning of nested repository [project]{result.project.name}[/project]"

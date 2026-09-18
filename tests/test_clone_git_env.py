@@ -30,6 +30,7 @@ from gerrit_clone.clone_git_env import (
     cleanup_isolated_git_configs,
     isolated_git_config_dir,
     isolated_git_config_scope,
+    quarantine_isolated_git_configs,
     set_ssh_remote,
 )
 from gerrit_clone.clone_orchestrator import CloneManager
@@ -39,6 +40,13 @@ from gerrit_clone.models import (
     Config,
     Project,
     ProjectState,
+)
+from gerrit_clone.subprocess_tracking import (
+    ProcessAbandonedError,
+    _thread_state,
+    abandon_generation,
+    enter_generation,
+    new_generation,
 )
 
 if TYPE_CHECKING:
@@ -286,6 +294,25 @@ class TestCleanup:
         assert live not in _isolated_config_dirs
         assert live in _quarantined_config_dirs
 
+    def test_an_abandoned_batch_quarantines_its_directories(self) -> None:
+        """A caught timeout looks like an ordinary exit, but is not one.
+
+        The batch abandons its workers and then swallows the timeout, so
+        nothing propagates out of the scope to mark it.  Collecting the
+        directories on the way out would delete the ``HOME`` of a worker
+        that outlasted the settle wait.
+        """
+        live: Path | None = None
+
+        with isolated_git_config_scope():
+            live = isolated_git_config_dir()
+            quarantine_isolated_git_configs()
+
+        assert live is not None
+        assert live.is_dir(), "deleted a live HOME out from under a worker"
+        assert live not in _isolated_config_dirs
+        assert live in _quarantined_config_dirs
+
     def test_a_later_operation_cannot_collect_a_quarantined_directory(
         self, config: Config
     ) -> None:
@@ -448,7 +475,7 @@ class TestSetSshRemoteRetry:
     """Losing the race for .git/config must not leave origin on HTTPS."""
 
     @patch("gerrit_clone.clone_git_env.time.sleep")
-    @patch("gerrit_clone.clone_git_env.subprocess.run")
+    @patch("gerrit_clone.clone_git_env.run_tracked")
     def test_lock_contention_is_retried_until_it_succeeds(
         self, mock_run: MagicMock, mock_sleep: MagicMock, tmp_path
     ) -> None:
@@ -467,7 +494,7 @@ class TestSetSshRemoteRetry:
         ]
 
     @patch("gerrit_clone.clone_git_env.time.sleep")
-    @patch("gerrit_clone.clone_git_env.subprocess.run")
+    @patch("gerrit_clone.clone_git_env.run_tracked")
     def test_retries_are_bounded(
         self, mock_run: MagicMock, mock_sleep: MagicMock, tmp_path
     ) -> None:
@@ -480,7 +507,7 @@ class TestSetSshRemoteRetry:
         assert mock_sleep.call_count == 2
 
     @patch("gerrit_clone.clone_git_env.time.sleep")
-    @patch("gerrit_clone.clone_git_env.subprocess.run")
+    @patch("gerrit_clone.clone_git_env.run_tracked")
     def test_other_failures_are_not_retried(
         self, mock_run: MagicMock, mock_sleep: MagicMock, tmp_path
     ) -> None:
@@ -497,7 +524,7 @@ class TestSetSshRemoteRetry:
         mock_sleep.assert_not_called()
 
     @patch("gerrit_clone.clone_git_env.time.sleep")
-    @patch("gerrit_clone.clone_git_env.subprocess.run")
+    @patch("gerrit_clone.clone_git_env.run_tracked")
     def test_a_missing_path_failure_is_not_retried(
         self, mock_run: MagicMock, mock_sleep: MagicMock, tmp_path
     ) -> None:
@@ -513,7 +540,40 @@ class TestSetSshRemoteRetry:
         assert mock_run.call_count == 1
         mock_sleep.assert_not_called()
 
-    @patch("gerrit_clone.clone_git_env.subprocess.run")
+    @patch("gerrit_clone.clone_git_env.run_tracked")
+    def test_an_abandoned_rewrite_is_not_swallowed(
+        self, mock_run: MagicMock, tmp_path
+    ) -> None:
+        """A batch that gave up must not leave a clone reported clean.
+
+        Termination shows up as a negative return code, which looks like
+        any other git failure -- and every other failure here is logged
+        and shrugged off, the clone itself having worked.  Doing that
+        with this one had the worker report success for a repository
+        still on HTTPS, which timeout cleanup then kept.
+        """
+        generation = new_generation()
+        enter_generation(generation)
+        try:
+            mock_run.return_value = MagicMock(returncode=-15)
+            abandon_generation(generation)
+
+            with pytest.raises(ProcessAbandonedError):
+                set_ssh_remote("example/repo", tmp_path, SSH_URL, {})
+        finally:
+            _thread_state.generation = None
+
+    @patch("gerrit_clone.clone_git_env.run_tracked")
+    def test_a_refused_launch_is_not_swallowed(
+        self, mock_run: MagicMock, tmp_path
+    ) -> None:
+        """Abandonment before launch arrives as an exception instead."""
+        mock_run.side_effect = ProcessAbandonedError("batch abandoned")
+
+        with pytest.raises(ProcessAbandonedError):
+            set_ssh_remote("example/repo", tmp_path, SSH_URL, {})
+
+    @patch("gerrit_clone.clone_git_env.run_tracked")
     def test_success_runs_once(self, mock_run: MagicMock, tmp_path) -> None:
         mock_run.return_value = MagicMock(returncode=0)
 
