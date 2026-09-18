@@ -57,34 +57,178 @@ def _reject_option_like_url(url: str) -> None:
         )
 
 
+#: Schemes in which a bare username is itself the credential.  GitHub
+#: takes a token that way (``https://TOKEN@github.com/...``), so for
+#: these any userinfo at all is refused.  Elsewhere a username is just
+#: a username -- ``ssh://git@github.com/...`` is the ordinary form --
+#: and only a password is positively a credential.
+_USERNAME_IS_CREDENTIAL = frozenset({"http", "https"})
+
+
+def _reject_credential_in_raw_url(url: str) -> None:
+    """Apply the same rules textually to a URL ``urlparse`` refused.
+
+    Failing open on an unparsable URL is right for *classification* --
+    the origin check owns that case -- but not when a credential is
+    plainly visible regardless: ``https://user:secret@[unclosed/r.git``
+    raises while parsing, and passing it through hands the secret to
+    git all the same.  The same goes for a query, which the structural
+    path refuses and which a malformed authority would otherwise carry
+    straight past: ``https://[unclosed/r.git?access_token=...``.
+
+    These are the rules from :func:`reject_credentialed_url`, not a
+    second set, read off the parts of RFC 3986 that stay unambiguous
+    when the rest does not.
+
+    Args:
+        url: Value ``urlparse`` refused, containing ``://``.
+
+    Raises:
+        UnsafeCloneUrlError: If a credential is identifiable in it.
+    """
+    scheme, _, remainder = url.partition("://")
+    over_http = scheme.lower() in _USERNAME_IS_CREDENTIAL
+
+    authority = remainder
+    for delimiter in ("/", "?", "#"):
+        authority = authority.split(delimiter, 1)[0]
+
+    if "@" in authority:
+        # Userinfo runs to the *last* ``@``; a later one would be in
+        # the host, which is invalid anyway.
+        userinfo = authority.rsplit("@", 1)[0]
+        if ":" in userinfo:
+            raise UnsafeCloneUrlError(
+                "Clone URL carries a password, which would reach the git command line"
+            )
+        if userinfo and over_http:
+            raise UnsafeCloneUrlError(
+                "Clone URL carries a credential in its userinfo, which "
+                "would reach the git command line"
+            )
+
+    if over_http and "?" in remainder:
+        raise UnsafeCloneUrlError(
+            "Clone URL carries a query string, which cannot be shown to be "
+            "credential-free before it reaches the git command line"
+        )
+
+
+def reject_credentialed_url(url: str, token: str | None = None) -> None:
+    """Refuse a clone URL that carries a credential of its own.
+
+    ``project.clone_url`` is externally supplied.  This tool never adds
+    a credential to it, but one already present would reach ``argv``
+    and so the host's process listing, whatever its origin.
+
+    An earlier attempt at this re-implemented git's URL grammar on top
+    of ``urlparse``, which implements a different one, and spent most
+    of its review on the corner cases -- refusing, among others, a
+    ``github.com:org/repo.git`` that git clones perfectly well.  So
+    only what ``urlparse`` is specified for is examined, and only the
+    components that are *definitionally* credentials:
+
+    - Anything without ``://`` is scp-style or unknown and is passed
+      through.  That form has no userinfo syntax to carry a credential
+      in, and it is the shape the grammar is ambiguous about.
+    - A **password** is a credential under any scheme, which covers
+      ``ssh://`` and its ``git+ssh`` aliases without naming them.
+    - A **username** is a credential only over HTTP(S), where it is how
+      a token is passed.  Refusing it generally would reject
+      ``ssh://git@github.com/...``, which git clones every day.
+    - A URL ``urlparse`` cannot split is examined textually instead,
+      and passed through if nothing is found.  The origin check owns
+      the unparsable case, but a credential plainly visible in the
+      authority is not something to wave past on a technicality.
+
+    Classification therefore fails *open* and detection fails *closed*:
+    a shape this cannot recognise is left alone, and a credential it
+    does recognise ends the clone.
+
+    A query string is refused outright over HTTP(S).  A credential can
+    hide in one, and which parameter holds it cannot be known without
+    the guesswork that sank the first attempt -- so rather than name
+    parameters, this declines to vouch for a shape it cannot inspect.
+    Clone URLs here come from a GitHub listing, which never carries a
+    query, so nothing git would be asked to clone is lost.
+
+    The configured token, when there is one, is refused wherever it
+    appears.  That needs no classification at all: the value is known,
+    so finding it anywhere in the URL -- in the path, say, which no
+    structural rule above would look at -- is a positive
+    identification rather than a guess.
+
+    Args:
+        url: Clone URL about to be handed to git.
+        token: This run's configured token, if any, so that a URL
+            carrying it can be recognised outright.
+
+    Raises:
+        UnsafeCloneUrlError: If the URL carries a credential.  The
+            message never repeats the value, being logged and reported.
+    """
+    if token and token in url:
+        raise UnsafeCloneUrlError(
+            "Clone URL contains the configured token, which would reach "
+            "the git command line"
+        )
+
+    if "://" not in url:
+        return
+
+    try:
+        parsed = urlparse(url)
+        username, password = parsed.username, parsed.password
+    except ValueError:
+        _reject_credential_in_raw_url(url)
+        return
+
+    if password:
+        raise UnsafeCloneUrlError(
+            "Clone URL carries a password, which would reach the git command line"
+        )
+
+    scheme = parsed.scheme.lower()
+    if username and scheme in _USERNAME_IS_CREDENTIAL:
+        raise UnsafeCloneUrlError(
+            "Clone URL carries a credential in its userinfo, which would "
+            "reach the git command line"
+        )
+
+    if parsed.query and scheme in _USERNAME_IS_CREDENTIAL:
+        raise UnsafeCloneUrlError(
+            "Clone URL carries a query string, which cannot be shown to be "
+            "credential-free before it reaches the git command line"
+        )
+
+
 def resolve_clone_url(project: Project, config: Config) -> str:
     """Determine the URL to clone from - prefer SSH, fall back to HTTPS.
 
-    The configured token is never added.  It used to be embedded here,
-    which put it in the ``git clone`` arguments and so in the host's
-    process listing; authentication now travels in the environment
-    instead (see :func:`gerrit_clone.github_clone_env.build_git_env`).
-
-    The result is not credential-free in general, only free of anything
-    this tool put there: ``project.clone_url`` is externally supplied
-    and is returned as given, so a credential already in it still
-    reaches ``argv``.  Stripping that is deferred to issue #277.
+    The result carries no credential: the configured token is never
+    added -- it used to be embedded here, which put it in the ``git
+    clone`` arguments and so in the host's process listing, and
+    authentication now travels in the environment instead (see
+    :func:`gerrit_clone.github_clone_env.build_git_env`) -- and a URL
+    that arrived with one of its own is refused rather than passed on.
 
     Args:
         project: Project to clone
         config: Configuration with optional github_token
 
     Returns:
-        The clone URL, with no credential added by this tool.
+        The clone URL, carrying no credential.
 
     Raises:
         UnsafeCloneUrlError: If the URL is not one git would read as a
-            repository, or is not on the configured source host.
+            repository, is not on the configured source host, or
+            carries a credential of its own.
     """
     if config.use_https:
         # Explicit HTTPS requested
         clone_url = project.clone_url or project.https_url(config.base_url)
         _reject_option_like_url(clone_url)
+        reject_credentialed_url(clone_url, config.github_token)
         assert_trusted_origin(clone_url, config)
 
         if config.github_token and clone_url.startswith("https://"):
@@ -100,11 +244,13 @@ def resolve_clone_url(project: Project, config: Config) -> str:
     if project.ssh_url_override:
         # SSH URL available from GitHub (preferred)
         _reject_option_like_url(project.ssh_url_override)
+        reject_credentialed_url(project.ssh_url_override, config.github_token)
         return project.ssh_url_override
 
     # Fall back to HTTPS if no SSH URL available
     clone_url = project.clone_url or project.https_url(config.base_url)
     _reject_option_like_url(clone_url)
+    reject_credentialed_url(clone_url, config.github_token)
     assert_trusted_origin(clone_url, config)
     return clone_url
 

@@ -25,6 +25,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from gerrit_clone.logging import get_logger
+from gerrit_clone.subprocess_tracking import (
+    ProcessAbandonedError,
+    batch_abandoned,
+    run_tracked,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -135,6 +140,26 @@ def isolated_git_config_dir() -> Path:
     return config_dir
 
 
+def quarantine_isolated_git_configs() -> None:
+    """Keep this operation's config directories from being collected.
+
+    Called where a batch gives up on workers without waiting for them.
+    Those workers are still running against these directories as their
+    ``HOME`` and ``GIT_CONFIG_GLOBAL``, so the scope's ordinary exit --
+    which a caught timeout otherwise looks like -- would delete the
+    config out from under a live clone.
+
+    Sticky, as the interrupt flag is and for the same reason: once a
+    batch has been abandoned there is no knowing when its workers stop,
+    so later scopes must not collect these directories either.  They are
+    removed at process exit instead.
+    """
+    global _interrupted  # noqa: PLW0603
+    with _isolated_config_lock:
+        _interrupted = True
+        _quarantined_config_dirs.update(_detach_registry())
+
+
 @contextmanager
 def isolated_git_config_scope() -> Generator[None, None, None]:
     """Bracket a clone operation that uses isolated git config directories.
@@ -154,6 +179,11 @@ def isolated_git_config_scope() -> Generator[None, None, None]:
     removed only at process exit.  Directories those surviving workers
     create *after* the snapshot are quarantined on registration, for
     the same reason.
+
+    A batch that abandons its workers on a timeout catches that timeout,
+    so this scope sees an ordinary exit despite being in exactly the
+    same position.  It calls
+    :func:`quarantine_isolated_git_configs` to say so.
     """
     global _active_operations, _interrupted  # noqa: PLW0603
     with _isolated_config_lock:
@@ -349,21 +379,40 @@ def set_ssh_remote(
 
     for attempt in range(1, max_attempts + 1):
         try:
-            subprocess.run(
+            # Tracked like the clone itself: a batch that gives up must
+            # be able to stop this too, or it outlives the batch and
+            # races the cleanup of the directory it is working in.
+            result = run_tracked(
                 ["git", "remote", "set-url", "origin", ssh_url],
                 cwd=repo_path,
-                check=True,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
                 timeout=10,
                 env=env,  # Use isolated environment
             )
+            if result.returncode != 0:
+                # A terminated command carries a negative return code,
+                # which is indistinguishable from git having failed on
+                # its own.  Only the tracker knows the difference.
+                if batch_abandoned():
+                    raise ProcessAbandonedError(
+                        f"Setting the SSH remote for {project_name} was abandoned"
+                    )
+                raise subprocess.CalledProcessError(
+                    result.returncode,
+                    result.args,
+                    output=result.stdout,
+                    stderr=result.stderr,
+                )
             logger.debug(
                 f"Set SSH remote for [project]{project_name}[/project]: {ssh_url}"
             )
             return
+        except ProcessAbandonedError:
+            # Every other failure here is reported and shrugged off, the
+            # clone itself having worked.  This one is not: the batch
+            # has given up, and swallowing it would have the worker
+            # report success for a repository still on HTTPS, which the
+            # timeout cleanup would then keep.
+            raise
         except subprocess.SubprocessError as e:
             error_text = _subprocess_error_text(e)
             if not _is_config_lock_error(error_text):

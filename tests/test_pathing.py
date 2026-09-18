@@ -20,6 +20,7 @@ from gerrit_clone.pathing import (
     check_path_conflicts,
     get_project_path,
     get_temp_clone_path,
+    move_conflicting_path,
     sanitize_project_name,
     validate_project_name,
 )
@@ -455,6 +456,70 @@ class TestAtomicClonePath:
                 assert target_path.exists()
                 assert (target_path / "new.txt").exists()
                 assert not (target_path / "existing.txt").exists()
+
+
+class TestMoveConflictingPath:
+    """Where an obstruction lands is a destination like any other."""
+
+    def test_a_free_name_is_claimed_before_it_is_used(self, tmp_path: Path) -> None:
+        """The name is taken as it is chosen, not merely observed free."""
+        target = tmp_path / "repo"
+        target.write_text("in the way")
+        claimed: list[Path] = []
+
+        def grant(candidate: Path) -> bool:
+            claimed.append(candidate)
+            return True
+
+        moved = move_conflicting_path(target, _is_nested_repo=True, reserve=grant)
+
+        assert moved is True
+        assert claimed == [tmp_path / "repo.parent"]
+        assert (tmp_path / "repo.parent").read_text() == "in the way"
+
+    def test_a_contested_name_is_passed_over(self, tmp_path: Path) -> None:
+        """Absence on disk does not make a name safe to rename onto.
+
+        Another clone can hold a name that nothing has written to yet,
+        and this rename would then replace its work.
+        """
+        target = tmp_path / "repo"
+        target.write_text("in the way")
+        contested = tmp_path / "repo.parent"
+
+        moved = move_conflicting_path(
+            target,
+            _is_nested_repo=True,
+            reserve=lambda candidate: candidate != contested,
+        )
+
+        assert moved is True
+        assert not contested.exists(), "wrote to a name another clone held"
+        assert (tmp_path / "repo.parent.1").read_text() == "in the way"
+
+    def test_an_occupied_name_is_never_claimed(self, tmp_path: Path) -> None:
+        """A name already on disk is skipped before it is ever asked for."""
+        target = tmp_path / "repo"
+        target.write_text("in the way")
+        (tmp_path / "repo.parent").write_text("an earlier move")
+        asked: list[Path] = []
+
+        def grant(candidate: Path) -> bool:
+            asked.append(candidate)
+            return True
+
+        move_conflicting_path(target, _is_nested_repo=True, reserve=grant)
+
+        assert asked == [tmp_path / "repo.parent.1"]
+        assert (tmp_path / "repo.parent").read_text() == "an earlier move"
+
+    def test_no_registry_means_any_free_name_will_do(self, tmp_path: Path) -> None:
+        """Callers outside a batch have nothing to arbitrate."""
+        target = tmp_path / "repo"
+        target.write_text("in the way")
+
+        assert move_conflicting_path(target, _is_nested_repo=True) is True
+        assert (tmp_path / "repo.parent").read_text() == "in the way"
 
 
 class TestPathConflictError:
