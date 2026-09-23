@@ -9,6 +9,8 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 
@@ -22,6 +24,16 @@ from gerrit_clone.git_utils import (
     is_repo_dirty,
     list_local_branches,
 )
+from gerrit_clone.subprocess_tracking import (
+    ProcessAbandonedError,
+    _thread_state,
+    enter_generation,
+    new_generation,
+    refuse_generation,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 
 class TestIsGitRepository:
@@ -151,6 +163,57 @@ class TestIsGitRepository:
             # Missing objects/ and refs/ directories
 
             assert is_git_repository(incomplete) is False
+
+
+class TestIsGitRepositoryInAbandonedBatch:
+    """The git fallback is a child like any other.
+
+    Clone workers reach it before they reserve anything, so a worker
+    that outlasts its batch's settle wait would otherwise start an
+    untracked git after the batch has given up and even returned.
+    """
+
+    @pytest.fixture
+    def abandoned(self) -> Generator[None, None, None]:
+        """Bind the calling thread to a batch that has given up."""
+        generation = new_generation()
+        enter_generation(generation)
+        refuse_generation(generation)
+        try:
+            yield
+        finally:
+            _thread_state.generation = None
+
+    @staticmethod
+    def _not_a_repository(tmp_path: Path) -> Path:
+        """A directory only the git fallback can classify."""
+        directory = tmp_path / "not-a-repo"
+        directory.mkdir()
+        (directory / "HEAD").write_text("fake head")
+        return directory
+
+    @pytest.mark.usefixtures("abandoned")
+    def test_the_probe_is_refused(self, tmp_path: Path) -> None:
+        directory = self._not_a_repository(tmp_path)
+        with (
+            patch("gerrit_clone.subprocess_tracking.subprocess.Popen") as popen,
+            pytest.raises(ProcessAbandonedError),
+        ):
+            is_git_repository(directory)
+        assert not popen.called
+
+    @pytest.mark.usefixtures("abandoned")
+    def test_a_terminated_probe_is_not_read_as_no_repository(
+        self, tmp_path: Path
+    ) -> None:
+        """Terminated, git exits non-zero, as a plain directory would."""
+        directory = self._not_a_repository(tmp_path)
+        terminated = subprocess.CompletedProcess(["git"], -15, "", "")
+        with (
+            patch("gerrit_clone.git_utils.run_tracked", return_value=terminated),
+            pytest.raises(ProcessAbandonedError),
+        ):
+            is_git_repository(directory)
 
 
 class TestGetCurrentCommitSha:

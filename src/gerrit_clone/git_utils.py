@@ -8,6 +8,12 @@ from __future__ import annotations
 import subprocess
 from typing import TYPE_CHECKING
 
+from gerrit_clone.subprocess_tracking import (
+    ProcessAbandonedError,
+    batch_abandoned,
+    run_tracked,
+)
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -24,6 +30,11 @@ def is_git_repository(repo_path: Path) -> bool:
 
     Returns:
         True if the path is a git repository (regular or bare), False otherwise
+
+    Raises:
+        ProcessAbandonedError: If the calling thread's batch has been
+            abandoned, or the process is terminating, when the git
+            fallback is needed.
     """
     if not repo_path.exists():
         return False
@@ -47,16 +58,23 @@ def is_git_repository(repo_path: Path) -> bool:
     # If filesystem markers aren't present, use git command as fallback
     # This handles edge cases where git knows it's a repo but markers are non-standard
     try:
-        result = subprocess.run(
+        # Tracked because clone workers reach this before they reserve
+        # anything: a batch that has given up must refuse the probe, and
+        # be able to stop one already running, like every other child.
+        result = run_tracked(
             ["git", "-C", str(repo_path), "rev-parse", "--is-bare-repository"],
-            capture_output=True,
-            text=True,
-            check=False,
             timeout=5,
         )
+        # A probe the batch terminated says nothing about the path, and
+        # answering "not a repository" would send the worker on to
+        # treat the directory as an obstruction.
+        if result.returncode != 0 and batch_abandoned():
+            raise ProcessAbandonedError(f"Inspecting {repo_path} was abandoned")
         # If git command succeeds and returns "true", it's a bare repo
         if result.returncode == 0 and result.stdout.strip() == "true":
             return True
+    except ProcessAbandonedError:
+        raise
     except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
         # If the git command fails, it's not a valid git repository
         pass

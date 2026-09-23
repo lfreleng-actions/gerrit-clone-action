@@ -11,11 +11,12 @@ Project name validation and sanitization live in
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from gerrit_clone.logging import get_logger
 from gerrit_clone.path_errors import (
@@ -28,6 +29,10 @@ from gerrit_clone.path_naming import (
     sanitize_project_name,
     validate_project_name,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from contextlib import AbstractContextManager
 
 logger = get_logger(__name__)
 
@@ -147,28 +152,44 @@ def check_path_conflicts(target_path: Path, is_nested_repo: bool = False) -> str
     return f"Filesystem object exists at target path: {target_path}"
 
 
-def move_conflicting_path(target_path: Path, _is_nested_repo: bool = False) -> bool:
+def move_conflicting_path(
+    target_path: Path,
+    _is_nested_repo: bool = False,
+    reserve: Callable[[Path], bool] | None = None,
+    guard: Callable[[], AbstractContextManager[None]] | None = None,
+) -> bool:
     """Move conflicting file or directory to .parent suffix to allow nested cloning.
 
     Args:
         target_path: Path that needs to be cleared for cloning
         _is_nested_repo: True if this is for a nested repository (currently unused)
+        reserve: Claims a candidate backup name, returning whether it
+            was granted; a refused name is passed over like an occupied
+            one.  Absence on disk does not make a name safe, another
+            clone being able to hold one it has not yet written to.
+            Omitted outside a batch, where there is nothing to arbitrate.
+        guard: Held around the rename alone, so the caller can make it
+            atomic with a check of its own without the backup name being
+            reserved inside it.
 
     Returns:
         True if conflict was moved, False if no conflict or move failed
 
     Raises:
         PathError: If move operation fails critically
+        Exception: Whatever *guard* raises to refuse the move, unchanged
     """
     if not target_path.exists():
         return False
 
-    # Generate backup name with .parent suffix
+    # Each candidate is claimed as it is chosen, so that the choice and
+    # the claim cannot be separated by another clone taking the name.
     parent_backup_path = target_path.with_name(target_path.name + ".parent")
 
-    # If backup already exists, try numbered variants
     counter = 1
-    while parent_backup_path.exists():
+    while parent_backup_path.exists() or (
+        reserve is not None and not reserve(parent_backup_path)
+    ):
         parent_backup_path = target_path.with_name(
             f"{target_path.name}.parent.{counter}"
         )
@@ -181,7 +202,8 @@ def move_conflicting_path(target_path: Path, _is_nested_repo: bool = False) -> b
         is_file = target_path.is_file()
 
         # Perform the move
-        target_path.rename(parent_backup_path)
+        with guard() if guard is not None else contextlib.nullcontext():
+            target_path.rename(parent_backup_path)
         logger.info(
             f"Moved conflicting {'file' if is_file else 'directory'} "
             f"[path]{target_path.name}[/path] to [path]{parent_backup_path.name}[/path]"

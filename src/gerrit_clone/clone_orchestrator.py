@@ -11,9 +11,11 @@ updates, ``--exit-on-error`` short-circuiting and overall timeouts).
 from __future__ import annotations
 
 import threading
-from concurrent.futures import as_completed
 from typing import TYPE_CHECKING
 
+from gerrit_clone.clone_batching import batch_should_stop, mark_batch_parents
+from gerrit_clone.clone_cleanup import hold_back_running_claims
+from gerrit_clone.clone_collection import consume_clone_futures
 from gerrit_clone.clone_git_env import isolated_git_config_scope
 from gerrit_clone.clone_ordering import (
     create_dependency_batches,
@@ -24,8 +26,9 @@ from gerrit_clone.clone_ordering import (
     remove_duplicate_projects,
     topological_sort_projects,
 )
-from gerrit_clone.clone_reporting import log_project_result
+from gerrit_clone.clone_reservations import release_claims
 from gerrit_clone.clone_results import build_failure_result
+from gerrit_clone.clone_timeout import record_timeout_results
 from gerrit_clone.concurrent_utils import interruptible_executor
 from gerrit_clone.github_worker import clone_github_repository
 from gerrit_clone.logging import get_logger
@@ -59,6 +62,10 @@ class CloneManager:
         self._nested_candidates: set[str] = set()
         self._nested_detected: set[str] = set()
         self._nested_parent_usage: set[str] = set()
+        # Populated by clone_projects during planning.  Declared here
+        # because retry_failed_clones drives the batching loop directly,
+        # without that planning pass having run.
+        self._project_name_index: set[str] = set()
 
     def shutdown(self) -> None:
         """Signal shutdown to cancel ongoing operations."""
@@ -140,57 +147,6 @@ class CloneManager:
             if self.progress_tracker:
                 self.progress_tracker.stop()
 
-    def _mark_batch_parents(self, batch: list[Project]) -> None:
-        """Record which projects in *batch* are parents of nested repos."""
-        # Mark parents in this batch (depth == 0 or any project with children)
-        project_name_index: set[str] = getattr(self, "_project_name_index", set())
-        batch_depth = batch[0].name.count("/") if batch else 0
-        for pr in batch:
-            prefix = pr.name + "/"
-            if (
-                any(cand.startswith(prefix) for cand in self._nested_candidates)
-                and pr.name in project_name_index
-            ):
-                if pr.name not in self._nested_parent_usage and batch_depth == 0:
-                    # First time we see this parent (top-level batch)
-                    logger.debug(
-                        f"👪 Parent ready for nesting: {pr.name} (children pending)"
-                    )
-                self._nested_parent_usage.add(pr.name)
-
-        # Promote first few nested parents summary (only for top-level batch)
-        if batch_depth == 0 and self._nested_parent_usage:
-            sample_parents = sorted(self._nested_parent_usage)[:5]
-            logger.debug(
-                f"📂 Parent repositories prepared ({len(self._nested_parent_usage)}): {sample_parents}{' ...' if len(self._nested_parent_usage) > 5 else ''}"
-            )
-
-    def _batch_should_stop(
-        self,
-        batch_results: list[CloneResult],
-        batch_number: int,
-        label: str,
-    ) -> bool:
-        """Return ``True`` when ``--exit-on-error`` should halt batching.
-
-        Args:
-            batch_results: Results from the batch just completed.
-            batch_number: 1-based index of that batch, named alone in the
-                error so it reads as an ordinal rather than a fraction.
-            label: ``"<number>/<total>"`` progress label for the debug line.
-        """
-        if not self.config.exit_on_error:
-            return False
-        failed_results = [r for r in batch_results if r.failed]
-        if not failed_results:
-            return False
-        failed_project = failed_results[0]
-        logger.error(
-            f"🛑 Stopping after batch {batch_number}: {failed_project.project.name} failed with: {failed_project.error_message}"
-        )
-        logger.debug(f"📊 Processed {label} batches before stopping")
-        return True
-
     def _execute_dependency_aware_clone(
         self, projects: list[Project]
     ) -> list[CloneResult]:
@@ -222,7 +178,12 @@ class CloneManager:
             logger.debug(
                 f"🔄 Processing batch {label} with {len(batch)} projects (sequential barrier before next batch)"
             )
-            self._mark_batch_parents(batch)
+            mark_batch_parents(
+                batch,
+                self._nested_candidates,
+                self._nested_parent_usage,
+                self._project_name_index,
+            )
 
             # Execute this batch (parallel inside batch)
             batch_results = self._execute_bulk_clone(batch)
@@ -236,7 +197,12 @@ class CloneManager:
                 if getattr(r, "nested_under", None):
                     self._nested_detected.add(r.project.name)
 
-            if self._batch_should_stop(batch_results, batch_idx + 1, label):
+            if batch_should_stop(
+                batch_results,
+                batch_idx + 1,
+                label,
+                self.config.exit_on_error,
+            ):
                 break
 
             # No artificial sleep; proceed immediately to next batch
@@ -246,111 +212,21 @@ class CloneManager:
         log_nested_summary(self._nested_candidates, self._nested_detected)
         return all_results
 
-    def _record_future_result(
-        self,
-        future: Future[CloneResult],
-        project: Project,
-        results: list[CloneResult],
-    ) -> bool:
-        """Record one completed clone future.
-
-        Returns:
-            ``True`` when the caller should stop consuming further futures.
-        """
-        try:
-            result = future.result()
-            results.append(result)
-
-            if self.progress_tracker:
-                self.progress_tracker.update_project_result(result)
-
-            log_project_result(result)
-
-            if self.config.exit_on_error and result.failed:
-                logger.error(
-                    f"🛑 Exiting on error: {project.name} failed with: {result.error_message}"
-                )
-                return True
-
-        except Exception as e:
-            logger.error(f"Unexpected error cloning {project.name}: {e}")
-            error_result = build_failure_result(self.config, project, str(e))
-            results.append(error_result)
-
-            if self.progress_tracker:
-                self.progress_tracker.update_project_result(error_result)
-
-            if self.config.exit_on_error:
-                logger.error(
-                    f"🛑 Exiting on error: {project.name} failed with exception: {e}"
-                )
-                return True
-
-        return False
-
-    def _consume_clone_futures(
-        self,
-        future_to_project: dict[Future[CloneResult], Project],
-        results: list[CloneResult],
-        overall_timeout: int,
-    ) -> None:
-        """Collect clone results as their futures complete."""
-        logger.debug("Starting to wait for clone task completion...")
-        for future in as_completed(future_to_project, timeout=overall_timeout):
-            logger.debug("Clone task completed, processing result...")
-            if self._shutdown_event.is_set():
-                # Cancel remaining futures on shutdown
-                for remaining_future in future_to_project:
-                    remaining_future.cancel()
-                break
-
-            project = future_to_project[future]
-
-            if self._record_future_result(future, project, results):
-                # Cancel remaining futures
-                for remaining_future in future_to_project:
-                    if not remaining_future.done():
-                        remaining_future.cancel()
-                break
-
     def _handle_clone_timeout(
         self,
         future_to_project: dict[Future[CloneResult], Project],
         results: list[CloneResult],
         overall_timeout: int,
+        generation: int | None = None,
     ) -> None:
         """Cancel outstanding clones and synthesise timeout results."""
-        logger.error(f"Clone operations timed out after {overall_timeout}s")
-
-        # Outstanding work is derived from what has actually been recorded,
-        # never from future state. Two separate races make future.done()
-        # unreliable here: cancel() succeeds only while a future is queued
-        # and then reports done(), and a future can finish after
-        # as_completed() raised without ever having been yielded to us.
-        # Either way the project has no result, so filtering on done()
-        # would silently drop it from the report.
-        recorded = {result.project.name for result in results}
-        outstanding = [
-            (future, project)
-            for future, project in future_to_project.items()
-            if project.name not in recorded
-        ]
-
-        for future, project in outstanding:
-            future.cancel()
-            logger.warning(f"Cancelled clone for {project.name}")
-
-        for _future, project in outstanding:
-            results.append(
-                build_failure_result(
-                    self.config,
-                    project,
-                    f"Operation timed out after {overall_timeout}s",
-                )
-            )
-
-        # Don't raise exception, return partial results
-        logger.warning(f"Returning {len(results)} partial results due to timeout")
+        record_timeout_results(
+            self.config,
+            future_to_project,
+            results,
+            overall_timeout,
+            generation,
+        )
 
     def _execute_bulk_clone(self, projects: list[Project]) -> list[CloneResult]:
         """Execute bulk clone operation with proper thread management.
@@ -386,27 +262,104 @@ class CloneManager:
         clone_pool = interruptible_executor(
             max_workers=thread_count, thread_name_prefix="clone"
         )
-        with isolated_git_config_scope(), clone_pool as executor:
-            # Submit all clone tasks
-            logger.debug(f"Submitting {len(projects)} clone tasks to thread pool")
-            future_to_project = {
-                executor.submit(self._clone_project_with_progress, project): project
-                for project in projects
-            }
-            logger.debug(
-                f"All {len(future_to_project)} tasks submitted, waiting for completion"
-            )
+        generation: int | None = None
+        future_to_project: dict[Future[CloneResult], Project] = {}
+        # No worker does anything until every future has been recorded.
+        # Submission is two steps -- submit() starts the task, the
+        # mapping records it -- and a Ctrl+C in between leaves a worker
+        # that may already hold a reservation but is invisible to the
+        # hold-back, which would then release a path still being written
+        # to.  Gating the start makes the pair atomic in the only sense
+        # that matters: a worker either runs with its future recorded,
+        # or does not run at all.  Kept local rather than on the
+        # manager, which may be driving more than one batch.
+        started = threading.Event()
+        aborted = False
 
-            # Add overall timeout to prevent hanging indefinitely
-            # Use a generous timeout: individual timeout * 2 + buffer for all projects
-            overall_timeout = (self.config.clone_timeout * 2) + 60
-            logger.debug(f"Setting overall operation timeout to {overall_timeout}s")
+        def clone_when_started(project: Project) -> CloneResult:
+            started.wait()
+            if aborted:
+                # Submission was interrupted, so this worker is not in
+                # the batch's records.  Cloning would take a destination
+                # nothing is left to account for or give back.
+                return build_failure_result(
+                    self.config,
+                    project,
+                    "Clone batch was interrupted during submission",
+                )
+            return self._clone_project_with_progress(project)
 
-            # Collect results as they complete with timeout
-            try:
-                self._consume_clone_futures(future_to_project, results, overall_timeout)
-            except TimeoutError:
-                self._handle_clone_timeout(future_to_project, results, overall_timeout)
+        try:
+            with isolated_git_config_scope(), clone_pool as executor:
+                generation = executor.generation
+                # Submit all clone tasks
+                logger.debug(f"Submitting {len(projects)} clone tasks to thread pool")
+                try:
+                    for project in projects:
+                        future_to_project[
+                            executor.submit(clone_when_started, project)
+                        ] = project
+                except BaseException:
+                    # The gate is released either way, so nothing is
+                    # left parked on it; the flag tells the woken
+                    # workers to stand down rather than clone.
+                    aborted = True
+                    raise
+                finally:
+                    started.set()
+                logger.debug(
+                    f"All {len(future_to_project)} tasks submitted, waiting for completion"
+                )
+
+                # Add overall timeout to prevent hanging indefinitely
+                # Use a generous timeout: individual timeout * 2 + buffer for all projects
+                overall_timeout = (self.config.clone_timeout * 2) + 60
+                logger.debug(f"Setting overall operation timeout to {overall_timeout}s")
+
+                # Collect results as they complete with timeout
+                try:
+                    consume_clone_futures(
+                        self.config,
+                        self.progress_tracker,
+                        self._shutdown_event,
+                        future_to_project,
+                        results,
+                        overall_timeout,
+                    )
+                except TimeoutError:
+                    # Cancelling futures only stops the queued ones; a clone
+                    # already inside git keeps running, and leaving the
+                    # block would wait for it. Abandon before reporting.
+                    # That also marks this batch's git config directories
+                    # as still in use, so the scope below quarantines them
+                    # rather than collecting a surviving worker's HOME.
+                    cancelled = executor.abandon()
+                    logger.warning(
+                        f"Abandoned {cancelled} queued clone(s) "
+                        f"and stopped those already running"
+                    )
+                    self._handle_clone_timeout(
+                        future_to_project, results, overall_timeout, generation
+                    )
+        finally:
+            # The gate is released again here.  An interrupt can land
+            # inside the release above before it completes, leaving the
+            # workers parked on it -- and the interpreter's exit-time
+            # join waiting on them for good.  A second release is
+            # harmless; if the first never happened, the woken workers
+            # stand down rather than clone.
+            if not started.is_set():
+                aborted = True
+                started.set()
+            # Reservations belong to the batch that took them, and must
+            # be given up even when the block is left by the Ctrl+C that
+            # interruptible_executor re-raises.  That exit does not wait
+            # for the workers, though, so any destination still being
+            # written to is kept back here and released by the worker
+            # holding it; otherwise a batch started by a caller that
+            # caught the interrupt could take it mid-clone.
+            hold_back_running_claims(self.config, future_to_project, generation)
+            release_claims(generation)
 
         return results
 

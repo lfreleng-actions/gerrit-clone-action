@@ -25,6 +25,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from gerrit_clone.logging import get_logger
+from gerrit_clone.subprocess_tracking import (
+    ProcessAbandonedError,
+    batch_abandoned,
+    current_generation,
+    generation_abandoned,
+    run_tracked,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -43,9 +50,18 @@ logger = get_logger(__name__)
 _thread_state = threading.local()
 _isolated_config_dirs: set[Path] = set()
 _quarantined_config_dirs: set[Path] = set()
+#: Batch each registered directory belongs to, where it has one.  A
+#: worker thread carries its pool's generation for life, so its
+#: directory has exactly one owner.  Whether a directory may be removed
+#: turns on that owner -- has *its* batch been abandoned? -- and not on
+#: anything that has happened elsewhere in the process.
+_config_dir_owners: dict[Path, int] = {}
+#: May be held while :func:`generation_abandoned` takes the tracker's
+#: lock, never the other way round: nothing in
+#: :mod:`gerrit_clone.subprocess_tracking` calls back into this module,
+#: so no thread waits for this lock while holding that one.
 _isolated_config_lock = threading.Lock()
 _active_operations = 0
-_interrupted = False
 
 
 def build_ssh_url(project_name: str, config: Config) -> str:
@@ -122,16 +138,24 @@ def isolated_git_config_dir() -> Path:
     config_dir = Path(tempfile.mkdtemp(prefix=f"git_config_{threading.get_ident()}_"))
     create_isolated_git_config(config_dir)
     _thread_state.git_config_dir = config_dir
+    generation = current_generation()
+    # Asked before taking the lock, not nested in it, and only to decide
+    # where to register.  If the batch is abandoned in between, the
+    # directory is registered with its owner and collection asks again.
+    abandoned = generation is not None and generation_abandoned(generation)
     with _isolated_config_lock:
-        # A worker from an interrupted pool can still reach here: it may
-        # have been mid-way through its pre-clone checks when the pool
+        # A worker from an abandoned pool can still reach here: it may
+        # have been part-way through its pre-clone checks when the pool
         # shut down without waiting.  Registering it normally would put
-        # a live HOME back into the shared registry, where the next
-        # completed operation would collect it.
-        if _interrupted:
+        # a live HOME where the next completed operation would collect
+        # it.  A worker of any other batch registers normally, however
+        # many batches have been abandoned before it.
+        if abandoned:
             _quarantined_config_dirs.add(config_dir)
         else:
             _isolated_config_dirs.add(config_dir)
+            if generation is not None:
+                _config_dir_owners[config_dir] = generation
     return config_dir
 
 
@@ -144,41 +168,32 @@ def isolated_git_config_scope() -> Generator[None, None, None]:
     process-wide, so an unconditional cleanup would delete the ``HOME``
     and ``GIT_CONFIG_GLOBAL`` of a concurrent caller's live clones.
 
-    An interrupted operation quarantines instead.
-    ``interruptible_executor`` shuts down without waiting on Ctrl+C, so
-    its tasks are still running against these directories; deleting
-    them here would pull the config out from under a live clone.
-    Leaving them in the shared registry would only postpone that, since
-    the next operation to finish normally would find them unowned and
-    collect them, so they are moved out of reach of any later scope and
-    removed only at process exit.  Directories those surviving workers
-    create *after* the snapshot are quarantined on registration, for
-    the same reason.
+    A directory whose batch has been abandoned is quarantined instead.
+    An abandoned pool shuts down without waiting -- on a timeout, and on
+    the Ctrl+C that ``interruptible_executor`` turns into the same exit
+    -- so its workers may still be cloning against these directories.
+    Both routes record the abandonment before this scope exits, so it
+    needs no signal of its own: the owner of each directory says whether
+    it is still in use.  Quarantined directories are out of reach of
+    every later scope and removed only at process exit.  That is bounded
+    by the pool size of each abandoned batch; the workers of other
+    batches, before or after it, are collected as usual.
     """
-    global _active_operations, _interrupted  # noqa: PLW0603
+    global _active_operations  # noqa: PLW0603
     with _isolated_config_lock:
         _active_operations += 1
 
-    interrupted = False
     try:
         yield
-    except KeyboardInterrupt:
-        interrupted = True
-        raise
     finally:
         with _isolated_config_lock:
             _active_operations -= 1
-            if interrupted:
-                _interrupted = True
-                _quarantined_config_dirs.update(_detach_registry())
-                expired: list[Path] = []
-            else:
-                # Detached inside the same critical section as the
-                # decrement.  Releasing the lock first would let a new
-                # operation start and register its directory before the
-                # snapshot was taken, and this one would then delete a
-                # live HOME out from under it.
-                expired = _detach_registry() if _active_operations == 0 else []
+            # Detached inside the same critical section as the
+            # decrement.  Releasing the lock first would let a new
+            # operation start and register its directory before the
+            # snapshot was taken, and this one would then delete a live
+            # HOME out from under it.
+            expired = _detach_registry() if _active_operations == 0 else []
         _remove_config_dirs(expired)
 
 
@@ -194,8 +209,8 @@ def cleanup_isolated_git_configs() -> None:
     :func:`isolated_git_config_scope` exists to prevent.  The last scope
     to exit does the cleanup instead.
 
-    Directories quarantined by an interrupted operation are left alone;
-    only :func:`_cleanup_at_exit` collects those.
+    Directories owned by an abandoned batch are quarantined rather than
+    removed, and only :func:`_cleanup_at_exit` collects those.
 
     A directory that cannot be removed stays registered, so a later
     cleanup can retry it rather than forgetting it permanently.
@@ -215,26 +230,35 @@ def _cleanup_at_exit() -> None:
     """Remove everything, quarantined directories included.
 
     Registered with :mod:`atexit`.  Nothing else collects the
-    quarantine, so this is the only thing standing between an
-    interrupted run and a directory left in the system temp directory.
+    quarantine, so this is the only thing standing between an abandoned
+    batch and a directory left in the system temp directory.
     """
-    global _interrupted  # noqa: PLW0603
     with _isolated_config_lock:
         expired = _detach_registry()
         expired.extend(_quarantined_config_dirs)
         _quarantined_config_dirs.clear()
-        _interrupted = False
     _remove_config_dirs(expired)
 
 
 def _detach_registry() -> list[Path]:
-    """Take the registered directories, clearing the registry.
+    """Take the registered directories that may now be removed.
+
+    A directory whose owning batch has been abandoned is moved to the
+    quarantine instead: that batch's workers may still be using it as
+    ``HOME``.  Everything else is returned, the registry is cleared, and
+    the ownership records go with it.
 
     The caller must hold ``_isolated_config_lock``.
     """
-    config_dirs = list(_isolated_config_dirs)
+    removable: list[Path] = []
+    for config_dir in _isolated_config_dirs:
+        owner = _config_dir_owners.pop(config_dir, None)
+        if owner is not None and generation_abandoned(owner):
+            _quarantined_config_dirs.add(config_dir)
+        else:
+            removable.append(config_dir)
     _isolated_config_dirs.clear()
-    return config_dirs
+    return removable
 
 
 def _remove_config_dirs(config_dirs: list[Path]) -> None:
@@ -349,21 +373,40 @@ def set_ssh_remote(
 
     for attempt in range(1, max_attempts + 1):
         try:
-            subprocess.run(
+            # Tracked like the clone itself: a batch that gives up must
+            # be able to stop this too, or it outlives the batch and
+            # races the cleanup of the directory it is working in.
+            result = run_tracked(
                 ["git", "remote", "set-url", "origin", ssh_url],
                 cwd=repo_path,
-                check=True,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
                 timeout=10,
                 env=env,  # Use isolated environment
             )
+            if result.returncode != 0:
+                # A terminated command carries a negative return code,
+                # which is indistinguishable from git having failed on
+                # its own.  Only the tracker knows the difference.
+                if batch_abandoned():
+                    raise ProcessAbandonedError(
+                        f"Setting the SSH remote for {project_name} was abandoned"
+                    )
+                raise subprocess.CalledProcessError(
+                    result.returncode,
+                    result.args,
+                    output=result.stdout,
+                    stderr=result.stderr,
+                )
             logger.debug(
                 f"Set SSH remote for [project]{project_name}[/project]: {ssh_url}"
             )
             return
+        except ProcessAbandonedError:
+            # Every other failure here is reported and shrugged off, the
+            # clone itself having worked.  This one is not: the batch
+            # has given up, and swallowing it would have the worker
+            # report success for a repository still on HTTPS, which the
+            # timeout cleanup would then keep.
+            raise
         except subprocess.SubprocessError as e:
             error_text = _subprocess_error_text(e)
             if not _is_config_lock_error(error_text):

@@ -5,13 +5,18 @@
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
+from gerrit_clone.clone_cleanup import discard_partial_clone
 from gerrit_clone.github_clone_results import build_clone_result
 from gerrit_clone.logging import get_logger
 from gerrit_clone.models import CloneStatus
+from gerrit_clone.subprocess_tracking import (
+    ProcessAbandonedError,
+    current_generation,
+    run_tracked,
+)
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -59,10 +64,14 @@ def _build_gh_clone_command(
     return cmd
 
 
-def _discard_partial_clone(target_path: Path) -> None:
-    """Remove a partially written clone directory, ignoring errors."""
-    if target_path.exists():
-        shutil.rmtree(target_path, ignore_errors=True)
+def _discard_partial_clone(project: Project, target_path: Path) -> None:
+    """Remove a partially written clone, sparing any clone nested in it.
+
+    The gh CLI writes straight into the destination, and a clone nested
+    beneath it in the same batch holds a reservation of its own there,
+    which a plain recursive removal would take with it.
+    """
+    discard_partial_clone(project, target_path, current_generation())
 
 
 def clone_with_gh_cli(
@@ -88,12 +97,13 @@ def clone_with_gh_cli(
 
     try:
         logger.debug(f"Executing: {' '.join(cmd)}")
-        result = subprocess.run(
+        # Tracked for the same reason the git path is: a batch that
+        # gives up must be able to stop the child rather than wait for
+        # it, and gh spawns a git transfer of its own that has to go
+        # with it.  See gerrit_clone.subprocess_tracking.
+        result = run_tracked(
             cmd,
-            capture_output=True,
-            text=True,
             timeout=config.clone_timeout,
-            check=False,
         )
 
         if result.returncode == 0:
@@ -104,22 +114,27 @@ def clone_with_gh_cli(
 
         error_msg = result.stderr.strip() or result.stdout.strip()
         logger.error(f"✗ Failed to clone {project.name}: {error_msg}")
-        _discard_partial_clone(target_path)
+        _discard_partial_clone(project, target_path)
         return build_clone_result(
             project, target_path, started_at, CloneStatus.FAILED, error_msg
         )
 
+    except ProcessAbandonedError:
+        # The batch gave up before this clone could start.  Reporting it
+        # as an ordinary failure would have the destination kept for a
+        # clone that is never going to run, so it propagates.
+        raise
     except subprocess.TimeoutExpired:
         error_msg = f"Clone timeout after {config.clone_timeout}s"
         logger.error(f"✗ {project.name}: {error_msg}")
-        _discard_partial_clone(target_path)
+        _discard_partial_clone(project, target_path)
         return build_clone_result(
             project, target_path, started_at, CloneStatus.FAILED, error_msg
         )
     except Exception as e:
         error_msg = f"Clone error: {e}"
         logger.error(f"✗ {project.name}: {error_msg}")
-        _discard_partial_clone(target_path)
+        _discard_partial_clone(project, target_path)
         return build_clone_result(
             project, target_path, started_at, CloneStatus.FAILED, error_msg
         )

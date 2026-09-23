@@ -107,7 +107,7 @@ class TestCloneGitHubRepository:
         assert result.error_message is not None
         assert "not a git repository" in result.error_message
 
-    @patch("gerrit_clone.github_worker.subprocess.run")
+    @patch("gerrit_clone.github_gh_cli.run_tracked")
     @patch("gerrit_clone.github_worker._is_gh_cli_available")
     def test_uses_gh_cli_when_available_and_enabled(
         self,
@@ -145,7 +145,7 @@ class TestCloneGitHubRepository:
         assert cmd[2] == "clone"
 
     @patch("gerrit_clone.github_worker._is_gh_cli_available")
-    @patch("gerrit_clone.github_worker.subprocess.run")
+    @patch("gerrit_clone.github_worker.run_tracked")
     def test_falls_back_to_git_when_gh_not_available(
         self,
         mock_run: MagicMock,
@@ -179,7 +179,7 @@ class TestCloneGitHubRepository:
         assert cmd[0] == "git"
         assert cmd[1] == "clone"
 
-    @patch("gerrit_clone.github_worker.subprocess.run")
+    @patch("gerrit_clone.github_worker.run_tracked")
     def test_uses_git_by_default(
         self,
         mock_run: MagicMock,
@@ -210,7 +210,7 @@ class TestCloneGitHubRepository:
         assert cmd[0] == "git"
         assert cmd[1] == "clone"
 
-    @patch("gerrit_clone.github_worker.subprocess.run")
+    @patch("gerrit_clone.github_worker.run_tracked")
     def test_includes_depth_for_shallow_clone(
         self,
         mock_run: MagicMock,
@@ -242,7 +242,7 @@ class TestCloneGitHubRepository:
         assert "--depth" in cmd
         assert "1" in cmd
 
-    @patch("gerrit_clone.github_worker.subprocess.run")
+    @patch("gerrit_clone.github_worker.run_tracked")
     def test_includes_branch_when_specified(
         self,
         mock_run: MagicMock,
@@ -273,7 +273,7 @@ class TestCloneGitHubRepository:
         assert "--branch" in cmd
         assert "develop" in cmd
 
-    @patch("gerrit_clone.github_worker.subprocess.run")
+    @patch("gerrit_clone.github_worker.run_tracked")
     def test_full_clone_by_default(
         self,
         mock_run: MagicMock,
@@ -306,7 +306,7 @@ class TestCloneGitHubRepository:
         # Should NOT have --depth for full history
         assert "--depth" not in cmd
 
-    @patch("gerrit_clone.github_worker.subprocess.run")
+    @patch("gerrit_clone.github_worker.run_tracked")
     def test_single_branch_is_an_option_not_the_repository(
         self,
         mock_run: MagicMock,
@@ -342,7 +342,7 @@ class TestCloneGitHubRepository:
         assert cmd.index("--single-branch") < separator
         assert cmd[separator + 1] == "https://github.com/org/test-repo.git"
 
-    @patch("gerrit_clone.github_worker.subprocess.run")
+    @patch("gerrit_clone.github_worker.run_tracked")
     def test_a_branch_named_like_the_separator_keeps_its_argument(
         self,
         mock_run: MagicMock,
@@ -383,7 +383,7 @@ class TestCloneGitHubRepository:
         assert cmd[-2] == "https://github.com/org/test-repo.git"
         assert cmd[-4] == "--single-branch"
 
-    @patch("gerrit_clone.github_worker.subprocess.run")
+    @patch("gerrit_clone.github_worker.run_tracked")
     def test_handles_clone_failure(
         self,
         mock_run: MagicMock,
@@ -415,7 +415,7 @@ class TestCloneGitHubRepository:
         assert result.error_message is not None
         assert "Repository not found" in result.error_message
 
-    @patch("gerrit_clone.github_worker.subprocess.run")
+    @patch("gerrit_clone.github_worker.run_tracked")
     def test_handles_timeout(
         self,
         mock_run: MagicMock,
@@ -444,7 +444,7 @@ class TestCloneGitHubRepository:
         assert result.error_message is not None
         assert "timeout" in result.error_message.lower()
 
-    @patch("gerrit_clone.github_worker.subprocess.run")
+    @patch("gerrit_clone.github_worker.run_tracked")
     def test_uses_ssh_url_by_default(
         self,
         mock_run: MagicMock,
@@ -475,7 +475,7 @@ class TestCloneGitHubRepository:
         # Verify SSH URL was used by default
         assert "git@github.com:org/test-repo.git" in cmd
 
-    @patch("gerrit_clone.github_worker.subprocess.run")
+    @patch("gerrit_clone.github_worker.run_tracked")
     def test_uses_ssh_url_when_not_https(
         self,
         mock_run: MagicMock,
@@ -506,7 +506,7 @@ class TestCloneGitHubRepository:
         # Verify SSH URL was used when explicitly set to False
         assert "git@github.com:org/test-repo.git" in cmd
 
-    @patch("gerrit_clone.github_worker.subprocess.run")
+    @patch("gerrit_clone.github_worker.run_tracked")
     def test_uses_https_url_when_requested(
         self,
         mock_run: MagicMock,
@@ -537,7 +537,7 @@ class TestCloneGitHubRepository:
         # Verify HTTPS URL was used when explicitly requested
         assert "https://github.com/org/test-repo.git" in cmd
 
-    @patch("gerrit_clone.github_worker.subprocess.run")
+    @patch("gerrit_clone.github_worker.run_tracked")
     def test_creates_parent_directory(
         self,
         mock_run: MagicMock,
@@ -565,7 +565,7 @@ class TestCloneGitHubRepository:
         # Verify parent directory was created
         assert (tmp_path / "nested").exists()
 
-    @patch("gerrit_clone.github_worker.subprocess.run")
+    @patch("gerrit_clone.github_worker.run_tracked")
     def test_keeps_token_out_of_the_clone_url(
         self,
         mock_run: MagicMock,
@@ -602,7 +602,7 @@ class TestCloneGitHubRepository:
         assert "ghp_test123456789" not in " ".join(cmd)
         assert "@github.com" not in " ".join(cmd)
 
-    @patch("gerrit_clone.github_worker.subprocess.run")
+    @patch("gerrit_clone.github_worker.run_tracked")
     def test_authenticates_through_the_environment(
         self,
         mock_run: MagicMock,
@@ -642,7 +642,7 @@ class TestCloneGitHubRepository:
         # The raw token itself is never placed in the environment.
         assert "ghp_test123456789" not in " ".join(entries.values())
 
-    @patch("gerrit_clone.github_worker.subprocess.run")
+    @patch("gerrit_clone.github_worker.run_tracked")
     def test_no_token_removal_needed_after_clone(
         self,
         mock_run: MagicMock,
@@ -682,7 +682,7 @@ class TestCloneGitHubRepository:
             "Only the clone itself should run: the remote URL never held a token"
         )
 
-    @patch("gerrit_clone.github_worker.subprocess.run")
+    @patch("gerrit_clone.github_worker.run_tracked")
     def test_sets_git_terminal_prompt_for_https(
         self,
         mock_run: MagicMock,
@@ -719,7 +719,7 @@ class TestCloneGitHubRepository:
         assert env["GIT_CONFIG_VALUE_0"] == ""
         assert env["GIT_CONFIG_KEY_1"] == "http.https://github.com.extraheader"
 
-    @patch("gerrit_clone.github_worker.subprocess.run")
+    @patch("gerrit_clone.github_worker.run_tracked")
     def test_https_without_token_uses_credential_helper(
         self,
         mock_run: MagicMock,
@@ -779,7 +779,7 @@ class TestCloneGitHubRepository:
             github_token=token,
         )
 
-        with patch("gerrit_clone.github_token_hygiene.subprocess.run") as mock_run:
+        with patch("gerrit_clone.github_token_hygiene.run_tracked") as mock_run:
             with pytest.raises(RuntimeError) as excinfo:
                 remove_token_from_remote_url(repo_path, project, config)
 
@@ -790,7 +790,7 @@ class TestCloneGitHubRepository:
         assert token not in str(excinfo.value)
         assert not repo_path.exists()
 
-    @patch("gerrit_clone.github_token_hygiene.subprocess.run")
+    @patch("gerrit_clone.github_token_hygiene.run_tracked")
     def test_handles_token_removal_failure_gracefully(
         self,
         mock_run: MagicMock,

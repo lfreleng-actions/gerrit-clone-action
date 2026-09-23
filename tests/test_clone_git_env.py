@@ -40,6 +40,13 @@ from gerrit_clone.models import (
     Project,
     ProjectState,
 )
+from gerrit_clone.subprocess_tracking import (
+    ProcessAbandonedError,
+    _thread_state,
+    abandon_generation,
+    enter_generation,
+    new_generation,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -66,9 +73,15 @@ def _recording_clone(config: Config, created: list[Path]):
 
 @pytest.fixture(autouse=True)
 def _clean_slate():
-    """Leave no directories behind, whichever way the test ends."""
+    """Leave no directories or generations behind, whichever way it ends.
+
+    The main thread's generation is reset too: a test that enters one
+    would otherwise leave every later test's directories owned by it.
+    """
+    _thread_state.generation = None
     _cleanup_at_exit()
     yield
+    _thread_state.generation = None
     _cleanup_at_exit()
 
 
@@ -258,48 +271,131 @@ class TestCleanup:
 
         assert not live.exists()
 
-    def test_an_interrupted_operation_quarantines_its_directories(
+    def test_an_interrupted_batch_quarantines_its_directories(
         self, config: Config
     ) -> None:
         """Ctrl+C shuts the executor down without waiting.
 
-        Its tasks are still cloning against these directories as HOME,
-        so removing them here would cause the very cross-thread race
-        this lifecycle exists to prevent -- and leaving them registered
-        would only postpone it until the next operation finished.
+        ``interruptible_executor`` abandons the batch before re-raising,
+        and its workers are still cloning against these directories as
+        HOME, so removing them here would cause the very cross-thread
+        race this lifecycle exists to prevent.
         """
+        generation = new_generation()
+        enter_generation(generation)
         live: Path | None = None
-        interrupted = False
 
+        interrupted = False
         try:
             with isolated_git_config_scope():
                 live = isolated_git_config_dir()
+                abandon_generation(generation)
                 raise KeyboardInterrupt
         except KeyboardInterrupt:
             interrupted = True
-
         assert interrupted, "KeyboardInterrupt did not propagate"
+
         assert live is not None
-        assert live.is_dir()
-        # Out of reach of the shared registry, so no later scope can
-        # collect it.
+        assert live.is_dir(), "deleted a live HOME out from under a worker"
         assert live not in _isolated_config_dirs
         assert live in _quarantined_config_dirs
+
+    def test_a_timed_out_batch_quarantines_its_directories(self) -> None:
+        """A caught timeout looks like an ordinary exit, but is not one.
+
+        The batch abandons its workers and then swallows the timeout, so
+        nothing propagates out of the scope.  The abandonment is what
+        marks the directories as still in use.
+        """
+        generation = new_generation()
+        enter_generation(generation)
+        live: Path | None = None
+
+        with isolated_git_config_scope():
+            live = isolated_git_config_dir()
+            abandon_generation(generation)
+
+        assert live is not None
+        assert live.is_dir(), "deleted a live HOME out from under a worker"
+        assert live in _quarantined_config_dirs
+
+    def test_a_later_batch_is_collected_as_usual(self) -> None:
+        """One abandoned batch must not quarantine every batch after it.
+
+        The quarantine used to hang off a process-wide flag that nothing
+        reset, so after a single timeout every later operation's
+        directory -- a ``retry_failed_clones`` pass in the same run, say
+        -- was kept until process exit.
+        """
+        abandoned = new_generation()
+        enter_generation(abandoned)
+        with isolated_git_config_scope():
+            isolated_git_config_dir()
+            abandon_generation(abandoned)
+
+        _thread_state.generation = None
+        later: list[Path] = []
+
+        def worker() -> None:
+            enter_generation(new_generation())
+            later.append(isolated_git_config_dir())
+
+        with isolated_git_config_scope():
+            thread = threading.Thread(target=worker)
+            thread.start()
+            thread.join(timeout=10)
+
+        assert later
+        assert later[0] not in _quarantined_config_dirs, (
+            "quarantined a batch that was never abandoned"
+        )
+        assert not later[0].exists(), "a later batch's directory was not collected"
+
+    def test_a_concurrent_batch_is_not_quarantined_with_another(self) -> None:
+        """Only the abandoned batch's own directories are kept back.
+
+        Taking the whole registry on abandonment also swept up the
+        directories of any other operation running at the time.
+        """
+        healthy: list[Path] = []
+
+        def healthy_worker() -> None:
+            enter_generation(new_generation())
+            healthy.append(isolated_git_config_dir())
+
+        abandoned = new_generation()
+        enter_generation(abandoned)
+        with isolated_git_config_scope():
+            thread = threading.Thread(target=healthy_worker)
+            thread.start()
+            thread.join(timeout=10)
+            isolated_git_config_dir()
+            abandon_generation(abandoned)
+
+        assert healthy
+        assert healthy[0] not in _quarantined_config_dirs
+        assert not healthy[0].exists(), "a healthy batch's directory was not collected"
 
     def test_a_later_operation_cannot_collect_a_quarantined_directory(
         self, config: Config
     ) -> None:
-        """Skipping cleanup on the interrupt alone only postpones the race."""
+        """A later completed operation must not reach back into the quarantine."""
+        generation = new_generation()
+        enter_generation(generation)
         live: Path | None = None
 
+        interrupted = False
         try:
             with isolated_git_config_scope():
                 live = isolated_git_config_dir()
+                abandon_generation(generation)
                 raise KeyboardInterrupt
         except KeyboardInterrupt:
-            pass
+            interrupted = True
+        assert interrupted, "KeyboardInterrupt did not propagate"
 
         assert live is not None
+        _thread_state.generation = None
 
         # A later operation completes normally and cleans up.
         with isolated_git_config_scope():
@@ -315,22 +411,33 @@ class TestCleanup:
     def test_a_surviving_worker_registers_into_the_quarantine(
         self, config: Config
     ) -> None:
-        """A worker can reach the registry after the snapshot is taken.
+        """A worker can reach the registry after its batch was abandoned.
 
         ``shutdown(wait=False)`` leaves tasks alive, and one part-way
         through its pre-clone checks builds its environment afterwards.
         Registering that normally would put a live HOME back where the
         next completed operation would collect it.
         """
+        generation = new_generation()
+        enter_generation(generation)
+        interrupted = False
         try:
             with isolated_git_config_scope():
+                abandon_generation(generation)
                 raise KeyboardInterrupt
         except KeyboardInterrupt:
-            pass
+            interrupted = True
+        assert interrupted, "KeyboardInterrupt did not propagate"
+        _thread_state.generation = None
 
-        # The straggler builds its environment now, on another thread.
+        # The straggler builds its environment now, on its pool thread.
         late: list[Path] = []
-        thread = threading.Thread(target=lambda: late.append(isolated_git_config_dir()))
+
+        def straggler() -> None:
+            enter_generation(generation)
+            late.append(isolated_git_config_dir())
+
+        thread = threading.Thread(target=straggler)
         thread.start()
         thread.join(timeout=10)
 
@@ -343,6 +450,70 @@ class TestCleanup:
             isolated_git_config_dir()
 
         assert late[0].is_dir()
+
+    def test_a_timeout_does_not_leak_every_later_batch(self, config: Config) -> None:
+        """The regression itself, end to end through the orchestrator.
+
+        One batch times out and is abandoned; a later batch in the same
+        process -- a retry pass, say -- then completes normally.  Its
+        worker's directory must be collected.  Under a process-wide
+        quarantine flag it was kept until exit instead, and so was every
+        later worker's.
+        """
+        manager = CloneManager(config)
+        dirs: dict[str, Path] = {}
+        created = threading.Event()
+
+        def clone(project: Project) -> CloneResult:
+            dirs[project.name] = isolated_git_config_dir()
+            created.set()
+            return CloneResult(
+                project=project,
+                status=CloneStatus.SUCCESS,
+                path=config.path / project.name,
+            )
+
+        def time_out(*_args: object, **_kwargs: object) -> None:
+            assert created.wait(timeout=10)
+            raise TimeoutError
+
+        with (
+            patch.object(manager, "_clone_project_with_progress", clone),
+            patch("gerrit_clone.clone_orchestrator.consume_clone_futures", time_out),
+        ):
+            manager._execute_bulk_clone([_project("timed-out")])
+
+        with patch.object(manager, "_clone_project_with_progress", clone):
+            manager._execute_bulk_clone([_project("later")])
+
+        assert dirs["later"] not in _quarantined_config_dirs, (
+            "a batch that was never abandoned had its directory quarantined"
+        )
+        assert not dirs["later"].exists(), "a later batch leaked its directory"
+        # The abandoned batch's own directory is still kept back.
+        assert dirs["timed-out"] in _quarantined_config_dirs
+
+    def test_an_interrupt_without_abandonment_is_collected(self) -> None:
+        """Quarantine follows the owner's abandonment, not the exception.
+
+        A worker whose batch was not abandoned has stopped, so there is
+        nothing to protect -- and keeping its directory would be the
+        same leak by another route.
+        """
+        live: Path | None = None
+
+        interrupted = False
+        try:
+            with isolated_git_config_scope():
+                live = isolated_git_config_dir()
+                raise KeyboardInterrupt
+        except KeyboardInterrupt:
+            interrupted = True
+        assert interrupted, "KeyboardInterrupt did not propagate"
+
+        assert live is not None
+        assert live not in _quarantined_config_dirs
+        assert not live.exists()
 
     def test_an_operation_starting_during_cleanup_keeps_its_directory(
         self, config: Config
@@ -448,7 +619,7 @@ class TestSetSshRemoteRetry:
     """Losing the race for .git/config must not leave origin on HTTPS."""
 
     @patch("gerrit_clone.clone_git_env.time.sleep")
-    @patch("gerrit_clone.clone_git_env.subprocess.run")
+    @patch("gerrit_clone.clone_git_env.run_tracked")
     def test_lock_contention_is_retried_until_it_succeeds(
         self, mock_run: MagicMock, mock_sleep: MagicMock, tmp_path
     ) -> None:
@@ -467,7 +638,7 @@ class TestSetSshRemoteRetry:
         ]
 
     @patch("gerrit_clone.clone_git_env.time.sleep")
-    @patch("gerrit_clone.clone_git_env.subprocess.run")
+    @patch("gerrit_clone.clone_git_env.run_tracked")
     def test_retries_are_bounded(
         self, mock_run: MagicMock, mock_sleep: MagicMock, tmp_path
     ) -> None:
@@ -480,7 +651,7 @@ class TestSetSshRemoteRetry:
         assert mock_sleep.call_count == 2
 
     @patch("gerrit_clone.clone_git_env.time.sleep")
-    @patch("gerrit_clone.clone_git_env.subprocess.run")
+    @patch("gerrit_clone.clone_git_env.run_tracked")
     def test_other_failures_are_not_retried(
         self, mock_run: MagicMock, mock_sleep: MagicMock, tmp_path
     ) -> None:
@@ -497,7 +668,7 @@ class TestSetSshRemoteRetry:
         mock_sleep.assert_not_called()
 
     @patch("gerrit_clone.clone_git_env.time.sleep")
-    @patch("gerrit_clone.clone_git_env.subprocess.run")
+    @patch("gerrit_clone.clone_git_env.run_tracked")
     def test_a_missing_path_failure_is_not_retried(
         self, mock_run: MagicMock, mock_sleep: MagicMock, tmp_path
     ) -> None:
@@ -513,7 +684,40 @@ class TestSetSshRemoteRetry:
         assert mock_run.call_count == 1
         mock_sleep.assert_not_called()
 
-    @patch("gerrit_clone.clone_git_env.subprocess.run")
+    @patch("gerrit_clone.clone_git_env.run_tracked")
+    def test_an_abandoned_rewrite_is_not_swallowed(
+        self, mock_run: MagicMock, tmp_path
+    ) -> None:
+        """A batch that gave up must not leave a clone reported clean.
+
+        Termination shows up as a negative return code, which looks like
+        any other git failure -- and every other failure here is logged
+        and shrugged off, the clone itself having worked.  Doing that
+        with this one had the worker report success for a repository
+        still on HTTPS, which timeout cleanup then kept.
+        """
+        generation = new_generation()
+        enter_generation(generation)
+        try:
+            mock_run.return_value = MagicMock(returncode=-15)
+            abandon_generation(generation)
+
+            with pytest.raises(ProcessAbandonedError):
+                set_ssh_remote("example/repo", tmp_path, SSH_URL, {})
+        finally:
+            _thread_state.generation = None
+
+    @patch("gerrit_clone.clone_git_env.run_tracked")
+    def test_a_refused_launch_is_not_swallowed(
+        self, mock_run: MagicMock, tmp_path
+    ) -> None:
+        """Abandonment before launch arrives as an exception instead."""
+        mock_run.side_effect = ProcessAbandonedError("batch abandoned")
+
+        with pytest.raises(ProcessAbandonedError):
+            set_ssh_remote("example/repo", tmp_path, SSH_URL, {})
+
+    @patch("gerrit_clone.clone_git_env.run_tracked")
     def test_success_runs_once(self, mock_run: MagicMock, tmp_path) -> None:
         mock_run.return_value = MagicMock(returncode=0)
 

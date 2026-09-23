@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 from gerrit_clone.logging import get_logger
 from gerrit_clone.models import CloneStatus
+from gerrit_clone.subprocess_tracking import ProcessAbandonedError, unless_abandoned
 
 if TYPE_CHECKING:
     from pathlib import Path, PurePath
@@ -155,6 +156,21 @@ def exclude_pattern(path: PurePath, ancestor_repo: PurePath) -> str:
     return path.relative_to(ancestor_repo).as_posix()
 
 
+def _append_exclude(
+    exclude_file: Path, marker: str, rel_child: str, project_name: str
+) -> None:
+    """Append *rel_child* to the parent's exclude file, or refuse to.
+
+    Written atomically with the abandonment check: this changes a
+    repository the batch does not own, so a batch that has given up
+    must not, and one giving up mid-write must find it finished.
+    """
+    with unless_abandoned(f"Nested protection for {project_name}"):
+        exclude_file.parent.mkdir(parents=True, exist_ok=True)
+        with exclude_file.open("a", encoding="utf-8") as ef:
+            ef.write(f"\n# {marker}\n{rel_child}\n")
+
+
 def apply_nested_protection(
     ancestor_repo: Path, path: Path, project_name: str, nested_under: str | None
 ) -> None:
@@ -165,15 +181,21 @@ def apply_nested_protection(
         path: Target path of the nested project
         project_name: Nested project being cloned (for logging)
         nested_under: Parent path recorded on the result (for logging)
+
+    Raises:
+        ProcessAbandonedError: If the batch has been abandoned.
     """
     try:
         rel_child = exclude_pattern(path, ancestor_repo)
         exclude_file = ancestor_repo / ".git" / "info" / "exclude"
-        exclude_file.parent.mkdir(parents=True, exist_ok=True)
         existing_lines = _read_exclude_lines(exclude_file)
         if rel_child not in existing_lines:
-            with exclude_file.open("a", encoding="utf-8") as ef:
-                ef.write(f"\n# auto-added to ignore nested repo\n{rel_child}\n")
+            _append_exclude(
+                exclude_file,
+                "auto-added to ignore nested repo",
+                rel_child,
+                project_name,
+            )
             logger.debug(
                 f"Added nested protection exclude entry for {project_name} under {nested_under}"
             )
@@ -181,6 +203,8 @@ def apply_nested_protection(
             logger.debug(
                 f"Nested protection exclude already present for {project_name}"
             )
+    except ProcessAbandonedError:
+        raise
     except Exception as e:
         logger.warning(f"Could not apply nested protection for {project_name}: {e}")
 
@@ -200,18 +224,26 @@ def apply_late_nested_protection(
         path: Target path of the nested project
         project_name: Nested project being cloned (for logging)
         nested_under: Parent path recorded on the result (for logging)
+
+    Raises:
+        ProcessAbandonedError: If the batch has been abandoned.
     """
     try:
         exclude_file = ancestor_repo / ".git" / "info" / "exclude"
-        exclude_file.parent.mkdir(parents=True, exist_ok=True)
         rel_child = exclude_pattern(path, ancestor_repo)
         existing_lines = _read_exclude_lines(exclude_file)
         if rel_child not in existing_lines:
-            with exclude_file.open("a", encoding="utf-8") as ef:
-                ef.write(f"\n# auto-added (late) to ignore nested repo\n{rel_child}\n")
+            _append_exclude(
+                exclude_file,
+                "auto-added (late) to ignore nested repo",
+                rel_child,
+                project_name,
+            )
             logger.debug(
                 f"🧬 Nested repo detected late: {project_name} (parent={nested_under})"
             )
+    except ProcessAbandonedError:
+        raise
     except Exception as ne:
         logger.debug(
             f"Late nested protection application failed for {project_name}: {ne}"
