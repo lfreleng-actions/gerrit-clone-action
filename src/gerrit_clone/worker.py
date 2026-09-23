@@ -10,21 +10,16 @@ import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from gerrit_clone.clone_conflicts import resolve_path_conflict
 from gerrit_clone.clone_diagnostics import analyze_clone_error, log_ssh_debug_output
 from gerrit_clone.clone_git_env import (
     build_clone_environment,
-    create_isolated_git_config,
     set_ssh_remote,
 )
 from gerrit_clone.clone_locking import _file_lock
 from gerrit_clone.clone_nesting import (
-    annotate_nested_parent,
-    apply_nested_protection,
-    find_project_git_ancestor,
     recheck_nested_ancestor,
-    reject_nested_clone,
 )
+from gerrit_clone.clone_reservations import claim_new_target
 from gerrit_clone.clone_retry_policy import (
     calculate_adaptive_delay,
     is_filesystem_error_retryable,
@@ -33,7 +28,9 @@ from gerrit_clone.clone_retry_policy import (
 from gerrit_clone.clone_utils import build_base_clone_command
 from gerrit_clone.logging import get_logger
 from gerrit_clone.models import CloneResult, CloneStatus, Config, Project
-from gerrit_clone.pathing import check_path_conflicts, get_project_path
+from gerrit_clone.pathing import get_project_path
+from gerrit_clone.subprocess_tracking import run_tracked
+from gerrit_clone.worker_preflight import run_preflight
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -99,54 +96,21 @@ class CloneWorker:
 
         try:
             logger.debug(f"📁 Processing {project.name}")
-            depth = project.name.count("/")
 
-            ancestor_repo = find_project_git_ancestor(
-                target_path, self.config.path, self._project_index
-            )
-
-            # Handle nested repositories (always clone both parent and children)
-            allow_nested = getattr(self.config, "allow_nested_git", False)
-            nested_protection = getattr(self.config, "nested_protection", False)
-
-            if ancestor_repo and not allow_nested:
-                return reject_nested_clone(result, ancestor_repo, started_at)
-
-            if ancestor_repo and allow_nested:
-                annotate_nested_parent(
-                    result, ancestor_repo, self.config.path, project.name
-                )
-            elif depth > 0:
-                logger.debug(
-                    f"No early ancestor detected for candidate nested project {project.name} (depth={depth})"
-                )
-
-            is_nested = result.nested_under is not None
-            conflict = check_path_conflicts(target_path, is_nested_repo=is_nested)
-            if conflict is not None and resolve_path_conflict(
-                conflict,
+            preflight = run_preflight(
+                self.config,
+                project,
+                target_path,
                 result,
+                self._project_index,
                 started_at,
-                getattr(self.config, "move_conflicting", True),
-            ):
-                return result
-
-            # Ensure parent directories exist (safe due to dependency batching)
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # If nested and protection enabled, add child path to parent exclude
-            if ancestor_repo and allow_nested and nested_protection:
-                apply_nested_protection(
-                    ancestor_repo, target_path, project.name, result.nested_under
-                )
+            )
+            if preflight.finished is not None:
+                return preflight.finished
+            ancestor_repo = preflight.ancestor
+            allow_nested = preflight.allow_nested
 
             result.status = CloneStatus.CLONING
-
-            # Instrumentation: mark potential nested candidate if depth > 0 and still no ancestor
-            if depth > 0 and result.nested_under is None:
-                logger.debug(
-                    f"Nested candidate (no parent yet): {project.name} (will re-check before clone subprocess)"
-                )
 
             # Perform clone with adaptive retry
             logger.debug(f"Starting clone execution for {project.name}")
@@ -282,17 +246,16 @@ class CloneWorker:
             ):
                 self._late_nested_checks += 1
 
-            # Execute git clone directly to target path - Git handles its own atomicity
-            process_result = subprocess.run(
+            # Claimed as it is taken, so a timeout may discard what this
+            # clone leaves behind; an existing destination belongs to
+            # whoever put it there. Tracked so a batch that gives up can
+            # terminate the child rather than wait for it.
+            claim_new_target(target_path, project.name)
+            process_result = run_tracked(
                 cmd,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
                 timeout=self.config.clone_timeout,
                 env=env,
                 cwd=self.config.path,
-                check=False,
             )
             log_ssh_debug_output(self.config, process_result)
 
@@ -399,10 +362,6 @@ class CloneWorker:
             env: Isolated git environment to use
         """
         set_ssh_remote(project.name, repo_path, self._build_ssh_url(project), env)
-
-    def _create_isolated_git_config(self, config_dir: Path) -> None:
-        """Create minimal git configuration in isolated directory."""
-        create_isolated_git_config(config_dir)
 
     def _build_clone_environment(self) -> dict[str, str]:
         """Build environment variables for git clone."""

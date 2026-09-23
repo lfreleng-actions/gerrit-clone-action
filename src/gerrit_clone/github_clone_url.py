@@ -8,10 +8,14 @@ logging.  Nothing here adds a credential to the URL: HTTPS token
 authentication travels in the process environment instead, through
 :mod:`gerrit_clone.github_clone_env`.
 
-That is narrower than the URL being credential-free.
-``project.clone_url`` is externally supplied and is returned as given,
-so a credential already in it still reaches ``argv``; removing that is
-deferred to issue #277.
+A credential the *supplied* URL arrived with is refused rather than
+passed on -- but only where one can be identified, which is a narrower
+claim than the URL being credential-free.  This run's configured token
+is recognised wherever it sits, needing no classification; beyond
+that, only the shapes :func:`reject_credentialed_url` can positively
+identify are caught, and anything it cannot classify is passed through
+by design.  Guessing at the rest is what an earlier attempt did, and
+it refused repositories git clones perfectly well.
 """
 
 from __future__ import annotations
@@ -19,6 +23,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from urllib.parse import ParseResult, urlparse, urlunparse
 
+from gerrit_clone.github_url_safety import (
+    UnsafeCloneUrlError,
+    _reject_option_like_url,
+    reject_credentialed_url,
+)
 from gerrit_clone.logging import get_logger
 
 if TYPE_CHECKING:
@@ -27,64 +36,40 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-class UnsafeCloneUrlError(ValueError):
-    """Raised when a clone URL must not be handed to git.
-
-    Deliberately carries no URL text, since the value that provoked it
-    is the one under suspicion.
-    """
-
-
-def _reject_option_like_url(url: str) -> None:
-    """Refuse a value ``git`` would read as an option rather than a URL.
-
-    ``project.clone_url`` is externally supplied and is passed
-    positionally, so a value beginning with ``-`` would be taken for an
-    option -- ``--upload-pack=...`` and friends.  ``git clone`` is given
-    a ``--`` terminator as well, in
-    :func:`gerrit_clone.clone_utils.build_base_clone_command`; this is
-    the other half of that pair.
-
-    Args:
-        url: Clone URL about to be used.
-
-    Raises:
-        UnsafeCloneUrlError: If git would read the value as an option.
-    """
-    if url.startswith("-"):
-        raise UnsafeCloneUrlError(
-            "Clone URL begins with '-', so git would read it as an option"
-        )
-
-
 def resolve_clone_url(project: Project, config: Config) -> str:
     """Determine the URL to clone from - prefer SSH, fall back to HTTPS.
 
-    The configured token is never added.  It used to be embedded here,
-    which put it in the ``git clone`` arguments and so in the host's
-    process listing; authentication now travels in the environment
-    instead (see :func:`gerrit_clone.github_clone_env.build_git_env`).
+    No credential is ever *added*: the configured token used to be
+    embedded here, which put it in the ``git clone`` arguments and so
+    in the host's process listing, and authentication now travels in
+    the environment instead (see
+    :func:`gerrit_clone.github_clone_env.build_git_env`).
 
-    The result is not credential-free in general, only free of anything
-    this tool put there: ``project.clone_url`` is externally supplied
-    and is returned as given, so a credential already in it still
-    reaches ``argv``.  Stripping that is deferred to issue #277.
+    A credential the supplied URL arrived with is refused, so far as
+    one can be identified -- see :func:`reject_credentialed_url` for
+    what that covers and what it deliberately does not.  The result is
+    therefore free of anything this tool added, and of every credential
+    that could be positively identified; it is not guaranteed free of
+    content nothing can classify.
 
     Args:
         project: Project to clone
         config: Configuration with optional github_token
 
     Returns:
-        The clone URL, with no credential added by this tool.
+        The clone URL, carrying no credential this tool added or could
+        identify.
 
     Raises:
         UnsafeCloneUrlError: If the URL is not one git would read as a
-            repository, or is not on the configured source host.
+            repository, is not on the configured source host, or
+            carries an identifiable credential.
     """
     if config.use_https:
         # Explicit HTTPS requested
         clone_url = project.clone_url or project.https_url(config.base_url)
         _reject_option_like_url(clone_url)
+        reject_credentialed_url(clone_url, config.github_token)
         assert_trusted_origin(clone_url, config)
 
         if config.github_token and clone_url.startswith("https://"):
@@ -100,11 +85,13 @@ def resolve_clone_url(project: Project, config: Config) -> str:
     if project.ssh_url_override:
         # SSH URL available from GitHub (preferred)
         _reject_option_like_url(project.ssh_url_override)
+        reject_credentialed_url(project.ssh_url_override, config.github_token)
         return project.ssh_url_override
 
     # Fall back to HTTPS if no SSH URL available
     clone_url = project.clone_url or project.https_url(config.base_url)
     _reject_option_like_url(clone_url)
+    reject_credentialed_url(clone_url, config.github_token)
     assert_trusted_origin(clone_url, config)
     return clone_url
 

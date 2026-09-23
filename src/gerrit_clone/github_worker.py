@@ -15,6 +15,11 @@ import subprocess
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from gerrit_clone.clone_reservations import (
+    TargetOwnedError,
+    claim_new_target,
+    reserved_by_other,
+)
 from gerrit_clone.clone_utils import (
     analyze_git_clone_error,
     build_base_clone_command,
@@ -24,15 +29,16 @@ from gerrit_clone.git_utils import is_git_repository
 from gerrit_clone.github_clone_env import build_git_env
 from gerrit_clone.github_clone_results import build_clone_result
 from gerrit_clone.github_clone_url import (
-    UnsafeCloneUrlError,
     redact_clone_url,
     resolve_clone_url,
 )
 from gerrit_clone.github_gh_cli import clone_with_gh_cli
 from gerrit_clone.github_token_hygiene import remove_token_from_remote_url
+from gerrit_clone.github_url_safety import UnsafeCloneUrlError
 from gerrit_clone.logging import get_logger
 from gerrit_clone.models import CloneResult, CloneStatus, Config, Project
 from gerrit_clone.pathing import AtomicClonePath
+from gerrit_clone.subprocess_tracking import batch_abandoned, run_tracked
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -55,9 +61,16 @@ def clone_github_repository(
     For HTTPS cloning with a token:
     - The configured token is not put in the clone URL, so it never
       reaches the process arguments; it is passed via ``GIT_CONFIG_*``
-      instead.  A credential already present in an externally supplied
-      ``project.clone_url`` is passed through as given, and is the
-      subject of issue #277.
+      instead.
+    - A credential the externally supplied ``project.clone_url``
+      arrived with is refused before git or ``gh`` is invoked, so far
+      as one can be identified: this run's configured token wherever
+      it sits, a password under any scheme, a username over HTTP(S),
+      and non-empty HTTP(S) path parameters, query strings or
+      fragments.  An SSH username is not a credential and is allowed,
+      as is syntax that cannot be classified -- scp-style URLs above
+      all.  The policy is stated once, in
+      :func:`gerrit_clone.github_url_safety.reject_credentialed_url`.
     - A clone whose remote URL still holds the configured token is
       destroyed rather than kept, as defence in depth
     - GIT_TERMINAL_PROMPT=0 is set to prevent interactive credential prompts
@@ -72,22 +85,35 @@ def clone_github_repository(
     started_at = datetime.now(UTC)
     target_path = config.path / project.filesystem_path
 
-    # Check if already exists (both regular and bare repositories)
-    if target_path.exists():
-        if is_git_repository(target_path):
-            logger.debug(f"Repository already exists: {project.name}")
-            return build_clone_result(
-                project, target_path, started_at, CloneStatus.ALREADY_EXISTS
-            )
+    # Asked before anything on disk is believed.  While another clone is
+    # working here its directory is in flux -- git creates .git before
+    # transferring anything -- so the shortcut below could report a
+    # repository whose owner's cleanup is about to remove it.
+    contested = _contested_result(project, target_path, started_at)
+    if contested is not None:
+        return contested
 
-        # Directory exists but not a git repo
-        logger.warning(f"Directory exists but is not a git repository: {target_path}")
+    # Check if already exists (both regular and bare repositories)
+    existing = _existing_target_result(project, target_path, started_at)
+    if existing is not None:
+        return existing
+
+    # Reserved before anything is created, the parent directories
+    # included: mkdir(parents=True) can bring into being an ancestor
+    # another batch has reserved, which would have the owner's clone
+    # fail on a directory that appeared beneath it.  Taken before the
+    # clone method is chosen, so that every GitHub clone takes part
+    # regardless of which one runs: the gh CLI writes to the same
+    # destination and its partial directory is cleaned up the same way.
+    # Reached only once the already-exists checks above have passed, so
+    # the destination is absent; a refusal means another batch is
+    # already cloning there and this one must stand down.
+    try:
+        claim_new_target(target_path, project.name)
+    except TargetOwnedError as exc:
+        logger.error(f"✗ {project.name}: {exc}")
         return build_clone_result(
-            project,
-            target_path,
-            started_at,
-            CloneStatus.FAILED,
-            "Directory exists but is not a git repository",
+            project, target_path, started_at, CloneStatus.FAILED, str(exc)
         )
 
     # Ensure parent directory exists
@@ -98,6 +124,72 @@ def clone_github_repository(
         return clone_with_gh_cli(project, config, target_path, started_at)
     else:
         return _clone_with_git(project, config, target_path, started_at)
+
+
+def _contested_result(
+    project: Project, target_path: Path, started_at: datetime
+) -> CloneResult | None:
+    """Refuse *target_path* if another clone holds it.
+
+    Args:
+        project: Project being cloned
+        target_path: Destination being considered
+        started_at: Clone start time
+
+    Returns:
+        A failure result, or ``None`` if the destination is free.
+    """
+    contested = reserved_by_other(target_path, project.name)
+    if contested is None:
+        return None
+    error_msg = f"{contested} is already being cloned"
+    logger.error(f"✗ {project.name}: {error_msg}")
+    return build_clone_result(
+        project, target_path, started_at, CloneStatus.FAILED, error_msg
+    )
+
+
+def _existing_target_result(
+    project: Project, target_path: Path, started_at: datetime
+) -> CloneResult | None:
+    """Account for a destination that is already on disk, if it is.
+
+    Args:
+        project: Project being cloned
+        target_path: Destination being considered
+        started_at: Clone start time
+
+    Returns:
+        The result for an existing destination, or ``None`` if the path
+        is absent and the clone should go ahead.
+    """
+    if not target_path.exists():
+        return None
+
+    # Asked again now that something has been found.  A clone always
+    # reserves before it creates anything, so a directory put there by a
+    # rival has a reservation that was taken strictly earlier -- which
+    # this second look finds and the first could not, it having run
+    # while the path was still absent.
+    contested = _contested_result(project, target_path, started_at)
+    if contested is not None:
+        return contested
+
+    if is_git_repository(target_path):
+        logger.debug(f"Repository already exists: {project.name}")
+        return build_clone_result(
+            project, target_path, started_at, CloneStatus.ALREADY_EXISTS
+        )
+
+    # Directory exists but not a git repo
+    logger.warning(f"Directory exists but is not a git repository: {target_path}")
+    return build_clone_result(
+        project,
+        target_path,
+        started_at,
+        CloneStatus.FAILED,
+        "Directory exists but is not a git repository",
+    )
 
 
 def _is_gh_cli_available() -> bool:
@@ -191,17 +283,34 @@ def _clone_with_git(
 
         try:
             logger.debug(f"Executing: {' '.join(cmd).replace(clone_url, log_url)}")
-            result = subprocess.run(
+            # Tracked so a batch that gives up can terminate the child
+            # rather than wait for it; see
+            # gerrit_clone.subprocess_tracking.
+            result = run_tracked(
                 cmd,
-                capture_output=True,
-                text=True,
                 timeout=config.clone_timeout,
                 env=env,
-                check=False,
             )
 
             if result.returncode != 0:
                 error_output = result.stderr.strip() or result.stdout.strip()
+                if batch_abandoned():
+                    # Terminating the child surfaces here as a negative
+                    # return code, indistinguishable from git failing on
+                    # its own.  The preservation policy below would then
+                    # keep the temporary clone for inspection, and the
+                    # timeout cleanup could not remove it: that knows
+                    # the reserved destination, not this randomly named
+                    # .partial sibling of it.
+                    atomic_path.cleanup_temp()
+                    return build_clone_result(
+                        project,
+                        target_path,
+                        started_at,
+                        CloneStatus.FAILED,
+                        "Clone abandoned before it finished",
+                    )
+
                 analyzed_error = _handle_git_clone_failure(
                     atomic_path, error_output, project, config
                 )
@@ -215,14 +324,14 @@ def _clone_with_git(
 
             logger.debug(f"✓ Cloned {project.name}")
 
-            # Defence in depth.  This tool no longer puts the token in
-            # the URL, so this fires only for an externally supplied one
-            # that already carried it -- and for that case there is no
-            # clean replacement to write, the only candidate being the
-            # very value the token came in on.  So it refuses and
-            # destroys the clone rather than leaving the credential in
-            # .git/config; issue #277 is what would turn that into a
-            # sanitised clone instead.
+            # Defence in depth, and not expected to fire.  This tool
+            # never puts the token in the URL, and a supplied URL that
+            # carries it is refused by ``resolve_clone_url`` before git
+            # runs -- see ``github_url_safety.reject_credentialed_url``.
+            # Kept for a route that reaches here without that check: if
+            # the token did make it into the remote, there is no clean
+            # replacement to write, so this destroys the clone rather
+            # than leave the credential in .git/config.
             #
             # Keyed on the resolved URL rather than ``config.use_https``:
             # the SSH branch falls back to an HTTPS URL when a project

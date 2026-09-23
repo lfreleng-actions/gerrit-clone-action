@@ -10,8 +10,10 @@ import subprocess
 from typing import TYPE_CHECKING
 
 from gerrit_clone.github_clone_results import build_clone_result
+from gerrit_clone.github_url_safety import reject_credentialed_url
 from gerrit_clone.logging import get_logger
 from gerrit_clone.models import CloneStatus
+from gerrit_clone.subprocess_tracking import ProcessAbandonedError, run_tracked
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -27,12 +29,20 @@ def _build_gh_clone_command(
     config: Config,
     target_path: Path,
 ) -> list[str]:
-    """Assemble the ``gh repo clone`` command line."""
+    """Assemble the ``gh repo clone`` command line.
+
+    Raises:
+        UnsafeCloneUrlError: If the externally supplied clone URL
+            carries a credential.  ``gh`` puts the identifier in its own
+            ``argv`` exactly as ``git`` would, so it is checked here
+            too.
+    """
     cmd = ["gh", "repo", "clone"]
 
     # Add repository identifier (org/repo or full URL)
     # gh CLI can handle both "org/repo" format and full URLs
     if project.clone_url and project.clone_url.startswith("http"):
+        reject_credentialed_url(project.clone_url, config.github_token)
         repo_identifier = project.clone_url
     else:
         repo_identifier = project.name
@@ -84,16 +94,20 @@ def clone_with_gh_cli(
     """
     logger.debug(f"Cloning {project.name} with gh CLI")
 
-    cmd = _build_gh_clone_command(project, config, target_path)
-
     try:
+        # Built inside the try: the credential check it performs raises,
+        # and every other failure here is reported as a CloneResult
+        # rather than propagated.
+        cmd = _build_gh_clone_command(project, config, target_path)
+
         logger.debug(f"Executing: {' '.join(cmd)}")
-        result = subprocess.run(
+        # Tracked for the same reason the git path is: a batch that
+        # gives up must be able to stop the child rather than wait for
+        # it, and gh spawns a git transfer of its own that has to go
+        # with it.  See gerrit_clone.subprocess_tracking.
+        result = run_tracked(
             cmd,
-            capture_output=True,
-            text=True,
             timeout=config.clone_timeout,
-            check=False,
         )
 
         if result.returncode == 0:
@@ -109,6 +123,11 @@ def clone_with_gh_cli(
             project, target_path, started_at, CloneStatus.FAILED, error_msg
         )
 
+    except ProcessAbandonedError:
+        # The batch gave up before this clone could start.  Reporting it
+        # as an ordinary failure would have the destination kept for a
+        # clone that is never going to run, so it propagates.
+        raise
     except subprocess.TimeoutExpired:
         error_msg = f"Clone timeout after {config.clone_timeout}s"
         logger.error(f"✗ {project.name}: {error_msg}")

@@ -22,10 +22,10 @@ from gerrit_clone.git_credential_env import (
 )
 from gerrit_clone.github_clone_env import build_git_env
 from gerrit_clone.github_clone_url import (
-    UnsafeCloneUrlError,
     resolve_clone_url,
     trusted_clone_origin,
 )
+from gerrit_clone.github_url_safety import UnsafeCloneUrlError
 from gerrit_clone.mirror_push import PushSettings, build_push_env
 from gerrit_clone.models import Config, Project, ProjectState, SourceType
 
@@ -229,12 +229,16 @@ class TestTrustedOrigin:
                 _config(use_https=True, github_token=TOKEN),
             )
 
-    def test_the_rejected_origin_is_not_named_in_the_error(self) -> None:
-        """The refusal is logged, and the URL is the suspect value.
+    def test_a_token_in_a_hostile_host_is_refused_without_leaking_it(
+        self,
+    ) -> None:
+        """A host of ``<token>.evil.example`` carries the secret itself.
 
-        Naming its host publishes externally supplied text, so a host
-        of ``<token>.evil.example`` would leak the very secret the
-        refusal exists to withhold.
+        The token rule now catches this before the origin check, which
+        is the stricter of the two: the value never reaches the origin
+        comparison at all.  What must hold either way is that the
+        refusal -- which is logged and reported -- does not republish
+        the secret it exists to withhold.
         """
         hostile = f"https://{TOKEN}.evil.example/org/repo.git"
         config = _config(use_https=True, github_token=TOKEN)
@@ -244,6 +248,21 @@ class TestTrustedOrigin:
 
         message = str(excinfo.value)
         assert TOKEN not in message
+        assert "evil.example" not in message
+
+    def test_the_rejected_origin_is_not_named_in_the_error(self) -> None:
+        """The refusal is logged, and the URL is the suspect value.
+
+        Naming its host publishes externally supplied text, so the
+        message names this run's own configured source instead.
+        """
+        hostile = "https://evil.example/org/repo.git"
+        config = _config(use_https=True, github_token=TOKEN)
+
+        with pytest.raises(UnsafeCloneUrlError) as excinfo:
+            resolve_clone_url(_project(hostile), config)
+
+        message = str(excinfo.value)
         assert "evil.example" not in message
         # The configured source is this run's own, and still named.
         expected_host, _expected_port = trusted_clone_origin(config)
@@ -339,6 +358,520 @@ class TestTrustedOrigin:
                 _config(use_https=True, github_token=TOKEN),
                 "https://attacker.example/org/repo.git",
             )
+
+
+class TestSuppliedCredentialsAreRefused:
+    """A credential in the supplied URL is a credential in ``argv``.
+
+    ``project.clone_url`` comes from the GitHub listing for the
+    configured org, so it is externally supplied.  This tool never adds
+    a credential to it; one that arrives already there is refused
+    rather than handed to git.
+    """
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://token@github.com/org/repo.git",
+            "https://user:pass@github.com/org/repo.git",
+            "https://:pass@github.com/org/repo.git",
+            "https://user:@github.com/org/repo.git",
+            "http://token@github.com/org/repo.git",
+        ],
+        ids=[
+            "user-only",
+            "user-and-password",
+            "password-only",
+            "empty-password",
+            "plaintext",
+        ],
+    )
+    def test_userinfo_is_refused(self, url: str) -> None:
+        with pytest.raises(UnsafeCloneUrlError, match="reach the git command line"):
+            resolve_clone_url(
+                _project(url), _config(use_https=True, github_token=TOKEN)
+            )
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            " https://token@[unclosed/org/repo.git",
+            "ht\ntps://token@[unclosed/org/repo.git",
+            "\thttps://token@[unclosed/org/repo.git",
+        ],
+        ids=["leading-space", "embedded-newline", "leading-tab"],
+    )
+    def test_an_obfuscated_scheme_does_not_evade_the_http_rules(self, url: str) -> None:
+        """The fallback must read what ``urlparse`` reads.
+
+        ``urlparse`` discards tabs and newlines anywhere, and C0
+        controls or space at the leading edge -- trailing ones are kept
+        -- *before* parsing, so it sees ``https`` where a textual split
+        sees `` https``.  Reading the raw value left the HTTP(S)-only
+        rules unfired, and a bare userinfo went through to ``argv``.
+        """
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override=url,
+        )
+
+        with pytest.raises(UnsafeCloneUrlError, match="reach the git command line"):
+            resolve_clone_url(project, _config())
+
+    def test_an_obfuscated_scheme_does_not_evade_the_query_rule(self) -> None:
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override=" https://[unclosed/repo.git?access_token=secret",
+        )
+
+        with pytest.raises(UnsafeCloneUrlError, match="query string"):
+            resolve_clone_url(project, _config())
+
+    def test_a_token_split_by_a_discarded_newline_is_found(self) -> None:
+        """Removing the newline brings the halves back together.
+
+        The configured value is checked against both the raw URL and
+        the one parsing sees, since either may be where it is whole.
+        """
+        split = f"https://github.com/org/{TOKEN[:4]}\n{TOKEN[4:]}.git"
+
+        with pytest.raises(UnsafeCloneUrlError, match="configured token"):
+            resolve_clone_url(
+                _project(split), _config(use_https=True, github_token=TOKEN)
+            )
+
+    def test_an_empty_password_component_is_still_refused(self) -> None:
+        """``ssh://git:@host`` parses to a password of ``""``.
+
+        Testing it for truth rather than presence would let this form
+        through, while the textual path catches it as a ``:`` in the
+        userinfo -- leaving the two paths disagreeing about the same
+        rule.
+        """
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override="ssh://git:@github.com/org/repo.git",
+        )
+
+        with pytest.raises(UnsafeCloneUrlError, match="password"):
+            resolve_clone_url(project, _config())
+
+    def test_the_refusal_does_not_repeat_the_credential(self) -> None:
+        """The message is logged and reported, so it must not carry it."""
+        with pytest.raises(UnsafeCloneUrlError) as excinfo:
+            resolve_clone_url(
+                _project("https://hunter2@github.com/org/repo.git"),
+                _config(use_https=True),
+            )
+
+        assert "hunter2" not in str(excinfo.value)
+
+    def test_a_credentialed_ssh_override_is_refused_too(self) -> None:
+        """A password is a credential under any scheme.
+
+        ``ssh`` ignores it, but git still puts it in ``argv``.
+        """
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override="ssh://git:secret@github.com/org/repo.git",
+        )
+
+        with pytest.raises(UnsafeCloneUrlError, match="password"):
+            resolve_clone_url(project, _config())
+
+    def test_a_password_is_refused_under_a_git_ssh_alias(self) -> None:
+        """The alias schemes come free: the rule is on the component."""
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override="git+ssh://git:secret@github.com/org/repo.git",
+        )
+
+        with pytest.raises(UnsafeCloneUrlError, match="password"):
+            resolve_clone_url(project, _config())
+
+
+class TestUnrecognisedShapesArePassedThrough:
+    """Classification fails open; only detection fails closed.
+
+    An earlier attempt re-implemented git's URL grammar on top of
+    ``urlparse``, which implements a different one, and refused
+    repositories git clones perfectly well.  Anything this cannot
+    positively identify a credential in is left alone.
+    """
+
+    def test_scp_style_is_not_classified(self) -> None:
+        """``urlparse`` reads the host as a scheme; git reads scp-style.
+
+        This is the shape the first attempt refused.  It has no
+        userinfo syntax after the colon, so there is nothing to detect.
+        """
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override="github.com:org/repo.git",
+        )
+
+        assert resolve_clone_url(project, _config()) == "github.com:org/repo.git"
+
+    def test_scp_style_with_a_user_is_not_refused(self) -> None:
+        """``git@host:path`` is a username, not a credential."""
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override="git@github.com:org/repo.git",
+        )
+
+        assert resolve_clone_url(project, _config()) == "git@github.com:org/repo.git"
+
+    def test_an_ssh_username_is_not_a_credential(self) -> None:
+        """``ssh://git@github.com/...`` is the ordinary form.
+
+        Refusing userinfo generally would reject it, which is the
+        failure mode that sank the first attempt.
+        """
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override="ssh://git@github.com/org/repo.git",
+        )
+
+        assert (
+            resolve_clone_url(project, _config()) == "ssh://git@github.com/org/repo.git"
+        )
+
+    def test_a_non_http_scheme_is_passed_through(self) -> None:
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override="git://github.com/org/repo.git",
+        )
+
+        assert resolve_clone_url(project, _config()) == "git://github.com/org/repo.git"
+
+    def test_a_query_string_is_refused(self) -> None:
+        """A credential can hide in one, and which parameter is guesswork.
+
+        Rather than name parameters -- the guesswork the first attempt
+        died of -- this declines to vouch for a shape it cannot
+        inspect.  Clone URLs here come from a GitHub listing, which
+        never carries a query.
+        """
+        with pytest.raises(UnsafeCloneUrlError, match="query string"):
+            resolve_clone_url(
+                _project("https://github.com/org/repo.git?access_token=secret"),
+                _config(use_https=True),
+            )
+
+    def test_a_query_refusal_does_not_repeat_the_value(self) -> None:
+        with pytest.raises(UnsafeCloneUrlError) as excinfo:
+            resolve_clone_url(
+                _project("https://github.com/org/repo.git?access_token=hunter2"),
+                _config(use_https=True),
+            )
+
+        assert "hunter2" not in str(excinfo.value)
+
+    def test_a_query_is_left_alone_on_a_non_http_scheme(self) -> None:
+        """The rule is scoped to the schemes whose URLs carry them."""
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override="ssh://git@github.com/org/repo.git?x=1",
+        )
+
+        assert (
+            resolve_clone_url(project, _config())
+            == "ssh://git@github.com/org/repo.git?x=1"
+        )
+
+    def test_userinfo_is_caught_even_when_parsing_fails(self) -> None:
+        """Failing open on classification must not wave a credential past.
+
+        ``urlparse`` raises on the malformed authority, but the
+        credential is plainly visible in it regardless.
+        """
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override="https://user:secret@[unclosed/org/repo.git",
+        )
+
+        with pytest.raises(UnsafeCloneUrlError, match="password"):
+            resolve_clone_url(project, _config())
+
+    def test_a_bare_username_is_caught_when_parsing_fails_over_https(
+        self,
+    ) -> None:
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override="https://token@[unclosed/org/repo.git",
+        )
+
+        with pytest.raises(UnsafeCloneUrlError, match="reach the git command line"):
+            resolve_clone_url(project, _config())
+
+    def test_the_configured_token_is_refused_wherever_it_sits(self) -> None:
+        """Structure says nothing about a value we already know.
+
+        A token in the *path* is invisible to every rule above, but it
+        needs no classification: the value is configured, so finding it
+        is a positive identification rather than a guess.
+        """
+        with pytest.raises(UnsafeCloneUrlError, match="configured token"):
+            resolve_clone_url(
+                _project(f"https://github.com/org/{TOKEN}.git"),
+                _config(use_https=True, github_token=TOKEN),
+            )
+
+    def test_the_token_refusal_does_not_repeat_it(self) -> None:
+        with pytest.raises(UnsafeCloneUrlError) as excinfo:
+            resolve_clone_url(
+                _project(f"https://github.com/org/{TOKEN}.git"),
+                _config(use_https=True, github_token=TOKEN),
+            )
+
+        assert TOKEN not in str(excinfo.value)
+
+    def test_the_same_url_is_fine_without_that_token_configured(self) -> None:
+        """The rule is about this run's own secret, not a shape."""
+        url = f"https://github.com/org/{TOKEN}.git"
+
+        assert resolve_clone_url(_project(url), _config(use_https=True)) == url
+
+    def test_a_query_is_refused_even_when_parsing_fails(self) -> None:
+        """A malformed authority must not carry a query past the rule.
+
+        ``urlparse`` raises, and the authority holds no ``@``, so
+        nothing would have stopped this before.
+        """
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override="https://[unclosed/repo.git?access_token=secret",
+        )
+
+        with pytest.raises(UnsafeCloneUrlError, match="query string"):
+            resolve_clone_url(project, _config())
+
+    def test_that_refusal_does_not_repeat_the_value(self) -> None:
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override="https://[unclosed/repo.git?access_token=hunter2",
+        )
+
+        with pytest.raises(UnsafeCloneUrlError) as excinfo:
+            resolve_clone_url(project, _config())
+
+        assert "hunter2" not in str(excinfo.value)
+
+    def test_a_fragment_is_refused(self) -> None:
+        """A fragment is as opaque as a query, and as capable of hiding one."""
+        with pytest.raises(UnsafeCloneUrlError, match="fragment"):
+            resolve_clone_url(
+                _project("https://github.com/org/repo.git#access_token=secret"),
+                _config(use_https=True),
+            )
+
+    def test_a_fragment_refusal_does_not_repeat_the_value(self) -> None:
+        with pytest.raises(UnsafeCloneUrlError) as excinfo:
+            resolve_clone_url(
+                _project("https://github.com/org/repo.git#access_token=hunter2"),
+                _config(use_https=True),
+            )
+
+        assert "hunter2" not in str(excinfo.value)
+
+    def test_a_fragment_is_refused_when_parsing_fails(self) -> None:
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override="https://[unclosed/repo.git#access_token=secret",
+        )
+
+        with pytest.raises(UnsafeCloneUrlError, match="fragment"):
+            resolve_clone_url(project, _config())
+
+    def test_a_question_mark_inside_a_fragment_is_not_a_query(self) -> None:
+        """The fragment starts at the first ``#``; a ``?`` after it is its own.
+
+        Both are refused, so the distinction only shows in which rule
+        reports it -- but reporting a fragment as a query would send a
+        reader looking in the wrong place.
+        """
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override="https://[unclosed/repo.git#anchor?a=1",
+        )
+
+        with pytest.raises(UnsafeCloneUrlError, match="fragment"):
+            resolve_clone_url(project, _config())
+
+    def test_an_empty_fragment_is_not_a_credential(self) -> None:
+        url = "https://github.com/org/repo.git#"
+
+        assert resolve_clone_url(_project(url), _config(use_https=True)) == url
+
+    def test_a_fragment_is_left_alone_on_a_non_http_scheme(self) -> None:
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override="ssh://git@github.com/org/repo.git#frag",
+        )
+
+        assert (
+            resolve_clone_url(project, _config())
+            == "ssh://git@github.com/org/repo.git#frag"
+        )
+
+    def test_path_parameters_are_refused(self) -> None:
+        """``;`` parameters are as opaque as a query or fragment."""
+        with pytest.raises(UnsafeCloneUrlError, match="path parameters"):
+            resolve_clone_url(
+                _project("https://github.com/org/repo.git;access_token=secret"),
+                _config(use_https=True),
+            )
+
+    def test_path_parameters_are_refused_when_parsing_fails(self) -> None:
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override="https://[unclosed/repo.git;access_token=secret",
+        )
+
+        with pytest.raises(UnsafeCloneUrlError, match="path parameters"):
+            resolve_clone_url(project, _config())
+
+    def test_a_semicolon_outside_the_last_segment_is_not_a_parameter(
+        self,
+    ) -> None:
+        """``urlparse`` takes parameters from the last segment only.
+
+        Refusing any ``;`` would part company with it, and reject a
+        path git is perfectly happy with.
+        """
+        url = "https://github.com/org;group/repo.git"
+
+        assert resolve_clone_url(_project(url), _config(use_https=True)) == url
+
+    def test_path_parameters_are_left_alone_on_a_non_http_scheme(self) -> None:
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override="ssh://git@github.com/org/repo.git;x=1",
+        )
+
+        assert (
+            resolve_clone_url(project, _config())
+            == "ssh://git@github.com/org/repo.git;x=1"
+        )
+
+    def test_a_trailing_whitespace_fragment_is_still_seen(self) -> None:
+        """``urlparse`` keeps trailing whitespace; the fallback must too.
+
+        ``https://h/r.git# `` parses to a fragment of ``" "``.  Stripping
+        both ends when normalising erased it, so the component the
+        parse can see went unexamined while the original -- trailing
+        space and all -- was what reached git.
+        """
+        with pytest.raises(UnsafeCloneUrlError, match="fragment"):
+            resolve_clone_url(
+                _project("https://github.com/org/repo.git# "),
+                _config(use_https=True),
+            )
+
+    def test_a_trailing_whitespace_query_is_still_seen(self) -> None:
+        with pytest.raises(UnsafeCloneUrlError, match="query string"):
+            resolve_clone_url(
+                _project("https://github.com/org/repo.git?a=1 "),
+                _config(use_https=True),
+            )
+
+    def test_a_percent_encoded_token_is_found(self) -> None:
+        """git decodes it straight back, so a literal search is not enough.
+
+        ``%67`` is ``g``, so the value reaches ``argv`` as the secret
+        itself while a plain substring check sees nothing.
+        """
+        encoded = f"https://github.com/org/%67{TOKEN[1:]}.git"
+
+        with pytest.raises(UnsafeCloneUrlError, match="configured token"):
+            resolve_clone_url(
+                _project(encoded), _config(use_https=True, github_token=TOKEN)
+            )
+
+    def test_a_bare_trailing_question_mark_is_not_a_query(self) -> None:
+        """``urlparse("https://host/repo.git?").query`` is empty.
+
+        The same rule as the bare ``;`` below: a component is what
+        *follows* its separator, and refusing this in the fallback
+        would be stricter than the parse.
+        """
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override="https://[unclosed/repo.git?",
+        )
+
+        assert resolve_clone_url(project, _config()) == "https://[unclosed/repo.git?"
+
+    def test_a_bare_trailing_separator_is_not_a_parameter(self) -> None:
+        """Parameters are what *follows* the first ``;``.
+
+        ``urlparse("https://host/repo.git;").params`` is empty, so
+        refusing this in the fallback would be stricter than the parse
+        -- the opposite of what that path is for.
+        """
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override="https://[unclosed/repo.git;",
+        )
+
+        assert resolve_clone_url(project, _config()) == "https://[unclosed/repo.git;"
+
+    def test_an_unparsable_authority_without_userinfo_is_passed_through(
+        self,
+    ) -> None:
+        """Refusing here would be a classification failure, not a detection."""
+        project = Project(
+            name="org/repo",
+            state=ProjectState.ACTIVE,
+            source_type=SourceType.GITHUB,
+            ssh_url_override="https://[unclosed/org/repo.git",
+        )
+
+        # No credential is identifiable, so this path does not refuse;
+        # the SSH branch returns it and the origin check owns the rest.
+        assert resolve_clone_url(project, _config()) == "https://[unclosed/org/repo.git"
 
 
 class TestRefusedCloneUrls:

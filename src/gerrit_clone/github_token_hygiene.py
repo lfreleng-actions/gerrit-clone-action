@@ -17,6 +17,7 @@ import subprocess
 from typing import TYPE_CHECKING
 
 from gerrit_clone.logging import get_logger
+from gerrit_clone.subprocess_tracking import run_tracked
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -52,11 +53,26 @@ def remove_token_from_remote_url(
     this tool never puts there -- so the URL came in that way, through
     an externally supplied ``project.clone_url``.
 
+    A credential in that URL no longer gets this far in the shapes
+    :func:`gerrit_clone.github_url_safety.reject_credentialed_url`
+    recognises, which is the canonical statement of the policy: this
+    run's configured token wherever it sits, a password under any
+    scheme, a username over HTTP(S), and non-empty HTTP(S) path
+    parameters, query strings or fragments.  An SSH username is not a
+    credential and is allowed, as is anything that cannot be
+    classified -- scp-style URLs above all.
+
+    What remains is narrow, and worth being exact about rather than
+    calling this a general backstop: a token that is *not* this run's
+    configured one, sitting somewhere structurally invisible such as
+    the path. This function does not detect that either -- it acts only
+    on the configured token -- so the case it really covers is that
+    same token reaching the remote by a route the pre-clone check did
+    not anticipate.
+
     In that case there is no clean replacement to write: the only
     candidate is that same value.  So this refuses, and the clone is
     destroyed rather than kept with a credential in ``.git/config``.
-    Sanitising the URL instead, and cloning successfully, is the
-    subject of issue #277.
 
     Failure here is deliberately fatal to the clone: a repository left
     on disk holding a token is the outcome being prevented.
@@ -79,13 +95,21 @@ def remove_token_from_remote_url(
             # below, rather than reporting a scrub that never happened.
             raise ValueError("the only available remote URL still contains the token")
 
-        subprocess.run(
+        # Tracked and bounded: this runs after the clone, so a batch
+        # that has given up must be able to stop it, and an unbounded
+        # call here could hang the worker indefinitely.
+        result = run_tracked(
             ["git", "remote", "set-url", "origin", clean_url],
             cwd=repo_path,
-            capture_output=True,
-            text=True,
-            check=True,
+            timeout=config.clone_timeout,
         )
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(
+                result.returncode,
+                result.args,
+                output=result.stdout,
+                stderr=result.stderr,
+            )
         logger.debug(f"Removed token from remote URL for {project.name}")
     except subprocess.CalledProcessError as e:
         # CRITICAL: Token removal failed - this is a security issue
