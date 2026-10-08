@@ -208,11 +208,27 @@ project, `clone` exits with a filtering failure, and `mirror` aborts the
 whole batch before it pushes anything; each gives the number of tokens the
 project needs. A file the tool cannot read stops the run.
 
+Each `clone`, `refresh` and `mirror` manifest summarises that decision in a
+`content_filters` block: the path of the intent file, and for each scope its
+removal patterns, whether it redacts secrets, and the number of
+`--git-filter` tokens it replaces. It never includes a token or a token's
+digest, since manifests often end up as public CI artifacts. A tree without
+filters reports `"content_filters": null`.
+
 Each repository also records which filters rewrote it. Fetching would force
 the original history back, filtered content included, so refresh copies each
 mirror it filters, fetches and filters the copy, and publishes its refs only
-when every step succeeds; a failure leaves the mirror unchanged. A filtered
-working copy (`--no-mirror`) always gets skipped: re-clone it to update it.
+when every step succeeds; a failure leaves the mirror unchanged. Refresh
+treats a working copy (`--no-mirror`) it filters the same way. It fetches and
+filters a copy, kept inside the checkout's git directory. The checkout takes
+the result only when fetching and filtering succeed and the filtered history
+extends what the checkout holds; otherwise it stays unchanged, with any stash
+put back. Once it has taken the result as its remote-tracking branches, it
+fast-forwards or rebases as a pull would, and a conflict there leaves it as a
+conflicting pull does. A working copy that content filtering rewrote in
+place, as `clone --no-mirror` does, has lost the remote-tracking branch a
+refresh follows, and gets skipped
+([#317](https://github.com/lfreleng-actions/gerrit-clone-action/issues/317)).
 Every remote of a filtered repository refuses pushes. A tree filtered before
 the tree-level file existed gains one from these per-repository records on
 its next run. Releases up to v2.2.4 recorded no filters at all, so refresh
@@ -1397,6 +1413,10 @@ Each run generates a detailed JSON manifest (`clone-manifest.json`):
     "branch": null,
     "strict_host_checking": true,
     "path": "/workspace/repos"
+  },
+  "content_filters": {
+    "intent_file": "/workspace/repos/.gerrit-clone/filter-policy.json",
+    "scopes": [{ "projects": "*", "remove": [".github/dependabot.yml"] }]
   },
   "results": [
     {

@@ -325,7 +325,9 @@ def build_config(
     )
     try:
         # Written down before anything is cloned or refreshed.
-        config.content_filters = resolve_filters(config.path, options, persist=True)
+        config.content_filters = resolve_filters(
+            config.path, options, persist=True, command="clone"
+        )
     except IntentError as e:
         _report_configuration_error(session, e)
         raise typer.Exit(ExitCode.CONFIGURATION_ERROR) from e

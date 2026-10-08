@@ -20,6 +20,7 @@ from gerrit_clone.content_policy import (
     PolicyRecordError,
     add_policy,
     content_filtering,
+    record_and_block,
     recorded_policy,
 )
 from gerrit_clone.content_spec import ContentFilterSpec
@@ -379,3 +380,21 @@ class TestContentFilterSpec:
         spec = ContentFilterSpec.from_options(None, f"proj:{TOKEN}", False, tmp_path)
 
         assert TOKEN not in repr(spec)
+
+
+class TestRecordAndBlock:
+    def test_unreadable_push_urls_refuse_it_before_anything_changes(
+        self, tmp_path: Path
+    ) -> None:
+        """Blocking could fail part-way, with nothing to put back."""
+        repo = tmp_path / "repo"
+        subprocess.run(["git", "init", "-q", "--bare", str(repo)], check=True)
+        before = (repo / "config").read_text()
+
+        with (
+            patch("gerrit_clone.content_policy.push_urls", return_value=None),
+            pytest.raises(PolicyRecordError, match="push URLs"),
+        ):
+            record_and_block(repo, FilterPolicy.of(["secret.txt"], [], False))
+
+        assert (repo / "config").read_text() == before

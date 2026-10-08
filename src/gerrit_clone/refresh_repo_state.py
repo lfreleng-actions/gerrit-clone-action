@@ -28,6 +28,8 @@ from gerrit_clone.subprocess_tracking import ProcessAbandonedError
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from gerrit_clone.models import RefreshResult
+
 logger = get_logger(__name__)
 
 
@@ -380,6 +382,34 @@ class RepositoryStateMixin(GitEnvironmentMixin):
         except Exception as e:
             logger.debug(f"Failed to pop stash: {e}")
             return False
+
+    def _restore_stash(self, repo_path: Path, result: RefreshResult) -> None:
+        """Pop a stash the refresh made, onto the branch it came from.
+
+        In force mode the stash may have been taken on a feature branch
+        before switching to the default branch; popping it there would
+        apply that work to the wrong branch, and drop the stash entry.
+        It is then left for ``git stash list``.
+        """
+        if not result.stash_created or result.stash_popped:
+            return
+        if (
+            result.stash_branch is not None
+            and result.current_branch != result.stash_branch
+        ):
+            logger.warning(
+                f"⚠️ {result.project_name}: Stash was created on "
+                f"'{result.stash_branch}' but the working tree is now "
+                f"on '{result.current_branch}'; leaving the stash "
+                f"intact for manual recovery (git stash list)"
+            )
+        elif self._pop_stash(repo_path):
+            result.stash_popped = True
+            logger.debug(f"💾 {result.project_name}: Restored stashed changes")
+        else:
+            logger.warning(
+                f"⚠️ {result.project_name}: Failed to restore stash (may have conflicts)"
+            )
 
     def _stash_count(self, repo_path: Path) -> int:
         """Return the number of entries in the repository's stash list.

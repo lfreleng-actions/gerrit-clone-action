@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from urllib.parse import unquote, urlparse
 
+from gerrit_clone.url_credentials import helper_address
+
 
 class UnsafeCloneUrlError(ValueError):
     """Raised when a clone URL must not be handed to git.
@@ -292,6 +294,10 @@ def reject_credentialed_url(url: str, token: str | None = None) -> None:
       that might hold it is the guesswork that sank the first attempt,
       so this declines to vouch for content it cannot inspect.  Clone
       URLs here come from a GitHub listing, which carries none.
+    - A **remote helper's address**, ``<transport>::<address>``, is
+      checked as the URL it is, by these same rules; ``urlparse`` would
+      read the transport as a scheme and find no userinfo at all.  See
+      :func:`gerrit_clone.url_credentials.helper_address`.
     - Anything with neither ``://`` nor a leading ``//`` is passed
       through: scp-style or unknown, with no userinfo syntax, and the
       shape the grammars disagree on.  A leading ``//`` is a
@@ -320,8 +326,9 @@ def reject_credentialed_url(url: str, token: str | None = None) -> None:
         )
 
     # Everything below reads the value parsing operates on, so that the
-    # structural and textual paths cannot disagree about the scheme.
-    url = _as_urlparse_sees_it(url)
+    # structural and textual paths cannot disagree about the scheme; and
+    # a remote helper's address, which is what a credential would reach.
+    url = helper_address(_as_urlparse_sees_it(url))
 
     if "://" not in url and not url.startswith("//"):
         return

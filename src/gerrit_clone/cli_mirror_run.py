@@ -29,6 +29,7 @@ from gerrit_clone.cli_mirror_setup import (
 )
 from gerrit_clone.content_filter import normalize_file_patterns, parse_git_filter_spec
 from gerrit_clone.content_intent import IntentError
+from gerrit_clone.content_spec import manifest_entry
 from gerrit_clone.error_codes import ExitCode
 from gerrit_clone.mirror_manager import (
     MirrorBatchResult,
@@ -44,6 +45,7 @@ if TYPE_CHECKING:
 
     from gerrit_clone.cli_mirror_models import MirrorRequest
     from gerrit_clone.cli_session import CliSession
+    from gerrit_clone.content_spec import ContentFilterSpec
     from gerrit_clone.mirror_models import MirrorResult
     from gerrit_clone.models import Config, Project
 
@@ -126,7 +128,7 @@ def run_mirror(request: MirrorRequest, session: CliSession) -> None:
         gerrit_host=request.server,
     )
 
-    _write_manifest(request, console, batch_result)
+    _write_manifest(request, console, batch_result, mirror_manager.resolved_filters)
 
     # Show summary
     if not request.quiet:
@@ -189,13 +191,17 @@ def _select_projects(
 
 
 def _write_manifest(
-    request: MirrorRequest, console: Console, batch_result: MirrorBatchResult
+    request: MirrorRequest,
+    console: Console,
+    batch_result: MirrorBatchResult,
+    spec: ContentFilterSpec | None,
 ) -> None:
     """Write the mirror manifest to the output path."""
     manifest_path: Path = request.output_path / request.manifest_filename
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    data = {**batch_result.to_dict(), "content_filters": manifest_entry(spec)}
     with manifest_path.open("w") as f:
-        json.dump(batch_result.to_dict(), f, indent=2)
+        json.dump(data, f, indent=2)
 
     if not request.quiet:
         console.print(f"✓ Manifest written to: [cyan]{manifest_path}[/cyan]")

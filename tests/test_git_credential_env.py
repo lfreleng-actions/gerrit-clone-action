@@ -25,7 +25,10 @@ from gerrit_clone.github_clone_url import (
     resolve_clone_url,
     trusted_clone_origin,
 )
-from gerrit_clone.github_url_safety import UnsafeCloneUrlError
+from gerrit_clone.github_url_safety import (
+    UnsafeCloneUrlError,
+    reject_credentialed_url,
+)
 from gerrit_clone.mirror_push import PushSettings, build_push_env
 from gerrit_clone.models import Config, Project, ProjectState, SourceType
 
@@ -358,6 +361,34 @@ class TestTrustedOrigin:
                 _config(use_https=True, github_token=TOKEN),
                 "https://attacker.example/org/repo.git",
             )
+
+
+class TestRemoteHelperUrls:
+    """``<transport>::<address>`` hands *address* to a remote helper.
+
+    A credential in the address reaches the helper's command line just
+    as one in a plain URL reaches git's, so the address is checked as
+    the URL it is.  ``urlparse`` reads the transport as the scheme and
+    finds no userinfo at all.
+    """
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "helper::https://user:pass@github.com/org/repo.git",
+            "helper::https://token@github.com/org/repo.git",
+            "helper::ssh://git:secret@github.com/org/repo.git",
+            "outer::inner::https://user:pass@github.com/org/repo.git",
+        ],
+        ids=["password", "username-over-https", "ssh-password", "nested"],
+    )
+    def test_a_credential_in_the_address_is_refused(self, url: str) -> None:
+        with pytest.raises(UnsafeCloneUrlError, match="reach the git command line"):
+            reject_credentialed_url(url)
+
+    def test_an_address_without_one_is_passed_through(self) -> None:
+        reject_credentialed_url("helper::https://github.com/org/repo.git")
+        reject_credentialed_url("helper::ssh://git@github.com/org/repo.git")
 
 
 class TestSuppliedCredentialsAreRefused:

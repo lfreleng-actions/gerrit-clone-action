@@ -543,7 +543,7 @@ class TestStagedRefresh:
         before = _git("for-each-ref", cwd=mirror)
         _advance(tree.parent / "up-parent")
 
-        with patch("gerrit_clone.refresh_filtered.block_pushes", return_value=False):
+        with patch("gerrit_clone.content_policy.block_pushes", return_value=False):
             result = _worker(filters=_spec(tree)).refresh_repository(mirror)
 
         assert result.status == RefreshStatus.FAILED

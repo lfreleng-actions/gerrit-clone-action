@@ -32,18 +32,6 @@ class PushSettings:
     git_ssh_command: str | None
 
 
-def sanitize_token(github_token: str | None, text: str) -> str:
-    """Remove *github_token* from *text* if present.
-
-    This must be applied to **all** git output (stdout *and* stderr)
-    before logging or returning it, because git can include the
-    credentialed URL in either stream.
-    """
-    if github_token and github_token in text:
-        return text.replace(github_token, "***")
-    return text
-
-
 def build_push_url(settings: PushSettings, github_repo: GitHubRepo) -> str:
     """Build the push URL for a GitHub repository.
 

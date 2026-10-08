@@ -53,13 +53,13 @@ from gerrit_clone.mirror_push import (
     build_push_url,
     format_push_failure,
     log_push_success,
-    sanitize_token,
 )
 from gerrit_clone.mirror_result_builder import (
     MirrorPushContext,
     build_mirror_result,
     run_push_phase,
 )
+from gerrit_clone.url_credentials import redact_text
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -145,6 +145,8 @@ class MirrorManager:
         self.remove_file_patterns = remove_file_patterns
         self.git_filter_projects = git_filter_projects
         self.redact_secrets = redact_secrets
+        #: The filters :meth:`mirror_projects` resolved, for the manifest.
+        self.resolved_filters: ContentFilterSpec | None = None
         self.config = config = with_content_filters(
             config, remove_file_patterns, git_filter_projects, redact_secrets
         )
@@ -191,11 +193,13 @@ class MirrorManager:
         return build_push_url(self._push_settings(), github_repo)
 
     def _sanitize_token(self, text: str) -> str:
-        """Remove the github_token from *text* if present.
+        """*text*, such as git's output, with no credential left in it.
 
-        See :func:`gerrit_clone.mirror_push.sanitize_token`.
+        Git can quote the URL it used in stdout or stderr, so this is
+        applied to both before either is logged or returned.  See
+        :func:`gerrit_clone.url_credentials.redact_text`.
         """
-        return sanitize_token(self.github_token, text)
+        return redact_text(text, [self.github_token])
 
     def _push_to_github(
         self, local_path: Path, github_repo: GitHubRepo
@@ -307,8 +311,11 @@ class MirrorManager:
         # Settled, and written down, first: even a run that selects nothing
         # decides for the projects a later run selects, and --overwrite
         # below deletes repositories that are then cloned and filtered again.
-        spec = resolve_filters(
-            self.config.path, self.config.content_filters, persist=True
+        spec = self.resolved_filters = resolve_filters(
+            self.config.path,
+            self.config.content_filters,
+            persist=True,
+            command="mirror",
         )
         if not projects:
             logger.info("No projects to mirror")

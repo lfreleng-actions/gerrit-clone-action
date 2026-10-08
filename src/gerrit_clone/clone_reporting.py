@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
 
+from gerrit_clone.content_spec import manifest_entry
 from gerrit_clone.logging import get_logger
 from gerrit_clone.models import CloneStatus
 from gerrit_clone.rich_status import clone_completed
@@ -148,6 +149,7 @@ def write_manifest(batch_result: BatchResult, config: Config) -> None:
 
     try:
         manifest_data = batch_result.to_dict()
+        manifest_data["content_filters"] = manifest_entry(config.content_filters)
 
         with manifest_path.open("w", encoding="utf-8") as f:
             json.dump(manifest_data, f, indent=2, sort_keys=True)

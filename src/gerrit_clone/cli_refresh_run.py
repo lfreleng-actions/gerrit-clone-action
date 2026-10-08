@@ -23,7 +23,7 @@ from gerrit_clone.cli_refresh_report import (
 )
 from gerrit_clone.content_intent import IntentError
 from gerrit_clone.content_intent_resolve import resolve_filters
-from gerrit_clone.content_spec import ContentFilterSpec
+from gerrit_clone.content_spec import ContentFilterSpec, manifest_entry
 from gerrit_clone.content_stage import filter_repository
 from gerrit_clone.error_codes import ExitCode
 from gerrit_clone.file_logging import (
@@ -128,7 +128,7 @@ def run_refresh(request: RefreshRequest, console: Console) -> None:
     # Display results
     show_refresh_results(console, result, request.dry_run)
 
-    _write_manifest(request, console, result)
+    _write_manifest(request, console, result, spec)
     _exit_with_result_status(request, console, result)
 
 
@@ -295,6 +295,7 @@ def _resolve_filters(
                 request.output_path,
             ),
             persist=not request.dry_run and request.output_path.is_dir(),
+            command="refresh",
         )
     except IntentError as exc:
         console.print(f"[red]❌ {exc}[/red]")
@@ -349,7 +350,10 @@ def _apply_content_filters(
 
 
 def _write_manifest(
-    request: RefreshRequest, console: Console, result: RefreshBatchResult
+    request: RefreshRequest,
+    console: Console,
+    result: RefreshBatchResult,
+    spec: ContentFilterSpec | None,
 ) -> None:
     """Write the refresh manifest and report its location."""
     # Write manifest with timestamp by default, or use specified filename
@@ -359,7 +363,7 @@ def _write_manifest(
     else:
         timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%SZ")
         manifest_file = request.output_path / f"{MANIFEST_PREFIX}{timestamp}.json"
-    write_refresh_manifest(manifest_file, result)
+    write_refresh_manifest(manifest_file, result, manifest_entry(spec))
     if not request.quiet:
         console.print(f"📄 Manifest: [cyan]{manifest_file}[/cyan]")
         console.print()

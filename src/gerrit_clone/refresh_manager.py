@@ -32,6 +32,7 @@ from gerrit_clone.models import (
 from gerrit_clone.refresh_discovery import RepositoryDiscoveryMixin
 from gerrit_clone.refresh_parallel import ParallelRefreshMixin
 from gerrit_clone.refresh_worker import RefreshWorker
+from gerrit_clone.url_credentials import redact_url
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -247,7 +248,8 @@ class RefreshManager(RepositoryDiscoveryMixin, ParallelRefreshMixin):
             return
 
         remote_url = worker._get_remote_url(repo_path)
-        result.remote_url = remote_url
+        # Recorded in the manifest: never a credential.
+        result.remote_url = redact_url(remote_url) if remote_url else None
 
         # Read first, as the refresh does: a config too broken to read the
         # policy hides the remotes too, and is a failure, not "not Gerrit".

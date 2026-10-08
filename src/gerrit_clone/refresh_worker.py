@@ -12,6 +12,7 @@ live in a stack of focused mixins, each of which owns one responsibility:
 * :mod:`gerrit_clone.refresh_execution` — fetch/pull execution and retries
 * :mod:`gerrit_clone.refresh_force` — force-mode repository repair
 * :mod:`gerrit_clone.refresh_filtered` — content-filtered repositories
+* :mod:`gerrit_clone.refresh_checkout_stage` — filtered working copies
 * :mod:`gerrit_clone.refresh_output` — git output classification and counting
 
 Their public names are re-exported here so ``gerrit_clone.refresh_worker``
@@ -27,11 +28,14 @@ from typing import TYPE_CHECKING, Any
 from gerrit_clone.content_policy import recorded_policy
 from gerrit_clone.logging import get_logger
 from gerrit_clone.models import Config, RefreshResult, RefreshStatus, RetryPolicy
+from gerrit_clone.refresh_checkout_stage import (
+    CANNOT_FOLLOW_REFUSAL,
+    StagedCheckoutMixin,
+)
 from gerrit_clone.refresh_filtered import (
     EARLIER_RELEASE_REFUSAL,
     FILTERED_REFRESH_REFUSAL,
     FILTERED_WORKING_COPY_REFUSAL,
-    FilteredRefreshMixin,
 )
 from gerrit_clone.refresh_git_env import SSH_HANDSHAKE_JITTER_SECONDS
 from gerrit_clone.refresh_output import (
@@ -41,6 +45,7 @@ from gerrit_clone.refresh_output import (
 )
 from gerrit_clone.refresh_repo_state import StashOutcome
 from gerrit_clone.subprocess_tracking import ProcessAbandonedError
+from gerrit_clone.url_credentials import redact_url
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -53,6 +58,7 @@ logger = get_logger(__name__)
 # mixin modules, but the existing patch target
 # ``gerrit_clone.refresh_worker.time.sleep`` must keep resolving.
 __all__ = [
+    "CANNOT_FOLLOW_REFUSAL",
     "EARLIER_RELEASE_REFUSAL",
     "FILTERED_REFRESH_REFUSAL",
     "FILTERED_WORKING_COPY_REFUSAL",
@@ -76,7 +82,7 @@ def _keeping_earlier(message: str, earlier: str | None) -> str:
     return f"{message}; {earlier}" if earlier else message
 
 
-class RefreshWorker(FilteredRefreshMixin):
+class RefreshWorker(StagedCheckoutMixin):
     """Worker for refreshing individual repositories."""
 
     def __init__(
@@ -170,7 +176,8 @@ class RefreshWorker(FilteredRefreshMixin):
                 result.had_uncommitted_changes = state.get("has_uncommitted", False)
 
             remote_url = self._get_remote_url(repo_path)
-            result.remote_url = remote_url
+            # Recorded in the manifest and quoted below: never a credential.
+            result.remote_url = redact_url(remote_url) if remote_url else None
 
             # Read before the Gerrit gate: a config too broken to read the
             # policy hides the remotes too, and must fail the repository,
@@ -181,7 +188,9 @@ class RefreshWorker(FilteredRefreshMixin):
             # fetch being --all.
             if self.filter_gerrit_only and not self._has_gerrit_remote(repo_path):
                 result.status = RefreshStatus.NOT_GERRIT_REPO
-                result.error_message = f"Not a Gerrit repository (remote: {remote_url})"
+                result.error_message = (
+                    f"Not a Gerrit repository (remote: {result.remote_url})"
+                )
                 self._stamp_completion(result, started_at)
                 logger.debug(f"⊘ {project_name}: Not a Gerrit repository")
                 return result
@@ -201,9 +210,7 @@ class RefreshWorker(FilteredRefreshMixin):
                 return result
 
             result.status = RefreshStatus.REFRESHING
-
-            success = self._execute_adaptive_refresh(repo_path, result, bare=bare)
-
+            success = self._refresh_in_place(repo_path, result, bare=bare)
             self._apply_refresh_outcome(repo_path, result, success)
 
         except ProcessAbandonedError:
@@ -383,7 +390,9 @@ class RefreshWorker(FilteredRefreshMixin):
             success: Whether the fetch/pull ultimately succeeded
         """
         if not success:
-            result.status = RefreshStatus.FAILED
+            # A refused working copy keeps SKIPPED, and a conflict CONFLICTS.
+            if result.status not in (RefreshStatus.SKIPPED, RefreshStatus.CONFLICTS):
+                result.status = RefreshStatus.FAILED
             if not result.error_message:
                 result.error_message = "Refresh failed for unknown reason"
             return
@@ -399,33 +408,7 @@ class RefreshWorker(FilteredRefreshMixin):
             result.status = RefreshStatus.UP_TO_DATE
             logger.debug(f"✓ {result.project_name}: Already up-to-date")
 
-        # Pop stash if we created one, but only back onto the branch it
-        # came from. In force mode the stash may have been taken on a
-        # feature branch before switching to the default branch; popping
-        # it here would apply that work to the wrong branch (and drop
-        # the stash entry). In that case leave the stash intact for
-        # manual recovery.
-        if not result.stash_created:
-            return
-
-        stashed_elsewhere = (
-            result.stash_branch is not None
-            and result.current_branch != result.stash_branch
-        )
-        if stashed_elsewhere:
-            logger.warning(
-                f"⚠️ {result.project_name}: Stash was created on "
-                f"'{result.stash_branch}' but the working tree is now "
-                f"on '{result.current_branch}'; leaving the stash "
-                f"intact for manual recovery (git stash list)"
-            )
-        elif self._pop_stash(repo_path):
-            result.stash_popped = True
-            logger.debug(f"💾 {result.project_name}: Restored stashed changes")
-        else:
-            logger.warning(
-                f"⚠️ {result.project_name}: Failed to restore stash (may have conflicts)"
-            )
+        self._restore_stash(repo_path, result)
 
     def _get_project_name(self, repo_path: Path) -> str:
         """Get project name from repository path.

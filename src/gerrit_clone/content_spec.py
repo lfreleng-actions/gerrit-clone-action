@@ -17,9 +17,9 @@ says so for the caller to refuse it.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from gerrit_clone.content_intent import FilterIntent
+from gerrit_clone.content_intent import FilterIntent, manifest_summary
 from gerrit_clone.content_patterns import (
     normalize_file_patterns,
     parse_git_filter_spec,
@@ -29,6 +29,8 @@ from gerrit_clone.refresh_discovery import project_name_for
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from gerrit_clone.content_journal import Journal
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,8 @@ class ContentFilterSpec:
     redact_secrets: bool
     base_path: Path
     intent: FilterIntent = field(default_factory=FilterIntent)
+    #: Where rewrites are journalled; ``None`` for a run that writes nothing.
+    journal: Journal | None = None
 
     def project_name(self, repo_path: Path) -> str:
         """*repo_path*'s project name, relative to the run's base path.
@@ -87,7 +91,10 @@ class ContentFilterSpec:
 
     def policy_for(self, repo_path: Path) -> FilterPolicy:
         """The policy this run would filter *repo_path* under."""
-        project = self.project_name(repo_path)
+        return self.project_policy(self.project_name(repo_path))
+
+    def project_policy(self, project: str) -> FilterPolicy:
+        """The policy this run would filter project *project* under."""
         filters = self.filters_for(project)
         return FilterPolicy.of(
             filters.remove_patterns, self._tokens(project), filters.redact_secrets
@@ -119,6 +126,17 @@ class ContentFilterSpec:
             redact_secrets,
             base_path,
         )
+
+
+def manifest_entry(spec: ContentFilterSpec | None) -> dict[str, Any] | None:
+    """A manifest's ``content_filters`` block: the tree's intent, or null.
+
+    It summarises the intent the run resolved, its own options included,
+    with each scope's patterns and a count of its tokens.
+    """
+    if spec is None:
+        return None
+    return manifest_summary(spec.base_path, spec.intent)
 
 
 def missing_tokens_refusal(count: int) -> str:

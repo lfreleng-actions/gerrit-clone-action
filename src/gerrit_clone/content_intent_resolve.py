@@ -11,8 +11,13 @@ written down, before the run clones, refreshes or deletes anything:
    it, and those are added for that project.  This brings trees that an
    earlier release filtered -- one that kept only these per-repository
    records -- under the intent, and it is what lets ``mirror --overwrite``
-   delete a repository without losing what it was filtered with.
+   delete a repository without losing what it was filtered with.  So
+   are the filters of any rewrite the journal shows unfinished (see
+   :mod:`gerrit_clone.content_journal`).
 3. The run's own options are added.
+
+Writing it down happens under the tree's intent lock, after reading the
+intent again: another run may have extended it in the meantime.
 
 Nothing is ever taken away.  A repository an earlier release filtered
 without any record is not added: what it was filtered with is unknown,
@@ -28,9 +33,11 @@ from gerrit_clone.content_intent import (
     FilterIntent,
     IntentError,
     find_root,
+    intent_locked,
     load_intent,
     save_intent,
 )
+from gerrit_clone.content_journal import Journal, unfinished_intent
 from gerrit_clone.content_policy import PolicyReadError, stored_policy
 from gerrit_clone.content_spec import ContentFilterSpec
 from gerrit_clone.logging import get_logger
@@ -53,7 +60,11 @@ class _TreeDiscovery(RepositoryDiscoveryMixin):
 
 
 def resolve_filters(
-    start: Path, options: ContentFilterSpec | None, *, persist: bool
+    start: Path,
+    options: ContentFilterSpec | None,
+    *,
+    persist: bool,
+    command: str = "gerrit-clone",
 ) -> ContentFilterSpec | None:
     """The filters this run applies to the tree containing *start*.
 
@@ -61,8 +72,9 @@ def resolve_filters(
         start: The run's output path.  The tree's root is the nearest of
             it and its parents holding an intent, or *start* itself.
         options: The run's own filter options, if it was given any.
-        persist: Whether to write the extended intent down: false for a
-            dry run, which changes nothing.
+        persist: Whether to write the extended intent down, and journal
+            the run's rewrites: false for a dry run, which changes nothing.
+        command: The command running, for the journal.
 
     Returns:
         ``None`` if neither the options nor the tree filter anything.
@@ -73,18 +85,24 @@ def resolve_filters(
     """
     root = find_root(start) or start.resolve()
     recorded = load_intent(root)
-    intent = recorded.union(gathered_intent(root))
+    additions = gathered_intent(root).union(_unfinished(root))
     if options is not None:
-        intent = intent.union(
+        additions = additions.union(
             FilterIntent.of_options(
                 options.remove_patterns,
                 options.git_filter_projects,
                 options.redact_secrets,
             )
         )
+    intent = recorded.union(additions)
     if persist and intent.scopes != recorded.scopes and not intent.empty:
-        save_intent(root, intent)
-        logger.info(f"Recorded the content-filter intent for {root}")
+        with intent_locked(root):
+            # Another run may have extended it since it was read.
+            current = load_intent(root)
+            intent = current.union(additions)
+            if intent.scopes != current.scopes:
+                save_intent(root, intent)
+                logger.info(f"Recorded the content-filter intent for {root}")
     if persist and not intent.empty:
         # Left visible at a checkout's top level, the intent would be an
         # untracked change there, and refresh would skip the checkout.
@@ -95,15 +113,30 @@ def resolve_filters(
             logger.warning(f"Could not hide {INTENT_DIR} from git: {exc}")
     if intent.empty:
         return None
+    journal = Journal(root, command) if persist else None
     if options is None:
-        return ContentFilterSpec(None, None, False, root, intent)
+        return ContentFilterSpec(None, None, False, root, intent, journal)
     return ContentFilterSpec(
         options.remove_patterns,
         options.git_filter_projects,
         options.redact_secrets,
         root,
         intent,
+        journal,
     )
+
+
+def _unfinished(root: Path) -> FilterIntent:
+    """The filters of rewrites the journal shows not completed, which bind."""
+    unfinished = unfinished_intent(root)
+    if not unfinished.empty:
+        projects = sorted(value for _kind, value in unfinished.scopes)
+        logger.warning(
+            f"Content filtering of {', '.join(projects)} has not completed: a "
+            f"run was interrupted, or another is filtering now. Its filters "
+            f"stay in force"
+        )
+    return unfinished
 
 
 def gathered_intent(root: Path, repos: Iterable[Path] | None = None) -> FilterIntent:

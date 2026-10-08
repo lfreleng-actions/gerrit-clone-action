@@ -28,10 +28,7 @@ from gerrit_clone.clone_utils import (
 from gerrit_clone.git_utils import is_git_repository
 from gerrit_clone.github_clone_env import build_git_env
 from gerrit_clone.github_clone_results import build_clone_result
-from gerrit_clone.github_clone_url import (
-    redact_clone_url,
-    resolve_clone_url,
-)
+from gerrit_clone.github_clone_url import resolve_clone_url
 from gerrit_clone.github_gh_cli import clone_with_gh_cli
 from gerrit_clone.github_token_hygiene import remove_token_from_remote_url
 from gerrit_clone.github_url_safety import UnsafeCloneUrlError
@@ -43,6 +40,7 @@ from gerrit_clone.subprocess_tracking import (
     run_tracked,
     unless_abandoned,
 )
+from gerrit_clone.url_credentials import redact_text, redact_url
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -269,8 +267,7 @@ def _clone_with_git(
             project, target_path, started_at, CloneStatus.FAILED, error_msg
         )
 
-    # For logging, show URL without token
-    log_url = redact_clone_url(clone_url, project, config.github_token)
+    log_url = redact_text(redact_url(clone_url), [config.github_token])
     logger.debug(f"Cloning {project.name} with git from {log_url}")
 
     # Use atomic clone path for safety (automatic cleanup on failure)
@@ -288,7 +285,8 @@ def _clone_with_git(
             cmd.insert(-3, "--single-branch")
 
         try:
-            logger.debug(f"Executing: {' '.join(cmd).replace(clone_url, log_url)}")
+            command = " ".join(cmd).replace(clone_url, log_url)
+            logger.debug(f"Executing: {redact_text(command, [config.github_token])}")
             # Tracked so a batch that gives up can terminate the child
             # rather than wait for it; see
             # gerrit_clone.subprocess_tracking.

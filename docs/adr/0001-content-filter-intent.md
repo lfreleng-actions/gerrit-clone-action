@@ -60,10 +60,10 @@ Two layers, each authoritative for one question.
   repository. The tool never reads it as "nothing decided".
 - **Atomic.** The tool writes a temporary file, flushes it, then renames
   it over the old one.
-- **Location.** The tool searches upwards from the output path, as git
-  finds `.git`, and creates the file at the output path otherwise.
-  Discovery already skips hidden directories, so `.gerrit-clone/` never
-  passes for a project.
+- **Location.** The tool searches upwards from the output path for the
+  intent or the journal, as git finds `.git`, and creates the file at
+  the output path otherwise. Discovery already skips hidden directories,
+  which keeps `.gerrit-clone/` from passing for a project.
 
 ### Each run
 
@@ -76,7 +76,25 @@ At the start of a run, before it clones, refreshes or deletes anything:
    held.
 3. Add the run's options.
 4. Write the result, unless the run is a dry run, or a refresh of a path
-   that does not exist.
+   that does not exist. A run writes under the tree's lock,
+   `.gerrit-clone/filter-policy.lock`, held with `flock` (`msvcrt.locking`
+   on Windows): it takes the lock, reads the intent again, adds its
+   additions and writes. Two runs on one tree, such as a `refresh` and a
+   `mirror`, never lose each other's additions. A run waits up
+   to two minutes for another to release the lock, then stops with an
+   error. A run with nothing to add, and a dry run, never take it.
+
+A run also holds the lock while it publishes a filtered result: a staged
+refresh's refs, or a repository `clone` or `mirror` filtered in place.
+First it checks that its filters still cover the intent, which another
+run may have extended since this one read it. If they do not, the
+repository stays unchanged and counts as failed, so `mirror` pushes
+nothing; the next run filters it under the larger intent. `mirror`
+pushes to GitHub after that check, so two `mirror` runs pushing from one
+tree at once remain unsupported.
+
+The tool never writes under `.gerrit-clone/` through a symbolic link,
+which a checkout could track to aim those writes outside the tree.
 
 The run then filters every repository with the union of its options and
 the intent for that project, through one shared step
@@ -84,11 +102,78 @@ the intent for that project, through one shared step
 all use. A refresh stages every mirror the run filters, including ones
 the filters have not rewritten yet: it fetches into a copy, filters the
 copy, and publishes only if both succeed, so a failed filter never
-leaves new unfiltered content in the mirror. A working copy
-(`--no-mirror`) has no bare copy to publish atomically, so one the
-filters never rewrote pulls first and gets filtered after; a failed
-filter there exits non-zero and leaves the checkout for the operator,
-as before this decision.
+leaves new unfiltered content in the mirror.
+
+A working copy (`--no-mirror`) the run filters gets the same treatment,
+after the usual working-copy preparation. Its copy, kept inside the
+checkout's git directory, holds the checkout's remote-tracking refs as
+branches, so both filter methods rewrite them and `git filter-repo` has
+no `origin` refs to fold into local branches. The copy fetches and gets
+filtered. The checkout then takes the copy's refs as its remote-tracking
+refs and tags, in one atomic fetch, and fast-forwards or rebases as a
+pull would, without fetching again. It does so only if the filtered
+upstream extends what the checkout holds: filtering the same content
+gives the same commits, so a checkout a staged refresh rewrote follows
+it, while one whose own history the filters would now rewrite gets
+refused. Under the publication lock, the refs publishing replaces must
+also still stand as they did when the refresh made its copy, for a
+mirror and a working copy alike, so it never rolls back another refresh
+that published meanwhile. Any failure before that leaves the checkout
+unchanged, with any stash put back, and the refresh never filters the
+checkout in place.
+Without `git filter-repo`, the worktree fallback adds its removal commit
+on upstream's tip, which no later refresh could extend, so a working
+copy it would rewrite gets refused, with a pointer to install it.
+
+The copy stands in for upstream alone. A refresh filters what it
+fetches, so it never brings unfiltered content into a checkout; it does
+not filter the checkout's own branches, or the local commits a rebase
+replays. The operator made those, and the checkout held them already.
+Refusing the refresh would not clean them, and rewriting them in place
+is what left checkouts unrefreshable. A checkout the filters rewrote
+blocks pushing, as every filtered repository does.
+
+A working copy filtered in place, as `clone --no-mirror` does, has lost
+its remote-tracking refs to `git filter-repo`, and stays refused;
+[#317](https://github.com/lfreleng-actions/gerrit-clone-action/issues/317)
+tracks filtering new working copies through a copy too.
+
+### Journal
+
+`<tree>/.gerrit-clone/filter-journal.jsonl` records the runs that
+carried the intent out. Each rewrite, through the one shared step,
+appends two JSON lines:
+
+- **Before it starts:** the command and release, the project and
+  repository, the remote URLs it fetches from, without user information,
+  query or fragment, the method (`git filter-repo` or the worktree
+  fallback), the filters, with tokens as digests only, and a SHA-256
+  digest of every ref. The tool flushes this line to disk first, and
+  does not filter a repository it cannot journal.
+- **Once it ends:** whether it worked, and the digest of the refs it
+  left.
+
+The intent stays the decision and the journal an audit trail, with one
+exception. A start without a successful end, from a crash or a rewrite
+that failed part-way, may have left its repository partly rewritten. Its
+filters stay in force, added to the intent at the next run, until a
+later rewrite of that project completes under filters that cover them.
+Rewrites of one project never overlap: each holds a per-project lock,
+under `.gerrit-clone/locks/`, from its start line to its end line. So a
+start without an end, earlier than a later rewrite's start, belongs to
+a run that crashed, never to one still at work.
+
+Every entry carries a `schema`, and one from another release stops the
+run. The ref digests are the journal's evidence, so the tool never
+leaves one out: if it cannot read the refs before a rewrite, it does
+not filter the repository, and if it cannot read them after, it writes
+no end, which leaves the start binding.
+
+Appends take the tree's lock, so lines from different runs never
+interleave. A crash while writing leaves a partial last line: readers
+skip it and the next append removes it, since no rewrite followed it.
+Any other line the tool cannot read stops the run, as an unreadable
+intent does.
 
 ### Tokens
 
@@ -122,6 +207,16 @@ filters nor pushes it, leaves its GitHub repository alone, and reports
 it as skipped with the reason, until the operator deletes it by hand and
 clones it again with the filters it needs; that run then records them.
 
+### Manifests
+
+The `clone`, `refresh` and `mirror` manifests carry a top-level
+`content_filters` block summarising the intent the run resolved: the
+intent file's path, and for each scope its removal patterns, whether it
+redacts secrets, and the number of tokens it replaces. It carries no
+digest, since manifests often end up as public CI artifacts, and a
+digest lets anyone confirm a guessed token offline. A tree without
+filters reports `null`.
+
 ## Consequences
 
 - A later run without filter options filters as the tree decided,
@@ -136,18 +231,8 @@ clones it again with the filters it needs; that run then records them.
 
 ### Deferred
 
-Tracked in
-[#309](https://github.com/lfreleng-actions/gerrit-clone-action/issues/309):
-
-- **Per-run history.** The file records the accumulated decision, not a
-  log of the runs that made it, nor the refs before and after each
-  rewrite.
-- **Concurrent runs.** Within a run, only the main thread writes the
-  file. Two processes on one tree could each extend it, and the last
-  write would win, losing the other's additions; a lock file would close
-  that.
-- **Manifests.** The clone, refresh and mirror manifests do not yet
-  summarise the tree's intent; the file itself is the auditable record.
-- **Staged working copies.** A working copy pulls before its filters
-  run, as described above. Staging it would mean filtering a copy and
-  then resetting the checkout to the result.
+Nothing from
+[#309](https://github.com/lfreleng-actions/gerrit-clone-action/issues/309)
+remains deferred.
+[#317](https://github.com/lfreleng-actions/gerrit-clone-action/issues/317)
+tracks filtering new working copies through a copy.

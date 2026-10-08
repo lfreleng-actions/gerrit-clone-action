@@ -21,7 +21,7 @@ it refused repositories git clones perfectly well.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from urllib.parse import ParseResult, urlparse, urlunparse
+from urllib.parse import ParseResult, urlparse
 
 from gerrit_clone.github_url_safety import (
     UnsafeCloneUrlError,
@@ -223,44 +223,3 @@ def assert_trusted_origin(url: str, config: Config) -> None:
             f"Clone URL is not on the configured source "
             f"{expected[0]!r}:{expected[1]}, so it must not receive the token"
         )
-
-
-def redact_clone_url(clone_url: str, project: Project, github_token: str | None) -> str:
-    """Return *clone_url* with any embedded token replaced by ``***``.
-
-    The URL is parsed and reconstructed rather than string-replaced to
-    avoid issues with special characters in the token.
-
-    Args:
-        clone_url: URL that may contain embedded credentials
-        project: Project being cloned, used for the safe placeholder
-        github_token: Token to look for, if one is configured
-
-    Returns:
-        A URL that is safe to log.
-    """
-    if not github_token:
-        return clone_url
-
-    try:
-        parsed = urlparse(clone_url)
-        # Check if token is in the netloc (e.g., token@github.com)
-        if "@" in parsed.netloc and github_token in parsed.netloc:
-            # Reconstruct netloc with redacted token
-            netloc_parts = parsed.netloc.split("@", 1)
-            redacted_netloc = f"***@{netloc_parts[1]}"
-            return urlunparse(
-                (
-                    parsed.scheme,
-                    redacted_netloc,
-                    parsed.path,
-                    parsed.params,
-                    parsed.query,
-                    parsed.fragment,
-                )
-            )
-    except Exception:
-        # SECURITY: If parsing fails, use safe placeholder to avoid credential leak
-        return f"https://***@github.com/{project.name}.git"
-
-    return clone_url

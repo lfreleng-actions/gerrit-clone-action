@@ -46,7 +46,7 @@ from gerrit_clone.logging import get_logger
 from gerrit_clone.models import match_project_pattern
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Callable, Generator
     from pathlib import Path
 
 logger = get_logger(__name__)
@@ -318,6 +318,69 @@ def _content_refs(repo_path: Path) -> list[str] | None:
     ]
 
 
+def record_and_block(
+    repo_path: Path, policy: FilterPolicy
+) -> tuple[FilterPolicy, list[tuple[str, str]]]:
+    """Record *policy* in *repo_path* and block pushing: both or neither.
+
+    Returns:
+        What was added to the record, and the push URLs from before, for
+        a caller that may later withdraw and restore them.
+
+    Raises:
+        PolicyRecordError: If either failed; whatever part of it took
+            effect is then undone.  Push URLs that cannot be read refuse
+            it before anything changes: blocking could fail part-way,
+            with nothing to put back.
+    """
+    recorded = recorded_policy(repo_path)
+    added = policy.minus(recorded)
+    # An earlier release's filtering, if only detected so far, is written
+    # down with the rest -- but is not among what may be withdrawn.
+    persisted = replace(added, earlier_release=recorded.earlier_release)
+    saved_push_urls = push_urls(repo_path)
+    if saved_push_urls is None:
+        raise PolicyRecordError(f"Could not read the push URLs of {repo_path}")
+    if not add_policy(repo_path, persisted):
+        failure = f"Could not record the content-filter policy for {repo_path}"
+    elif not block_pushes(repo_path):
+        failure = f"Could not block pushing from {repo_path}"
+    else:
+        return added, saved_push_urls
+    _withdraw(repo_path, added)
+    restore_push_urls(repo_path, saved_push_urls)
+    raise PolicyRecordError(failure)
+
+
+@contextmanager
+def recorded_until_published(
+    repo_path: Path, policy: FilterPolicy
+) -> Generator[Callable[[], None], None, None]:
+    """Record *policy* and block pushing, undone unless publishing completes.
+
+    Call the yielded function once the publication it guards has
+    completed.  Leaving the block without calling it -- returning early
+    or raising -- withdraws what was added and restores the push URLs,
+    so a failed publication leaves the repository as it was.
+
+    Raises:
+        PolicyRecordError: As :func:`record_and_block`.
+    """
+    added, saved_push_urls = record_and_block(repo_path, policy)
+    completed = False
+
+    def complete() -> None:
+        nonlocal completed
+        completed = True
+
+    try:
+        yield complete
+    finally:
+        if not completed:
+            _withdraw(repo_path, added)
+            restore_push_urls(repo_path, saved_push_urls)
+
+
 @contextmanager
 def content_filtering(
     repo_path: Path, policy: FilterPolicy
@@ -342,20 +405,10 @@ def content_filtering(
         PolicyRecordError: If the policy could not be recorded, or
             pushing blocked.
     """
-    recorded = recorded_policy(repo_path)
-    added = policy.minus(recorded)
-    # An earlier release's filtering, if only detected so far, is written
-    # down with the rest -- but is not among what may be withdrawn.
-    persisted = replace(added, earlier_release=recorded.earlier_release)
-    saved_push_urls = push_urls(repo_path)
-    if not add_policy(repo_path, persisted) or not block_pushes(repo_path):
-        _withdraw(repo_path, added)
-        if saved_push_urls is not None:
-            restore_push_urls(repo_path, saved_push_urls)
-        raise PolicyRecordError(
-            f"Could not record the content-filter policy for {repo_path}, "
-            f"or block pushing from it; not filtering it"
-        )
+    try:
+        added, saved_push_urls = record_and_block(repo_path, policy)
+    except PolicyRecordError as exc:
+        raise PolicyRecordError(f"{exc}; not filtering it") from exc
     refs_before = _content_refs(repo_path)
     errors: list[str] = []
     try:
@@ -365,9 +418,7 @@ def content_filtering(
         refs_after = _content_refs(repo_path)
         if refs_before is not None and refs_before == refs_after:
             _withdraw(repo_path, added)
-            # Unread, the old settings stay blocked: stricter, not wrong.
-            if saved_push_urls is not None:
-                restore_push_urls(repo_path, saved_push_urls)
+            restore_push_urls(repo_path, saved_push_urls)
         elif not block_pushes(repo_path):
             errors.append(
                 f"Could not block pushing from {repo_path} after content "

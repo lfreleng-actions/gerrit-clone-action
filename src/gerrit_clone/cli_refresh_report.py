@@ -9,7 +9,7 @@ Renders the end-of-run summary and writes the refresh manifest.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from gerrit_clone.logging import get_logger
 
@@ -80,15 +80,21 @@ def show_refresh_results(
         console.print()
 
 
-def write_refresh_manifest(manifest_path: Path, result: RefreshBatchResult) -> None:
+def write_refresh_manifest(
+    manifest_path: Path,
+    result: RefreshBatchResult,
+    content_filters: dict[str, Any] | None = None,
+) -> None:
     """Write refresh manifest to JSON file.
 
     Args:
         manifest_path: Path to write manifest
         result: Refresh batch result
+        content_filters: Summary of the tree's filter intent, if any
     """
+    data = {**result.to_dict(), "content_filters": content_filters}
     try:
         with manifest_path.open("w", encoding="utf-8") as f:
-            json.dump(result.to_dict(), f, indent=2, ensure_ascii=False)
+            json.dump(data, f, indent=2, ensure_ascii=False)
     except Exception as e:
         logger.warning(f"Failed to write refresh manifest: {e}")
