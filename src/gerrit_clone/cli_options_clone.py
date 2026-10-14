@@ -86,8 +86,9 @@ OUTPUT_PATH = typer.Option(
     Path(),
     "--output-path",
     help=(
-        "Clone destination; omit or pass '.' for ./{SERVER}/ or "
-        "./github.com/{ORG}/, any other path is used exactly"
+        "Clone destination; omit it or name the current directory "
+        "relatively ('.', './') for ./{SERVER}/ or ./github.com/{ORG}/; "
+        "any other path is used exactly as given"
     ),
     envvar="OUTPUT_PATH",
     file_okay=False,

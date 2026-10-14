@@ -300,9 +300,11 @@ class ConfigManager(EnvConfigLoader):
 
         # Auto-adjust path to include server/org structure when using the default.
         # This prevents naming conflicts when multiple clone operations run in the same directory.
-        # Decide on the unresolved value: only an absent path or a literal "."
-        # (the CLI default, and what action.yaml passes) counts as the default.
-        # Any other value, including an absolute path to the CWD, is used as given.
+        # The auto-structure applies when no path is supplied, or when the path
+        # is a relative path naming the current directory: ".", "./", ".//",
+        # "./." and so on. Path() normalises each of these to Path("."), the
+        # CLI default and what action.yaml passes. Any other path is used
+        # exactly as given, including an absolute path to the CWD.
         if "host" in config_dict:
             host = config_dict["host"]
             path = config_dict.get("path")

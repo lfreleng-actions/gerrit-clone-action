@@ -119,7 +119,8 @@ gerrit-clone clone --host gerrit.example.org \
 
 ### Understanding Path Behavior
 
-When you omit `--output-path`, or pass exactly `.`, `gerrit-clone`
+When you omit `--output-path`, or pass a relative path naming the
+current directory (`.`, `./`, `.//`, `./.` and so on), `gerrit-clone`
 automatically creates an organized folder structure to prevent naming
 conflicts when cloning from different sources. The same rule applies to
 a path set through the `OUTPUT_PATH` or `GERRIT_PATH_PREFIX` environment
@@ -156,8 +157,9 @@ gerrit-clone clone --host gerrit.example.org --output-path ./my-repos
 gerrit-clone clone --host gerrit.example.org --output-path "$PWD"
 ```
 
-The tool uses any value other than `.` exactly as given, so the output
-location does not depend on the directory the command runs from.
+The tool uses any other path exactly as given, including an absolute
+path that names the current directory, so the output location does not
+depend on the directory the command runs from.
 
 This design prevents repository naming conflicts when running concurrent
 clone operations in the same directory (e.g., on GitHub Actions runners).
@@ -1231,7 +1233,7 @@ jobs:
 | `github-token`         | No       |                       | GitHub personal access token for API access and private repos                                        |
 | `github-org`           | No       |                       | GitHub organization or user (auto-detected from host)                                                |
 | `use-gh-cli`           | No       | `false`               | Use GitHub CLI (`gh`) for cloning instead of git                                                     |
-| `output-path`          | No       | `.`                   | Clone destination (auto-creates `./{SERVER}/` or `./github.com/{ORG}/` structure when not specified) |
+| `output-path`          | No       | `.`                   | Relative current-directory path (`.`) gives `./{SERVER}/` or `./github.com/{ORG}/`; others as given  |
 | `skip-archived`        | No       | `true`                | Skip archived and inactive repositories                                                              |
 | `include-projects`     | No       |                       | Restrict to specific project(s); comma/space-separated, wildcard and hierarchical patterns           |
 | `exclude-projects`     | No       |                       | Exclude specific project(s); comma/space-separated, wildcard and hierarchical patterns               |

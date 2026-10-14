@@ -47,8 +47,9 @@ inputs:
     required: false
   output-path:
     description: >-
-      Clone destination (default: auto-creates ./{SERVER}/ or
-      ./github.com/{ORG}/ structure)
+      Clone destination. Leave unset, or set a relative path naming the
+      current directory such as ".", to auto-create ./{SERVER}/ or
+      ./github.com/{ORG}/; any other path is used exactly as given
     required: false
     default: "."
   skip-archived:
