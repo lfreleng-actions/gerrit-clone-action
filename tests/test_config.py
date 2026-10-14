@@ -12,10 +12,21 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import typer
 import yaml
+from typer.testing import CliRunner
 
+from gerrit_clone.cli import app
 from gerrit_clone.config import ConfigManager, ConfigurationError, load_config
 from gerrit_clone.models import Config, DiscoveryMethod, SourceType
+
+# Relative spellings of the current directory; Path() normalises each to ".".
+CWD_SPELLINGS = [".", "./", ".//", "./."]
+
+AUTO_STRUCTURE_CASES = [
+    ("gerrit.example.org", SourceType.GERRIT, "gerrit.example.org"),
+    ("github.com/myorg", SourceType.GITHUB, "github.com/myorg"),
+]
 
 
 class TestConfigManager:
@@ -680,6 +691,113 @@ class TestPathAutoAdjustment:
             assert config.path == tmp_path.resolve()
         finally:
             os.chdir(original_cwd)
+
+    @pytest.mark.parametrize("spelling", CWD_SPELLINGS)
+    @pytest.mark.parametrize(("host", "source_type", "expected"), AUTO_STRUCTURE_CASES)
+    def test_relative_cwd_path_yields_auto_structure(
+        self,
+        tmp_path: Path,
+        spelling: str,
+        host: str,
+        source_type: SourceType,
+        expected: str,
+    ):
+        """Every relative spelling of the CWD, given as a string, is the default."""
+        manager = ConfigManager()
+        manager._config_paths = []
+
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(tmp_path)
+            config = manager.load_config(
+                host=host, source_type=source_type, path=spelling
+            )
+
+            assert config.path == (tmp_path / expected).resolve()
+        finally:
+            os.chdir(original_cwd)
+
+    @pytest.mark.parametrize("spelling", CWD_SPELLINGS)
+    @pytest.mark.parametrize(("host", "source_type", "expected"), AUTO_STRUCTURE_CASES)
+    def test_output_path_env_relative_cwd_yields_auto_structure(
+        self,
+        tmp_path: Path,
+        spelling: str,
+        host: str,
+        source_type: SourceType,
+        expected: str,
+    ):
+        """OUTPUT_PATH set to a relative spelling of the CWD is the default."""
+        manager = ConfigManager()
+        manager._config_paths = []
+
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(tmp_path)
+            with patch.dict(os.environ, {"OUTPUT_PATH": spelling}, clear=True):
+                config = manager.load_config(host=host, source_type=source_type)
+
+            assert config.path == (tmp_path / expected).resolve()
+        finally:
+            os.chdir(original_cwd)
+
+    @pytest.mark.parametrize("spelling", CWD_SPELLINGS)
+    @pytest.mark.parametrize(("host", "source_type", "expected"), AUTO_STRUCTURE_CASES)
+    def test_cli_output_path_relative_cwd_yields_auto_structure(
+        self,
+        tmp_path: Path,
+        spelling: str,
+        host: str,
+        source_type: SourceType,
+        expected: str,
+    ):
+        """--output-path set to a relative spelling of the CWD is the default."""
+        config = _clone_cli_config(tmp_path, host, ["--output-path", spelling])
+
+        assert config.source_type == source_type
+        assert config.path == (tmp_path / expected).resolve()
+
+    def test_cli_output_path_absolute_cwd_not_adjusted(self, tmp_path: Path):
+        """--output-path set to an absolute path equal to the CWD is kept."""
+        config = _clone_cli_config(
+            tmp_path, "gerrit.example.org", ["--output-path", str(tmp_path)]
+        )
+
+        assert config.path == tmp_path.resolve()
+
+
+def _clone_cli_config(tmp_path: Path, host: str, path_args: list[str]) -> Config:
+    """Run ``clone`` from *tmp_path* and return the configuration it builds.
+
+    Cloning is replaced by a stub that records the configuration, so the
+    command stops before any discovery or network access.
+    """
+    seen: list[Config] = []
+
+    def record(config: Config) -> None:
+        seen.append(config)
+        raise typer.Exit(0)
+
+    original_cwd = Path.cwd()
+    try:
+        os.chdir(tmp_path)
+        with patch("gerrit_clone.cli_clone_run._clone_repositories", record):
+            result = CliRunner().invoke(
+                app,
+                ["clone", "--host", host, *path_args, "--quiet", "--disable-log-file"],
+                env={
+                    "HOME": str(tmp_path),
+                    "OUTPUT_PATH": None,
+                    "GERRIT_PATH_PREFIX": None,
+                    "GERRIT_OUTPUT_DIR": None,
+                },
+            )
+    finally:
+        os.chdir(original_cwd)
+
+    assert result.exit_code == 0, result.output
+    assert len(seen) == 1
+    return seen[0]
 
 
 class TestGitHubBaseUrl:
