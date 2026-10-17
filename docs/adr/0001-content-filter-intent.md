@@ -85,7 +85,7 @@ At the start of a run, before it clones, refreshes or deletes anything:
    error. A run with nothing to add, and a dry run, never take it.
 
 A run also holds the lock while it publishes a filtered result: a staged
-refresh's refs, or a repository `clone` or `mirror` filtered in place.
+copy's refs, or a repository `clone` or `mirror` filtered in place.
 First it checks that its filters still cover the intent, which another
 run may have extended since this one read it. If they do not, the
 repository stays unchanged and counts as failed, so `mirror` pushes
@@ -133,10 +133,23 @@ Refusing the refresh would not clean them, and rewriting them in place
 is what left checkouts unrefreshable. A checkout the filters rewrote
 blocks pushing, as every filtered repository does.
 
-A working copy filtered in place, as `clone --no-mirror` does, has lost
-its remote-tracking refs to `git filter-repo`, and stays refused;
-[#317](https://github.com/lfreleng-actions/gerrit-clone-action/issues/317)
-tracks filtering new working copies through a copy too.
+`clone --no-mirror` filters each new working copy through a copy as
+well. The clone has just fetched upstream, so the copy fetches nothing;
+it takes the checkout's tags instead, so the filters rewrite them too.
+The checkout takes the copy's refs without the follow check, since its
+branch holds the unfiltered history the filtered one replaces, and its
+tags become exactly the copy's: a tag the filters removed entirely, such
+as one on a commit holding only removed content, goes too. When the
+filters rewrote anything, the checkout's branch, with no work of its
+own, resets to its filtered upstream (a clone of a single tag moves to
+the filtered tag instead), and the run expires its reflogs,
+drops `ORIG_HEAD` and prunes every unreachable object, so nothing
+unfiltered stays behind. A filter matching nothing records nothing and
+leaves the checkout unchanged. A new working copy whose filtering fails,
+or gets refused, at any step may hold unfiltered content, so the run
+deletes it and reports the failure. A working copy an earlier release
+filtered in place has lost its remote-tracking refs to
+`git filter-repo`, and stays refused.
 
 ### Journal
 
@@ -234,5 +247,3 @@ filters reports `null`.
 Nothing from
 [#309](https://github.com/lfreleng-actions/gerrit-clone-action/issues/309)
 remains deferred.
-[#317](https://github.com/lfreleng-actions/gerrit-clone-action/issues/317)
-tracks filtering new working copies through a copy.

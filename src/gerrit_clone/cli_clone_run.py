@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import traceback
 from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
 from shutil import rmtree
 from typing import TYPE_CHECKING, NoReturn
@@ -27,6 +28,9 @@ from gerrit_clone.cli_app import is_github_actions_context
 from gerrit_clone.cli_clone_banner import show_startup_banner
 from gerrit_clone.content_stage import filter_repository
 from gerrit_clone.error_codes import DiscoveryError, ExitCode
+from gerrit_clone.logging import get_logger
+from gerrit_clone.models import CloneStatus, RefreshResult, RefreshStatus
+from gerrit_clone.refresh_worker import RefreshWorker
 from gerrit_clone.rich_status import (
     handle_crash_display,
     show_error_summary,
@@ -37,7 +41,10 @@ if TYPE_CHECKING:
     from gerrit_clone.cli_clone_models import CloneRequest
     from gerrit_clone.cli_session import CliSession
     from gerrit_clone.content_spec import ContentFilterSpec
-    from gerrit_clone.models import BatchResult, Config
+    from gerrit_clone.models import BatchResult, CloneResult, Config
+
+
+logger = get_logger(__name__)
 
 
 def run_clone(request: CloneRequest, session: CliSession) -> None:
@@ -135,9 +142,12 @@ def _apply_content_filters(
             # Re-filtered as part of its staged refresh already.
             filter_success += 1
             continue
-        reason = filter_repository(
-            spec, cr.path, spec.project_name(cr.path), request.clone_timeout
-        )
+        if cr.status is CloneStatus.SUCCESS and (cr.path / ".git").exists():
+            reason = _filter_new_working_copy(batch_result.config, spec, cr)
+        else:
+            reason = filter_repository(
+                spec, cr.path, spec.project_name(cr.path), request.clone_timeout
+            )
         if reason is None:
             filter_success += 1
             continue
@@ -152,6 +162,102 @@ def _apply_content_filters(
         )
     if filter_fail > 0:
         raise typer.Exit(ExitCode.GENERAL_ERROR)
+
+
+def _filter_new_working_copy(
+    config: Config, spec: ContentFilterSpec, cr: CloneResult
+) -> str | None:
+    """Filter a working copy this run cloned, through a staged copy.
+
+    Filtered where it stands, it would lose the remote-tracking refs a
+    later refresh follows (see
+    :meth:`~gerrit_clone.refresh_checkout_fresh.FreshCheckoutMixin._filter_fresh_checkout`).
+    One whose filtering fails, or is refused, may hold unfiltered
+    content, so it is deleted.
+
+    Returns:
+        ``None`` if it was filtered, or needed no filtering; else why not.
+    """
+    filters = spec.filters_for(spec.project_name(cr.path))
+    if filters.empty and not filters.missing_tokens:
+        return None
+    worker = RefreshWorker(
+        config=config,
+        timeout=config.clone_timeout,
+        filter_gerrit_only=False,
+        content_filters=spec,
+    )
+    result = RefreshResult(
+        path=cr.path,
+        project_name=cr.project.name,
+        status=RefreshStatus.REFRESHING,
+        started_at=datetime.now(UTC),
+    )
+    try:
+        filtered = worker._filter_fresh_checkout(cr.path, result)
+    except Exception as exc:
+        filtered = False
+        result.error_message = "; ".join(
+            part for part in (result.error_message, str(exc) or repr(exc)) if part
+        )
+    except BaseException:
+        # Interrupted: delete it, and say so if that fails, then go on.
+        failure = _delete_working_copy(cr.path)
+        if failure is not None:
+            logger.error(
+                "Interrupted while filtering %s; the working copy, which may "
+                "hold unfiltered content, could not be deleted; delete %s by "
+                "hand: %s",
+                cr.project.name,
+                cr.path,
+                failure,
+            )
+        raise
+    if filtered:
+        cr.content_filtered = True
+        return None
+    reason = result.error_message or "content filtering failed"
+    failure = _delete_working_copy(cr.path)
+    if failure is None:
+        return f"{reason}; the working copy was deleted, so none is left unfiltered"
+    return (
+        f"{reason}; the working copy, which may hold unfiltered content, "
+        f"could not be deleted; delete {cr.path} by hand: {failure}"
+    )
+
+
+def _delete_working_copy(path: Path) -> str | None:
+    """Delete working copy *path*, but no repository nested inside it.
+
+    Returns:
+        Why some of it could not be deleted, or ``None``.
+    """
+    failures: list[str] = []
+    _delete_sparing_nested(path, failures)
+    with suppress(OSError):
+        path.rmdir()  # Only once nothing nested in it is left.
+    return "; ".join(failures) or None
+
+
+def _delete_sparing_nested(directory: Path, failures: list[str]) -> None:
+    """Delete everything in *directory* but other repositories' checkouts."""
+    try:
+        entries = list(directory.iterdir())
+    except OSError as exc:
+        failures.append(str(exc))
+        return
+    for entry in entries:
+        try:
+            if entry.is_symlink() or not entry.is_dir():
+                entry.unlink()
+            elif entry.name == ".git":
+                rmtree(entry)
+            elif not (entry / ".git").exists():  # Not a nested repository.
+                _delete_sparing_nested(entry, failures)
+                if not any(entry.iterdir()):
+                    entry.rmdir()
+        except OSError as exc:
+            failures.append(f"{entry}: {exc}")
 
 
 def _report_results(

@@ -249,10 +249,15 @@ the result only when fetching and filtering succeed and the filtered history
 extends what the checkout holds; otherwise it stays unchanged, with any stash
 put back. Once it has taken the result as its remote-tracking branches, it
 fast-forwards or rebases as a pull would, and a conflict there leaves it as a
-conflicting pull does. A working copy that content filtering rewrote in
-place, as `clone --no-mirror` does, has lost the remote-tracking branch a
-refresh follows, and gets skipped
-([#317](https://github.com/lfreleng-actions/gerrit-clone-action/issues/317)).
+conflicting pull does. `clone --no-mirror` filters each new working copy
+through a copy too, without fetching again, so it keeps its remote-tracking
+branches and later refreshes follow it. When the filters rewrite it, its
+branch then moves to the filtered upstream (a clone of a single tag moves to
+the filtered tag), its tags become exactly the filtered ones, and the tool
+purges the unfiltered objects. When filtering a new working copy fails, the tool
+deletes it, so no unfiltered checkout remains. A working copy that content
+filtering rewrote in place, as earlier releases' `clone --no-mirror` did, has
+lost the remote-tracking branch a refresh follows, and gets skipped.
 Every remote of a filtered repository refuses pushes. A tree filtered before
 the tree-level file existed gains one from these per-repository records on
 its next run. Releases up to v2.2.4 recorded no filters at all, so refresh

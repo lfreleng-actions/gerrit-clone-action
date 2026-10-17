@@ -13,6 +13,7 @@ live in a stack of focused mixins, each of which owns one responsibility:
 * :mod:`gerrit_clone.refresh_force` — force-mode repository repair
 * :mod:`gerrit_clone.refresh_filtered` — content-filtered repositories
 * :mod:`gerrit_clone.refresh_checkout_stage` — filtered working copies
+* :mod:`gerrit_clone.refresh_checkout_fresh` — working copies ``clone`` just made
 * :mod:`gerrit_clone.refresh_output` — git output classification and counting
 
 Their public names are re-exported here so ``gerrit_clone.refresh_worker``
@@ -28,10 +29,8 @@ from typing import TYPE_CHECKING, Any
 from gerrit_clone.content_policy import recorded_policy
 from gerrit_clone.logging import get_logger
 from gerrit_clone.models import Config, RefreshResult, RefreshStatus, RetryPolicy
-from gerrit_clone.refresh_checkout_stage import (
-    CANNOT_FOLLOW_REFUSAL,
-    StagedCheckoutMixin,
-)
+from gerrit_clone.refresh_checkout_fresh import FreshCheckoutMixin
+from gerrit_clone.refresh_checkout_stage import CANNOT_FOLLOW_REFUSAL
 from gerrit_clone.refresh_filtered import (
     EARLIER_RELEASE_REFUSAL,
     FILTERED_REFRESH_REFUSAL,
@@ -85,7 +84,7 @@ def _keeping_earlier(message: str, earlier: str | None) -> str:
     return f"{message}; {earlier}" if earlier else message
 
 
-class RefreshWorker(StagedCheckoutMixin):
+class RefreshWorker(FreshCheckoutMixin):
     """Worker for refreshing individual repositories."""
 
     def __init__(

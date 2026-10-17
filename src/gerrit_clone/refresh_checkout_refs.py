@@ -76,13 +76,20 @@ def drop_tags(stage: Path, timeout: int) -> str | None:
     return None
 
 
-def as_upstream_copy(repo_path: Path, stage: Path, timeout: int) -> str | None:
+def as_upstream_copy(
+    repo_path: Path, stage: Path, timeout: int, *, fetching: bool = True
+) -> str | None:
     """Make *stage*, a copy of working copy *repo_path*, stand in for upstream.
 
     It holds the checkout's remote-tracking refs as its branches,
     ``refs/remotes/X`` as ``refs/heads/X``, and its remotes fetch there;
     the checkout's own branches and tags, and its remotes' ``HEAD`` refs,
     go.
+
+    A copy that will fetch needs a remote that updates a remote-tracking
+    branch.  One that will not, *fetching* false, takes the checkout as
+    it is: a clone of a single tag has no such refspec, and nothing to
+    miss.
 
     Returns:
         Why the copy could not be made to stand in for upstream, or
@@ -116,7 +123,7 @@ def as_upstream_copy(repo_path: Path, stage: Path, timeout: int) -> str | None:
     for line in listed.stdout.splitlines() if listed.returncode == 0 else []:
         key, _, value = line.partition(" ")
         refspecs.setdefault(key, []).append(value)
-    if not any(
+    if fetching and not any(
         refspec.partition(":")[2].startswith(TRACKING)
         for values in refspecs.values()
         for refspec in values
@@ -142,6 +149,69 @@ def as_upstream_copy(repo_path: Path, stage: Path, timeout: int) -> str | None:
             if added.returncode != 0:
                 return f"Could not stage a copy: {added.stderr.strip()}"
     return None
+
+
+def copy_tags(repo_path: Path, stage: Path, timeout: int) -> str | None:
+    """Give *stage* every tag working copy *repo_path* holds, as they stand.
+
+    For a checkout just cloned, whose tags are all upstream's: without
+    them the copy's filters would leave the checkout's tags unfiltered.
+
+    Returns:
+        Why they could not be copied, or ``None``.
+    """
+    copied = run_git(
+        [
+            "git",
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            str(repo_path),
+            "+refs/tags/*:refs/tags/*",
+        ],
+        stage,
+        timeout=timeout,
+    )
+    if copied.returncode != 0:
+        return (
+            f"Could not copy the working copy's tags to the staged copy: "
+            f"{copied.stderr.strip()}"
+        )
+    return None
+
+
+def publish_command(stage: Path, *, prune: bool, prune_tags: bool) -> list[str]:
+    """The fetch giving a working copy *stage*'s refs, in one transaction.
+
+    The copy's branches become the checkout's remote-tracking refs, and
+    its tags the checkout's, rewritten ones forced over their originals.
+    With *prune*, remote-tracking refs the copy no longer has go in the
+    same atomic transaction, so a failure leaves every ref as it was.
+    Left behind, one would keep history the filters now remove, in a
+    checkout recorded as filtered.
+
+    Tags the copy lacks are spared, as local-only tags, unless
+    *prune_tags*: for a checkout just cloned, whose tags the copy took
+    and filtered, one it lacks is one the filters removed entirely, such
+    as a tag on a commit holding only removed content.  Kept, it would
+    leave that content reachable.  Pruning tags prunes regardless of
+    *prune*.
+    """
+    if prune_tags:
+        options, tags = ["--prune"], ["+refs/tags/*:refs/tags/*"]
+    else:
+        # Through --tags rather than a refspec, --prune spares local tags.
+        options, tags = (["--prune", "--tags"] if prune else ["--tags"]), []
+    return [
+        "git",
+        "fetch",
+        "--atomic",
+        "--force",
+        *options,
+        str(stage),
+        "+refs/heads/*:refs/remotes/*",
+        *tags,
+    ]
 
 
 def configured_upstream(repo_path: Path) -> str:
