@@ -14,15 +14,15 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from gerrit_clone.github_api import GitHubRepo, transform_gerrit_name_to_github
-from gerrit_clone.mirror_manager import (
+from source_clone.github_api import GitHubRepo, transform_gerrit_name_to_github
+from source_clone.mirror_manager import (
     MirrorBatchResult,
     MirrorManager,
     MirrorResult,
     MirrorStatus,
     filter_projects_by_hierarchy,
 )
-from gerrit_clone.models import CloneResult, CloneStatus, Config, Project, ProjectState
+from source_clone.models import CloneResult, CloneStatus, Config, Project, ProjectState
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -37,7 +37,7 @@ def _options_only() -> Iterator[None]:
     What a tree records is tested in ``test_content_intent_commands.py``.
     """
     with patch(
-        "gerrit_clone.mirror_manager.resolve_filters",
+        "source_clone.mirror_manager.resolve_filters",
         side_effect=lambda _root, options, **_: options,
     ):
         yield
@@ -326,7 +326,7 @@ class TestMirrorManager:
 
         assert manager.clone_manager.config.content_filters is None
 
-    @patch("gerrit_clone.mirror_manager.subprocess.run")
+    @patch("source_clone.mirror_manager.subprocess.run")
     def test_push_to_github_success(self, mock_run: Mock) -> None:
         """Test successful push to GitHub."""
         config = Config(
@@ -370,7 +370,7 @@ class TestMirrorManager:
         # Default set_default_branch=True, so should be called
         mock_set_branch.assert_called_once_with(local_path, github_repo)
 
-    @patch("gerrit_clone.mirror_manager.subprocess.run")
+    @patch("source_clone.mirror_manager.subprocess.run")
     def test_push_to_github_success_sets_default_branch_disabled(
         self, mock_run: Mock
     ) -> None:
@@ -406,7 +406,7 @@ class TestMirrorManager:
         assert error is None
         mock_set_branch.assert_not_called()
 
-    @patch("gerrit_clone.mirror_manager.subprocess.run")
+    @patch("source_clone.mirror_manager.subprocess.run")
     def test_push_to_github_failure_does_not_set_default_branch(
         self, mock_run: Mock
     ) -> None:
@@ -442,7 +442,7 @@ class TestMirrorManager:
         assert success is False
         mock_set_branch.assert_not_called()
 
-    @patch("gerrit_clone.mirror_manager.subprocess.run")
+    @patch("source_clone.mirror_manager.subprocess.run")
     def test_push_to_github_failure(self, mock_run: Mock) -> None:
         """Test failed push to GitHub."""
         config = Config(
@@ -476,7 +476,7 @@ class TestMirrorManager:
         assert error is not None
         assert "Permission denied" in error
 
-    @patch("gerrit_clone.mirror_manager.subprocess.run")
+    @patch("source_clone.mirror_manager.subprocess.run")
     def test_push_to_github_with_ssh_command(self, mock_run: Mock) -> None:
         """Test push with custom SSH command."""
         config = Config(
@@ -576,7 +576,7 @@ class TestMirrorManager:
 
         assert push_url == "git@github.com:test-org/test-repo.git"
 
-    @patch("gerrit_clone.mirror_manager.subprocess.run")
+    @patch("source_clone.mirror_manager.subprocess.run")
     def test_push_to_github_with_token_uses_https_url(self, mock_run: Mock) -> None:
         """Test that push uses plain HTTPS URL with auth via env vars."""
         config = Config(
@@ -642,7 +642,7 @@ class TestMirrorManager:
         if "GIT_SSH_COMMAND" in call_env:
             assert call_env["GIT_SSH_COMMAND"] == os.environ.get("GIT_SSH_COMMAND")
 
-    @patch("gerrit_clone.mirror_manager.subprocess.run")
+    @patch("source_clone.mirror_manager.subprocess.run")
     def test_push_to_github_with_token_does_not_set_ssh_command(
         self, mock_run: Mock
     ) -> None:
@@ -697,7 +697,7 @@ class TestMirrorManager:
         if "GIT_SSH_COMMAND" in call_env:
             assert call_env["GIT_SSH_COMMAND"] == os.environ.get("GIT_SSH_COMMAND")
 
-    @patch("gerrit_clone.mirror_manager.subprocess.run")
+    @patch("source_clone.mirror_manager.subprocess.run")
     def test_push_to_github_with_token_sanitizes_error_output(
         self, mock_run: Mock
     ) -> None:
@@ -739,7 +739,7 @@ class TestMirrorManager:
         assert token not in error
         assert "***" in error
 
-    @patch("gerrit_clone.mirror_manager.shutil.rmtree")
+    @patch("source_clone.mirror_manager.shutil.rmtree")
     def test_cleanup_existing_repos_with_overwrite(self, mock_rmtree: Mock) -> None:
         """Test cleanup of existing repos when overwrite is True."""
         config = Config(
@@ -769,7 +769,7 @@ class TestMirrorManager:
 
         assert mock_rmtree.call_count == 2
 
-    @patch("gerrit_clone.mirror_manager.shutil.rmtree")
+    @patch("source_clone.mirror_manager.shutil.rmtree")
     def test_cleanup_existing_repos_without_overwrite(self, mock_rmtree: Mock) -> None:
         """Test no cleanup when overwrite is False."""
         config = Config(
@@ -1058,7 +1058,7 @@ class TestMirrorManager:
                 return_value=[mock_clone_result],
             ),
             patch.object(manager, "_push_to_github", return_value=(True, None)),
-            patch("gerrit_clone.mirror_manager.shutil.rmtree") as mock_rmtree,
+            patch("source_clone.mirror_manager.shutil.rmtree") as mock_rmtree,
             patch.object(Path, "exists", return_value=True),
             patch.object(Path, "is_dir", return_value=True),
         ):
@@ -1154,7 +1154,7 @@ class TestMirrorManager:
         assert success_count == 2
         assert failed_count == 1
 
-    @patch("gerrit_clone.mirror_manager.apply_content_filters")
+    @patch("source_clone.mirror_manager.apply_content_filters")
     def test_mirror_projects_calls_content_filters_remove_patterns(
         self,
         mock_apply_filters: Mock,
@@ -1222,7 +1222,7 @@ class TestMirrorManager:
         assert len(result) == 1
         assert result[0].status == MirrorStatus.SUCCESS
 
-    @patch("gerrit_clone.mirror_manager.apply_content_filters")
+    @patch("source_clone.mirror_manager.apply_content_filters")
     def test_mirror_projects_calls_content_filters_git_filter(
         self,
         mock_apply_filters: Mock,
@@ -1277,7 +1277,7 @@ class TestMirrorManager:
                 return_value=[mock_clone_result],
             ),
             patch(
-                "gerrit_clone.mirror_manager.is_shallow_repository",
+                "source_clone.mirror_manager.is_shallow_repository",
                 return_value=False,
             ),
             patch.object(manager, "_push_to_github", return_value=(True, None)),
@@ -1295,7 +1295,7 @@ class TestMirrorManager:
         assert len(result) == 1
         assert result[0].status == MirrorStatus.SUCCESS
 
-    @patch("gerrit_clone.mirror_manager.apply_content_filters")
+    @patch("source_clone.mirror_manager.apply_content_filters")
     def test_mirror_projects_filter_failure_raises(
         self,
         mock_apply_filters: Mock,
@@ -1339,8 +1339,8 @@ class TestMirrorManager:
         ):
             manager.mirror_projects(projects)
 
-    @patch("gerrit_clone.mirror_manager.is_shallow_repository", return_value=True)
-    @patch("gerrit_clone.mirror_manager.apply_content_filters")
+    @patch("source_clone.mirror_manager.is_shallow_repository", return_value=True)
+    @patch("source_clone.mirror_manager.apply_content_filters")
     def test_mirror_projects_shallow_repo_refuses_history_filter(
         self,
         mock_apply_filters: Mock,
@@ -1388,7 +1388,7 @@ class TestMirrorManager:
         # history-independent --remove-files work remains.
         mock_apply_filters.assert_not_called()
 
-    @patch("gerrit_clone.mirror_manager.apply_content_filters")
+    @patch("source_clone.mirror_manager.apply_content_filters")
     def test_mirror_projects_no_filters_skips_content_filtering(
         self,
         mock_apply_filters: Mock,
@@ -1444,7 +1444,7 @@ class TestMirrorManager:
 
         mock_apply_filters.assert_not_called()
 
-    @patch("gerrit_clone.mirror_manager.get_current_branch", return_value="main")
+    @patch("source_clone.mirror_manager.get_current_branch", return_value="main")
     def test_set_default_branch_from_local_success(self, mock_get_branch: Mock) -> None:
         """Test _set_default_branch_from_local detects HEAD branch and calls the API."""
         config = Config(
@@ -1477,7 +1477,7 @@ class TestMirrorManager:
             "test-org", "test-repo", "main"
         )
 
-    @patch("gerrit_clone.mirror_manager.get_current_branch", return_value="master")
+    @patch("source_clone.mirror_manager.get_current_branch", return_value="master")
     def test_set_default_branch_from_local_with_master(
         self, mock_get_branch: Mock
     ) -> None:
@@ -1511,7 +1511,7 @@ class TestMirrorManager:
             "test-org", "test-repo", "master"
         )
 
-    @patch("gerrit_clone.mirror_manager.get_current_branch", return_value=None)
+    @patch("source_clone.mirror_manager.get_current_branch", return_value=None)
     def test_set_default_branch_from_local_no_head_branch(
         self, mock_get_branch: Mock, tmp_path: Path
     ) -> None:
@@ -1550,7 +1550,7 @@ class TestMirrorManager:
         github_api.set_default_branch.assert_not_called()
 
     @patch(
-        "gerrit_clone.mirror_manager.get_current_branch",
+        "source_clone.mirror_manager.get_current_branch",
         side_effect=FileNotFoundError("gone"),
     )
     def test_set_default_branch_from_local_repo_path_missing(
@@ -1591,7 +1591,7 @@ class TestMirrorManager:
         github_api.set_default_branch.assert_not_called()
 
     @patch(
-        "gerrit_clone.mirror_manager.get_current_branch",
+        "source_clone.mirror_manager.get_current_branch",
         side_effect=ValueError("not a repo"),
     )
     def test_set_default_branch_from_local_invalid_repo(
@@ -1631,7 +1631,7 @@ class TestMirrorManager:
 
         github_api.set_default_branch.assert_not_called()
 
-    @patch("gerrit_clone.mirror_manager.get_current_branch", return_value="main")
+    @patch("source_clone.mirror_manager.get_current_branch", return_value="main")
     def test_set_default_branch_from_local_malformed_full_name(
         self, mock_get_branch: Mock
     ) -> None:
@@ -1670,7 +1670,7 @@ class TestMirrorManager:
             "no-slash-here", "test-repo", "main"
         )
 
-    @patch("gerrit_clone.mirror_manager.get_current_branch", return_value="main")
+    @patch("source_clone.mirror_manager.get_current_branch", return_value="main")
     def test_set_default_branch_skips_when_already_correct(
         self, mock_get_branch: Mock
     ) -> None:
@@ -1703,7 +1703,7 @@ class TestMirrorManager:
         # Branch already matches — API must NOT be called
         github_api.set_default_branch.assert_not_called()
 
-    @patch("gerrit_clone.mirror_manager.get_current_branch", return_value="main")
+    @patch("source_clone.mirror_manager.get_current_branch", return_value="main")
     def test_set_default_branch_calls_api_when_different(
         self, mock_get_branch: Mock
     ) -> None:
@@ -1739,7 +1739,7 @@ class TestMirrorManager:
             "test-org", "test-repo", "main"
         )
 
-    @patch("gerrit_clone.mirror_manager.get_current_branch", return_value="main")
+    @patch("source_clone.mirror_manager.get_current_branch", return_value="main")
     def test_set_default_branch_calls_api_when_none(
         self, mock_get_branch: Mock
     ) -> None:
@@ -1827,12 +1827,12 @@ class TestFixDefaultBranches:
             completed_at=datetime.now(UTC),
         )
 
-    @patch("gerrit_clone.mirror_manager.is_gerrit_parent_project", return_value=False)
+    @patch("source_clone.mirror_manager.is_gerrit_parent_project", return_value=False)
     @patch(
-        "gerrit_clone.mirror_manager.list_local_branches",
+        "source_clone.mirror_manager.list_local_branches",
         return_value=["master", "develop"],
     )
-    @patch("gerrit_clone.mirror_manager.get_head_ref", return_value="refs/heads/master")
+    @patch("source_clone.mirror_manager.get_head_ref", return_value="refs/heads/master")
     def test_skips_repos_whose_push_failed(
         self,
         _mock_head: Mock,
@@ -1910,9 +1910,9 @@ class TestFixDefaultBranches:
         # No calls at all — every repo was filtered out
         github_api.set_default_branch.assert_not_called()
 
-    @patch("gerrit_clone.mirror_manager.is_gerrit_parent_project", return_value=False)
-    @patch("gerrit_clone.mirror_manager.list_local_branches", return_value=["main"])
-    @patch("gerrit_clone.mirror_manager.get_head_ref", return_value="refs/heads/main")
+    @patch("source_clone.mirror_manager.is_gerrit_parent_project", return_value=False)
+    @patch("source_clone.mirror_manager.list_local_branches", return_value=["main"])
+    @patch("source_clone.mirror_manager.get_head_ref", return_value="refs/heads/main")
     def test_no_mirror_results_falls_back_to_old_behaviour(
         self,
         _mock_head: Mock,

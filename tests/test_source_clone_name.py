@@ -16,9 +16,9 @@ from typing import TYPE_CHECKING
 import pytest
 from typer.testing import CliRunner
 
-from gerrit_clone import cli, content_intent, content_legacy, content_policy
-from gerrit_clone.config import ConfigManager
-from gerrit_clone.file_logging import get_default_log_path
+from source_clone import cli, content_intent, content_legacy, content_policy
+from source_clone.config import ConfigManager
+from source_clone.file_logging import get_default_log_path
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -47,7 +47,7 @@ class TestDistribution:
         assert set(scripts) >= COMMANDS
         targets = {scripts[name].value for name in COMMANDS}
         assert len(targets) == 1
-        assert targets.pop().endswith(".cli:app")
+        assert targets == {"source_clone.cli:app"}
         assert all(scripts[name].load() is cli.app for name in COMMANDS)
 
 

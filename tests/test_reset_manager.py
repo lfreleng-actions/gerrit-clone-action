@@ -12,9 +12,9 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from rich.console import Console
 
-from gerrit_clone.github_api import GitHubAPIError, GitHubNotFoundError
-from gerrit_clone.reset_manager import ResetManager
-from gerrit_clone.reset_models import GitHubRepoStatus
+from source_clone.github_api import GitHubAPIError, GitHubNotFoundError
+from source_clone.reset_manager import ResetManager
+from source_clone.reset_models import GitHubRepoStatus
 
 
 class TestResetManager:
@@ -28,7 +28,7 @@ class TestResetManager:
     @pytest.fixture
     def reset_manager(self, mock_console):
         """Create a ResetManager instance with mocked dependencies."""
-        with patch("gerrit_clone.reset_manager.GitHubAPI"):
+        with patch("source_clone.reset_manager.GitHubAPI"):
             manager = ResetManager(
                 org="test-org",
                 github_token="fake-token",
@@ -101,7 +101,7 @@ class TestResetManager:
         ]
 
         # Execute with Live mocked
-        with patch("gerrit_clone.reset_manager.Live"):
+        with patch("source_clone.reset_manager.Live"):
             repos_data = await reset_manager._fetch_repos_with_graphql()
 
         # Verify - should only count human PRs (2 out of 4)
@@ -111,7 +111,7 @@ class TestResetManager:
     @pytest.mark.asyncio
     async def test_fetch_repos_includes_automation_prs_when_enabled(self, mock_console):
         """Test that automation PRs are included when flag is set."""
-        with patch("gerrit_clone.reset_manager.GitHubAPI"):
+        with patch("source_clone.reset_manager.GitHubAPI"):
             # Create manager with include_automation_prs=True
             manager = ResetManager(
                 org="test-org",
@@ -146,7 +146,7 @@ class TestResetManager:
             ]
 
             # Execute with Live mocked
-            with patch("gerrit_clone.reset_manager.Live"):
+            with patch("source_clone.reset_manager.Live"):
                 repos_data = await manager._fetch_repos_with_graphql()
 
             # Verify - should count all PRs (4 out of 4)
@@ -182,7 +182,7 @@ class TestResetManager:
         ]
 
         # Execute with Live mocked
-        with patch("gerrit_clone.reset_manager.Live"):
+        with patch("source_clone.reset_manager.Live"):
             repos_data = await reset_manager._fetch_repos_with_graphql()
 
         # Verify - should show 0 PRs
@@ -219,7 +219,7 @@ class TestResetManager:
         ]
 
         # Execute with Live mocked
-        with patch("gerrit_clone.reset_manager.Live"):
+        with patch("source_clone.reset_manager.Live"):
             repos_data = await reset_manager._fetch_repos_with_graphql()
 
         # Verify - should count all non-automation PRs including malformed ones (4)
@@ -265,7 +265,7 @@ class TestResetManager:
         ]
 
         # Execute with Live mocked
-        with patch("gerrit_clone.reset_manager.Live"):
+        with patch("source_clone.reset_manager.Live"):
             repos_data = await reset_manager._fetch_repos_with_graphql()
 
         # Verify:
@@ -280,7 +280,7 @@ class TestResetManager:
         output = io.StringIO()
         console = Console(file=output, force_terminal=False, width=80)
 
-        with patch("gerrit_clone.reset_manager.GitHubAPI"):
+        with patch("source_clone.reset_manager.GitHubAPI"):
             manager = ResetManager(
                 org="test-org",
                 github_token="fake-token",
@@ -314,7 +314,7 @@ class TestResetManager:
         output = io.StringIO()
         console = Console(file=output, force_terminal=False, width=80)
 
-        with patch("gerrit_clone.reset_manager.GitHubAPI"):
+        with patch("source_clone.reset_manager.GitHubAPI"):
             manager = ResetManager(
                 org="test-org",
                 github_token="fake-token",
@@ -511,7 +511,7 @@ class TestResetManager:
         )
 
         # Execute with Live mocked
-        with patch("gerrit_clone.reset_manager.Live"):
+        with patch("source_clone.reset_manager.Live"):
             repos_data = await reset_manager._fetch_repos_with_graphql()
 
         # Verify - should mark counts as unavailable (-1) rather than 0
@@ -536,7 +536,7 @@ class TestResetManager:
         )
 
         # Execute with Live mocked
-        with patch("gerrit_clone.reset_manager.Live"):
+        with patch("source_clone.reset_manager.Live"):
             repos_data = await reset_manager._fetch_repos_with_graphql()
 
         # Verify - should mark counts as unavailable
@@ -549,7 +549,7 @@ class TestResetManager:
         output = io.StringIO()
         console = Console(file=output, force_terminal=False, width=80)
 
-        with patch("gerrit_clone.reset_manager.GitHubAPI"):
+        with patch("source_clone.reset_manager.GitHubAPI"):
             manager = ResetManager(
                 org="test-org",
                 github_token="fake-token",
@@ -681,7 +681,7 @@ class TestResetManager:
             mock_issues,
         ]
 
-        with patch("gerrit_clone.reset_manager.Live"):
+        with patch("source_clone.reset_manager.Live"):
             repos_data = await reset_manager._fetch_repos_with_graphql(
                 skip_pr_issue_counts=False
             )

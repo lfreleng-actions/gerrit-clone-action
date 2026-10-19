@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gerrit_clone.netrc import (
+from source_clone.netrc import (
     CredentialSource,
     GerritCredentials,
     NetrcCredentials,

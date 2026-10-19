@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import httpx
 import pytest
 
-from gerrit_clone.github_api import (
+from source_clone.github_api import (
     GitHubAPI,
     GitHubAPIError,
     GitHubAuthError,
@@ -24,8 +24,8 @@ from gerrit_clone.github_api import (
     sanitize_description,
     transform_gerrit_name_to_github,
 )
-from gerrit_clone.github_transport import github_api_url, graphql_url_for
-from gerrit_clone.rate_limit import TokenBucketLimiter
+from source_clone.github_transport import github_api_url, graphql_url_for
+from source_clone.rate_limit import TokenBucketLimiter
 
 
 class TestSanitizeDescription:
@@ -301,7 +301,7 @@ class TestGitHubApiUrls:
         """GraphQL pairs with the REST API on the same host."""
         assert graphql_url_for(api_url) == expected
 
-    @patch("gerrit_clone.github_api.httpx.Client")
+    @patch("source_clone.github_api.httpx.Client")
     def test_repo_exists_true(self, mock_client: Mock) -> None:
         """Test repo_exists returns True when repo exists."""
         mock_response = Mock()
@@ -318,7 +318,7 @@ class TestGitHubApiUrls:
         assert result is True
         api.close()
 
-    @patch("gerrit_clone.github_api.httpx.Client")
+    @patch("source_clone.github_api.httpx.Client")
     def test_repo_exists_false(self, mock_client: Mock) -> None:
         """Test repo_exists returns False when repo not found."""
         mock_response = Mock()
@@ -478,11 +478,11 @@ class TestBatchDeleteRepos:
 
         with (
             patch(
-                "gerrit_clone.github_api.httpx.AsyncClient",
+                "source_clone.github_api.httpx.AsyncClient",
                 return_value=mock_client,
             ),
             patch(
-                "gerrit_clone.github_api.asyncio.sleep",
+                "source_clone.github_api.asyncio.sleep",
                 new_callable=AsyncMock,
             ),
         ):
@@ -524,11 +524,11 @@ class TestBatchDeleteRepos:
 
         with (
             patch(
-                "gerrit_clone.github_api.httpx.AsyncClient",
+                "source_clone.github_api.httpx.AsyncClient",
                 return_value=mock_client,
             ),
             patch(
-                "gerrit_clone.github_api.asyncio.sleep",
+                "source_clone.github_api.asyncio.sleep",
                 new_callable=AsyncMock,
             ),
         ):
@@ -573,11 +573,11 @@ class TestBatchDeleteRepos:
 
         with (
             patch(
-                "gerrit_clone.github_api.httpx.AsyncClient",
+                "source_clone.github_api.httpx.AsyncClient",
                 return_value=mock_client,
             ),
             patch(
-                "gerrit_clone.github_api.asyncio.sleep",
+                "source_clone.github_api.asyncio.sleep",
                 new_callable=AsyncMock,
             ),
         ):
@@ -626,11 +626,11 @@ class TestBatchDeleteRepos:
 
         with (
             patch(
-                "gerrit_clone.github_api.httpx.AsyncClient",
+                "source_clone.github_api.httpx.AsyncClient",
                 return_value=mock_client,
             ),
             patch(
-                "gerrit_clone.github_api.asyncio.sleep",
+                "source_clone.github_api.asyncio.sleep",
                 new_callable=AsyncMock,
             ),
         ):
@@ -688,11 +688,11 @@ class TestBatchCreateRepos:
 
         with (
             patch(
-                "gerrit_clone.github_api.httpx.AsyncClient",
+                "source_clone.github_api.httpx.AsyncClient",
                 return_value=mock_client,
             ),
             patch(
-                "gerrit_clone.github_api.asyncio.sleep",
+                "source_clone.github_api.asyncio.sleep",
                 new_callable=AsyncMock,
             ),
         ):
@@ -759,11 +759,11 @@ class TestBatchCreateRepos:
 
         with (
             patch(
-                "gerrit_clone.github_api.httpx.AsyncClient",
+                "source_clone.github_api.httpx.AsyncClient",
                 return_value=mock_client,
             ),
             patch(
-                "gerrit_clone.github_api.asyncio.sleep",
+                "source_clone.github_api.asyncio.sleep",
                 new_callable=AsyncMock,
             ),
         ):
@@ -821,11 +821,11 @@ class TestBatchCreateRepos:
 
         with (
             patch(
-                "gerrit_clone.github_api.httpx.AsyncClient",
+                "source_clone.github_api.httpx.AsyncClient",
                 return_value=mock_client,
             ),
             patch(
-                "gerrit_clone.github_api.asyncio.sleep",
+                "source_clone.github_api.asyncio.sleep",
                 new_callable=AsyncMock,
             ),
         ):
@@ -882,11 +882,11 @@ class TestBatchCreateRepos:
 
         with (
             patch(
-                "gerrit_clone.github_api.httpx.AsyncClient",
+                "source_clone.github_api.httpx.AsyncClient",
                 return_value=mock_client,
             ),
             patch(
-                "gerrit_clone.github_api.asyncio.sleep",
+                "source_clone.github_api.asyncio.sleep",
                 new_callable=AsyncMock,
             ),
         ):
@@ -1269,7 +1269,7 @@ class TestListOwnerReposGraphQL:
         with (
             GitHubAPI(token="bad-token") as api,
             patch.object(api.client, "post", return_value=response) as mock_post,
-            patch("gerrit_clone.github_graphql_retry.time_mod.sleep") as sleep,
+            patch("source_clone.github_graphql_retry.time_mod.sleep") as sleep,
             pytest.raises(GitHubAuthError),
         ):
             api.list_owner_repos_graphql("owner")
@@ -1283,7 +1283,7 @@ class TestListOwnerReposGraphQL:
         with (
             GitHubAPI(token="test-token") as api,
             patch.object(api.client, "post", return_value=response),
-            patch("gerrit_clone.github_graphql_retry.time_mod.sleep"),
+            patch("source_clone.github_graphql_retry.time_mod.sleep"),
             pytest.raises(GitHubAPIError, match="HTTP 502"),
         ):
             api.list_owner_repos_graphql("owner")
@@ -1297,7 +1297,7 @@ class TestListOwnerReposGraphQL:
         with (
             GitHubAPI(token="bad-token") as api,
             patch.object(api.client, "post", return_value=response),
-            patch("gerrit_clone.github_graphql_retry.time_mod.sleep"),
+            patch("source_clone.github_graphql_retry.time_mod.sleep"),
         ):
             assert api.list_all_repos_graphql("some-org") == {}
 
@@ -1560,7 +1560,7 @@ def test_list_all_repos_no_default_branch() -> None:
 
     with (
         patch.object(api.client, "post", return_value=mock_response),
-        patch("gerrit_clone.github_repo_listing.logger") as mock_logger,
+        patch("source_clone.github_repo_listing.logger") as mock_logger,
     ):
         result = api.list_all_repos_graphql("test-org")
 

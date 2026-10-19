@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from gerrit_clone.worktree_exclude import (
+from source_clone.worktree_exclude import (
     hide_from_checkout,
     is_checkout_top,
     literal_pattern,

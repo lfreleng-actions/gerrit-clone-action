@@ -17,11 +17,11 @@ from pathlib import Path
 
 import pytest
 
-from gerrit_clone.clone_results import (
+from source_clone.clone_results import (
     _REFRESH_TO_CLONE_STATUS,
     build_refresh_result,
 )
-from gerrit_clone.models import (
+from source_clone.models import (
     CloneResult,
     CloneStatus,
     Project,

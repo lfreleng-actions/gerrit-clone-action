@@ -20,7 +20,7 @@ import pytest
 import yaml
 
 # Import the CLI app to introspect its options
-from gerrit_clone.cli import clone as clone_command
+from source_clone.cli import clone as clone_command
 
 # Path to the action.yaml file (relative to project root)
 ACTION_YAML_PATH = Path(__file__).parent.parent / "action.yaml"

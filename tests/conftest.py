@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, NoReturn
 
 import pytest
 
-from gerrit_clone.discovery import GerritDiscoveryError
+from source_clone.discovery import GerritDiscoveryError
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -448,7 +448,7 @@ def no_network(
     real_connect = socket.socket.connect
     real_connect_ex = socket.socket.connect_ex
     monkeypatch.setattr(
-        "gerrit_clone.discovery.discover_gerrit_base_url", offline_discovery
+        "source_clone.discovery.discover_gerrit_base_url", offline_discovery
     )
     # Each resolver entry point, not getaddrinfo alone: the others call the
     # system resolver themselves.  The reverse lookups are answered above.

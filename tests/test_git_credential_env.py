@@ -15,22 +15,22 @@ from typing import Any
 
 import pytest
 
-from gerrit_clone.git_credential_env import (
+from source_clone.git_credential_env import (
     build_token_auth_env,
     git_config_env,
     token_auth_config,
 )
-from gerrit_clone.github_clone_env import build_git_env
-from gerrit_clone.github_clone_url import (
+from source_clone.github_clone_env import build_git_env
+from source_clone.github_clone_url import (
     resolve_clone_url,
     trusted_clone_origin,
 )
-from gerrit_clone.github_url_safety import (
+from source_clone.github_url_safety import (
     UnsafeCloneUrlError,
     reject_credentialed_url,
 )
-from gerrit_clone.mirror_push import PushSettings, build_push_env
-from gerrit_clone.models import Config, Project, ProjectState, SourceType
+from source_clone.mirror_push import PushSettings, build_push_env
+from source_clone.models import Config, Project, ProjectState, SourceType
 
 TOKEN = "ghp_notarealtoken"
 ENCODED = base64.b64encode(f"x-access-token:{TOKEN}".encode()).decode()

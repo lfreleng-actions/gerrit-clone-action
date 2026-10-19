@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gerrit_clone.git_utils import (
+from source_clone.git_utils import (
     get_current_branch,
     get_current_commit_sha,
     get_head_ref,
@@ -24,7 +24,7 @@ from gerrit_clone.git_utils import (
     is_repo_dirty,
     list_local_branches,
 )
-from gerrit_clone.subprocess_tracking import (
+from source_clone.subprocess_tracking import (
     ProcessAbandonedError,
     _thread_state,
     enter_generation,
@@ -196,7 +196,7 @@ class TestIsGitRepositoryInAbandonedBatch:
     def test_the_probe_is_refused(self, tmp_path: Path) -> None:
         directory = self._not_a_repository(tmp_path)
         with (
-            patch("gerrit_clone.subprocess_tracking.subprocess.Popen") as popen,
+            patch("source_clone.subprocess_tracking.subprocess.Popen") as popen,
             pytest.raises(ProcessAbandonedError),
         ):
             is_git_repository(directory)
@@ -210,7 +210,7 @@ class TestIsGitRepositoryInAbandonedBatch:
         directory = self._not_a_repository(tmp_path)
         terminated = subprocess.CompletedProcess(["git"], -15, "", "")
         with (
-            patch("gerrit_clone.git_utils.run_tracked", return_value=terminated),
+            patch("source_clone.git_utils.run_tracked", return_value=terminated),
             pytest.raises(ProcessAbandonedError),
         ):
             is_git_repository(directory)

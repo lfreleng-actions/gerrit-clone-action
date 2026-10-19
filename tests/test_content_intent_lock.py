@@ -19,14 +19,14 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from gerrit_clone.content_intent import (
+from source_clone.content_intent import (
     FilterIntent,
     IntentError,
     load_intent,
     save_intent,
 )
-from gerrit_clone.content_intent_resolve import resolve_filters
-from gerrit_clone.content_spec import ContentFilterSpec
+from source_clone.content_intent_resolve import resolve_filters
+from source_clone.content_spec import ContentFilterSpec
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -37,8 +37,8 @@ _OTHER_RUN = """
 import sys
 from pathlib import Path
 
-from gerrit_clone.content_intent_resolve import resolve_filters
-from gerrit_clone.content_spec import ContentFilterSpec
+from source_clone.content_intent_resolve import resolve_filters
+from source_clone.content_spec import ContentFilterSpec
 
 root = Path(sys.argv[1])
 resolve_filters(root, ContentFilterSpec(["b.txt"], None, False, root), persist=True)
@@ -117,7 +117,7 @@ class TestWaiting:
     def test_a_run_gives_up_with_a_clear_error(
         self, tree: Path, held: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr("gerrit_clone.content_intent.LOCK_WAIT", 0.3)
+        monkeypatch.setattr("source_clone.content_intent.LOCK_WAIT", 0.3)
         started = time.monotonic()
 
         with pytest.raises(
@@ -155,7 +155,7 @@ import sys
 import time
 from pathlib import Path
 
-from gerrit_clone.content_intent import intent_locked
+from source_clone.content_intent import intent_locked
 
 root, ready, release = map(Path, sys.argv[1:])
 with intent_locked(root):
@@ -181,7 +181,7 @@ class TestAnyPlatform:
             while not ready.exists() and time.monotonic() < deadline:
                 time.sleep(0.05)
             assert ready.exists(), "the other process never took the lock"
-            monkeypatch.setattr("gerrit_clone.content_intent.LOCK_WAIT", 0.3)
+            monkeypatch.setattr("source_clone.content_intent.LOCK_WAIT", 0.3)
 
             with pytest.raises(
                 IntentError, match="another source-clone or gerrit-clone run"

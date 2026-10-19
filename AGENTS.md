@@ -33,11 +33,15 @@ a pull request, not the full set:
 
 ## Repository specifics
 
-Unless `gerrit-clone` is already on `PATH` or the caller sets
-`build-from-source: true`, the action runs an unpinned `gerrit-clone`
-release from PyPI (`uvx gerrit-clone`), not the CLI at the commit the
+Unless `source-clone` is already on `PATH` or the caller sets
+`build-from-source: true`, the action runs an unpinned `source-clone`
+release from PyPI (`uvx source-clone`), not the CLI at the commit the
 caller pins. A new CLI release has to keep accepting every option that an
 earlier `action.yaml` passes: renaming or removing one breaks callers
 on that default route whose pinned action commit predates the change.
+Action commits from before the rename run `uvx gerrit-clone` instead,
+and keep getting the last `gerrit-clone` release from PyPI, so later
+`source-clone` releases never reach them. The package also installs a
+`gerrit-clone` command, so the same rule applies to it.
 CI puts this branch's CLI on `PATH` first, so it never takes that
 route and cannot catch the breakage.

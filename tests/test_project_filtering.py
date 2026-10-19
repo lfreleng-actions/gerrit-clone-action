@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from gerrit_clone.mirror_manager import filter_projects_by_hierarchy
-from gerrit_clone.models import (
+from source_clone.mirror_manager import filter_projects_by_hierarchy
+from source_clone.models import (
     Config,
     Project,
     ProjectState,

@@ -20,13 +20,13 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
-from gerrit_clone.cli import app
-from gerrit_clone.clone_manager import _refresh_repositories
-from gerrit_clone.content_filter import apply_content_filters
-from gerrit_clone.content_origin import NO_PUSH_URL
-from gerrit_clone.content_policy import FilterPolicy, add_policy
-from gerrit_clone.content_spec import ContentFilterSpec
-from gerrit_clone.models import (
+from source_clone.cli import app
+from source_clone.clone_manager import _refresh_repositories
+from source_clone.content_filter import apply_content_filters
+from source_clone.content_origin import NO_PUSH_URL
+from source_clone.content_policy import FilterPolicy, add_policy
+from source_clone.content_spec import ContentFilterSpec
+from source_clone.models import (
     CloneStatus,
     Config,
     Project,
@@ -34,11 +34,11 @@ from gerrit_clone.models import (
     RefreshStatus,
     RetryPolicy,
 )
-from gerrit_clone.refresh_filtered import SHALLOW_HISTORY_REFUSAL
-from gerrit_clone.refresh_git_env import run_git
-from gerrit_clone.refresh_manager import RefreshManager, refresh_repositories
-from gerrit_clone.refresh_worker import FILTERED_WORKING_COPY_REFUSAL, RefreshWorker
-from gerrit_clone.subprocess_tracking import ProcessAbandonedError
+from source_clone.refresh_filtered import SHALLOW_HISTORY_REFUSAL
+from source_clone.refresh_git_env import run_git
+from source_clone.refresh_manager import RefreshManager, refresh_repositories
+from source_clone.refresh_worker import FILTERED_WORKING_COPY_REFUSAL, RefreshWorker
+from source_clone.subprocess_tracking import ProcessAbandonedError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -493,7 +493,7 @@ class TestStagedRefresh:
         _advance(tree.parent / "up-parent")
 
         with patch(
-            "gerrit_clone.refresh_filtered.apply_content_filters",
+            "source_clone.refresh_filtered.apply_content_filters",
             return_value=(False, "filter-repo failed"),
         ):
             result = _worker(filters=_spec(tree)).refresh_repository(mirror)
@@ -529,7 +529,7 @@ class TestStagedRefresh:
             ran: subprocess.CompletedProcess[str] = run_git(cmd, *args, **kwargs)
             return ran
 
-        with patch("gerrit_clone.refresh_filtered.run_git", unreadable):
+        with patch("source_clone.refresh_filtered.run_git", unreadable):
             result = _worker(filters=_spec(tree)).refresh_repository(mirror)
 
         assert result.status == RefreshStatus.FAILED
@@ -543,7 +543,7 @@ class TestStagedRefresh:
         before = _git("for-each-ref", cwd=mirror)
         _advance(tree.parent / "up-parent")
 
-        with patch("gerrit_clone.content_policy.block_pushes", return_value=False):
+        with patch("source_clone.content_policy.block_pushes", return_value=False):
             result = _worker(filters=_spec(tree)).refresh_repository(mirror)
 
         assert result.status == RefreshStatus.FAILED
@@ -568,7 +568,7 @@ class TestStagedRefresh:
             ran: subprocess.CompletedProcess[str] = run_git(cmd, *args, **kwargs)
             return ran
 
-        with patch("gerrit_clone.refresh_filtered.run_git", stuck):
+        with patch("source_clone.refresh_filtered.run_git", stuck):
             result = _worker(filters=_spec(tree)).refresh_repository(mirror)
 
         assert result.status == RefreshStatus.FAILED
@@ -585,7 +585,7 @@ class TestStagedRefresh:
             if not ignore_errors:
                 raise PermissionError(13, "Permission denied", str(path))
 
-        with patch("gerrit_clone.refresh_filtered.shutil.rmtree", undeletable):
+        with patch("source_clone.refresh_filtered.shutil.rmtree", undeletable):
             result = _worker(filters=_spec(tree)).refresh_repository(mirror)
 
         [stage] = _stages_left(tree)
@@ -613,9 +613,9 @@ class TestStagedRefresh:
                 raise PermissionError(13, "Permission denied", str(path))
 
         with (
-            patch("gerrit_clone.refresh_filtered.shutil.rmtree", undeletable),
+            patch("source_clone.refresh_filtered.shutil.rmtree", undeletable),
             patch(
-                "gerrit_clone.refresh_filtered.apply_content_filters",
+                "source_clone.refresh_filtered.apply_content_filters",
                 side_effect=raised,
             ),
         ):

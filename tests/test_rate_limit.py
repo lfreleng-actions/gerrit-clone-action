@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import httpx
 import pytest
 
-from gerrit_clone.rate_limit import (
+from source_clone.rate_limit import (
     AsyncProgressCounter,
     RateLimitBudget,
     RateLimitSnapshot,
@@ -548,7 +548,7 @@ class TestTokenBucketLimiter:
 
         with (
             patch(
-                "gerrit_clone.rate_limit.time_mod.monotonic", side_effect=fake_monotonic
+                "source_clone.rate_limit.time_mod.monotonic", side_effect=fake_monotonic
             ),
             patch("asyncio.sleep", side_effect=fake_sleep),
         ):
@@ -816,7 +816,7 @@ class TestTokenBucketLimiterIntegration:
 
         with (
             patch(
-                "gerrit_clone.rate_limit.time_mod.monotonic", side_effect=fake_monotonic
+                "source_clone.rate_limit.time_mod.monotonic", side_effect=fake_monotonic
             ),
             patch("asyncio.sleep", side_effect=fake_sleep),
         ):

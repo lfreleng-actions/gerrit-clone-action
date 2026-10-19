@@ -9,8 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock
 
-from gerrit_clone.models import CloneStatus, Config, Project, ProjectState
-from gerrit_clone.worker import CloneWorker
+from source_clone.models import CloneStatus, Config, Project, ProjectState
+from source_clone.worker import CloneWorker
 
 
 class TestCloneWorker:

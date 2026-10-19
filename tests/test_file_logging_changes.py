@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from gerrit_clone.file_logging import (
+from source_clone.file_logging import (
     cli_args_to_dict,
     get_default_log_path,
     init_logging,
@@ -218,7 +218,7 @@ class TestDynamicLogFileNaming:
 
                 # Mock get_default_log_path to verify it receives the host
                 with patch(
-                    "gerrit_clone.file_logging.get_default_log_path"
+                    "source_clone.file_logging.get_default_log_path"
                 ) as mock_get_log_path:
                     mock_log_path = Path(tmpdir) / "test.log"
                     mock_get_log_path.return_value = mock_log_path

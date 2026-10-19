@@ -19,9 +19,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gerrit_clone.content_filter import apply_content_filters
-from gerrit_clone.content_removal import _list_tree_files
-from gerrit_clone.content_worktree import _list_branch_heads, _remove_files_worktree
+from source_clone.content_filter import apply_content_filters
+from source_clone.content_removal import _list_tree_files
+from source_clone.content_worktree import _list_branch_heads, _remove_files_worktree
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -40,7 +40,7 @@ def _unrecorded(_repo_path: Path, _policy: object) -> Generator[list[str], None,
 
 @pytest.fixture
 def _no_policy_record() -> Generator[None, None, None]:
-    with patch("gerrit_clone.content_filter.content_filtering", _unrecorded):
+    with patch("source_clone.content_filter.content_filtering", _unrecorded):
         yield
 
 
@@ -69,7 +69,7 @@ def _dispatch(
     """Route ``for-each-ref`` and ``ls-tree`` to separate results.
 
     ``content_removal`` and ``content_worktree`` both launch through
-    :mod:`gerrit_clone.content_git`, so patching its launch patches
+    :mod:`source_clone.content_git`, so patching its launch patches
     both; the two commands have to be told apart by their arguments.
     """
 
@@ -84,28 +84,28 @@ def _dispatch(
 class TestBranchEnumeration:
     """A failed enumeration is not a repository without branches."""
 
-    @patch("gerrit_clone.content_git.run_tracked")
+    @patch("source_clone.content_git.run_tracked")
     def test_command_failure_raises(self, mock_run: MagicMock) -> None:
         mock_run.return_value = _failed()
 
         with pytest.raises(RuntimeError, match="Failed to list branches"):
             _list_branch_heads(REPO, 30)
 
-    @patch("gerrit_clone.content_git.run_tracked")
+    @patch("source_clone.content_git.run_tracked")
     def test_timeout_raises(self, mock_run: MagicMock) -> None:
         mock_run.side_effect = subprocess.TimeoutExpired(cmd=["git"], timeout=30)
 
         with pytest.raises(RuntimeError, match="timed out"):
             _list_branch_heads(REPO, 30)
 
-    @patch("gerrit_clone.content_git.run_tracked")
+    @patch("source_clone.content_git.run_tracked")
     def test_missing_git_raises(self, mock_run: MagicMock) -> None:
         mock_run.side_effect = FileNotFoundError("git")
 
         with pytest.raises(RuntimeError, match="Failed to list branches"):
             _list_branch_heads(REPO, 30)
 
-    @patch("gerrit_clone.content_git.run_tracked")
+    @patch("source_clone.content_git.run_tracked")
     def test_a_repository_without_branches_is_still_empty(
         self, mock_run: MagicMock
     ) -> None:
@@ -117,28 +117,28 @@ class TestBranchEnumeration:
 class TestTreeListing:
     """A failed listing is not a branch with no matching content."""
 
-    @patch("gerrit_clone.content_git.run_tracked")
+    @patch("source_clone.content_git.run_tracked")
     def test_command_failure_raises(self, mock_run: MagicMock) -> None:
         mock_run.return_value = _failed("fatal: not a tree object")
 
         with pytest.raises(RuntimeError, match="git ls-tree failed"):
             _list_tree_files(REPO, "main")
 
-    @patch("gerrit_clone.content_git.run_tracked")
+    @patch("source_clone.content_git.run_tracked")
     def test_timeout_raises(self, mock_run: MagicMock) -> None:
         mock_run.side_effect = subprocess.TimeoutExpired(cmd=["git"], timeout=30)
 
         with pytest.raises(RuntimeError, match="timed out"):
             _list_tree_files(REPO, "main", timeout=30)
 
-    @patch("gerrit_clone.content_git.run_tracked")
+    @patch("source_clone.content_git.run_tracked")
     def test_missing_git_raises(self, mock_run: MagicMock) -> None:
         mock_run.side_effect = OSError("git")
 
         with pytest.raises(RuntimeError, match="git ls-tree failed"):
             _list_tree_files(REPO, "main")
 
-    @patch("gerrit_clone.content_git.run_tracked")
+    @patch("source_clone.content_git.run_tracked")
     def test_an_empty_tree_is_still_empty(self, mock_run: MagicMock) -> None:
         mock_run.return_value = _succeeded("")
 
@@ -149,8 +149,8 @@ class TestTreeListing:
 class TestReportedToTheCaller:
     """apply_content_filters must surface the failure, not swallow it."""
 
-    @patch("gerrit_clone.content_filter._check_git_filter_repo", return_value=False)
-    @patch("gerrit_clone.content_git.run_tracked")
+    @patch("source_clone.content_filter._check_git_filter_repo", return_value=False)
+    @patch("source_clone.content_git.run_tracked")
     def test_branch_enumeration_failure_fails_the_filter(
         self, mock_run: MagicMock, _mock_check: MagicMock, tmp_path: Path
     ) -> None:
@@ -165,8 +165,8 @@ class TestReportedToTheCaller:
         assert error is not None
         assert "Failed to list branches" in error
 
-    @patch("gerrit_clone.content_filter._check_git_filter_repo", return_value=False)
-    @patch("gerrit_clone.content_git.run_tracked")
+    @patch("source_clone.content_filter._check_git_filter_repo", return_value=False)
+    @patch("source_clone.content_git.run_tracked")
     def test_tree_listing_failure_fails_the_filter(
         self,
         mock_run: MagicMock,
@@ -189,13 +189,13 @@ class TestReportedToTheCaller:
 class TestNothingToDoStillSucceeds:
     """An empty repository is not a failure."""
 
-    @patch("gerrit_clone.content_git.run_tracked")
+    @patch("source_clone.content_git.run_tracked")
     def test_no_branches_removes_nothing(self, mock_run: MagicMock) -> None:
         mock_run.return_value = _succeeded("")
 
         assert _remove_files_worktree(REPO, PATTERNS, _matcher) == []
 
-    @patch("gerrit_clone.content_git.run_tracked")
+    @patch("source_clone.content_git.run_tracked")
     def test_a_branch_with_no_matching_files_removes_nothing(
         self, mock_run: MagicMock
     ) -> None:

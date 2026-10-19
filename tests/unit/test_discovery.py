@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 import httpx
 import pytest
 
-from gerrit_clone.discovery import (
+from source_clone.discovery import (
     GerritAPIDiscovery,
     GerritDiscoveryError,
     check_gerrit_api_access,
@@ -52,7 +52,7 @@ class TestGerritAPIDiscovery:
             assert isinstance(discovery, GerritAPIDiscovery)
             assert hasattr(discovery, "client")
 
-    @patch("gerrit_clone.discovery.httpx.Client")
+    @patch("source_clone.discovery.httpx.Client")
     def test_close(self, mock_client_class):
         """Test cleanup on close."""
         mock_client = Mock()
@@ -277,7 +277,7 @@ class TestGerritAPIDiscovery:
 class TestConvenienceFunctions:
     """Test convenience functions."""
 
-    @patch("gerrit_clone.discovery.GerritAPIDiscovery")
+    @patch("source_clone.discovery.GerritAPIDiscovery")
     def test_discover_gerrit_base_url(self, mock_discovery_class):
         """Test discover_gerrit_base_url convenience function."""
         mock_discovery = Mock()
@@ -290,7 +290,7 @@ class TestConvenienceFunctions:
         mock_discovery_class.assert_called_once_with(timeout=15.0)
         mock_discovery.discover_base_url.assert_called_once_with("gerrit.example.org")
 
-    @patch("gerrit_clone.discovery.GerritAPIDiscovery")
+    @patch("source_clone.discovery.GerritAPIDiscovery")
     def test_test_gerrit_api_access_success(self, mock_discovery_class):
         """Test check_gerrit_api_access with working API."""
         mock_discovery = Mock()
@@ -302,7 +302,7 @@ class TestConvenienceFunctions:
         assert is_accessible is True
         assert error is None
 
-    @patch("gerrit_clone.discovery.GerritAPIDiscovery")
+    @patch("source_clone.discovery.GerritAPIDiscovery")
     def test_test_gerrit_api_access_failure(self, mock_discovery_class):
         """Test check_gerrit_api_access with non-working API."""
         mock_discovery = Mock()
@@ -314,7 +314,7 @@ class TestConvenienceFunctions:
         assert is_accessible is False
         assert error == "Projects API test failed"
 
-    @patch("gerrit_clone.discovery.GerritAPIDiscovery")
+    @patch("source_clone.discovery.GerritAPIDiscovery")
     def test_test_gerrit_api_access_exception(self, mock_discovery_class):
         """Test check_gerrit_api_access with exception."""
         mock_discovery = Mock()

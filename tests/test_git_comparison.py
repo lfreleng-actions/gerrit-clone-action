@@ -6,13 +6,13 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from gerrit_clone.git_comparison import (
+from source_clone.git_comparison import (
     _determine_sync_status,
     compare_local_with_remote,
     scan_local_gerrit_clone,
     transform_github_name_to_gerrit,
 )
-from gerrit_clone.reset_models import (
+from source_clone.reset_models import (
     GitHubRepoStatus,
     LocalRepoStatus,
 )
@@ -385,7 +385,7 @@ def test_scan_local_gerrit_clone_skips_git_dirs(tmp_path):
         is_valid_git_repo=True,
     )
 
-    with patch("gerrit_clone.git_comparison._get_local_repo_status") as mock_get_status:
+    with patch("source_clone.git_comparison._get_local_repo_status") as mock_get_status:
         mock_get_status.return_value = mock_status
 
         repos = scan_local_gerrit_clone(tmp_path)

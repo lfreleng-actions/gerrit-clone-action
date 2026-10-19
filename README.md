@@ -1647,7 +1647,7 @@ uv sync --dev
 uv run pytest
 
 # Run with coverage report
-uv run pytest --cov=gerrit_clone --cov-report=html --cov-report=term-missing
+uv run pytest --cov=source_clone --cov-report=html --cov-report=term-missing
 
 # Run integration tests (requires network)
 uv run pytest tests/integration/ -v

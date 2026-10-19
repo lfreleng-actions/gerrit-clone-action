@@ -13,8 +13,8 @@ from unittest.mock import patch
 
 import pytest
 
-from gerrit_clone.content_filter import apply_content_filters
-from gerrit_clone.content_intent import (
+from source_clone.content_filter import apply_content_filters
+from source_clone.content_intent import (
     ALL_PROJECTS,
     FilterIntent,
     IntentError,
@@ -23,11 +23,11 @@ from gerrit_clone.content_intent import (
     load_intent,
     save_intent,
 )
-from gerrit_clone.content_intent_resolve import gathered_intent, resolve_filters
-from gerrit_clone.content_policy import FilterPolicy, add_policy
-from gerrit_clone.content_spec import ContentFilterSpec
-from gerrit_clone.content_stage import SHALLOW_HISTORY_REFUSED, filter_repository
-from gerrit_clone.subprocess_tracking import run_tracked
+from source_clone.content_intent_resolve import gathered_intent, resolve_filters
+from source_clone.content_policy import FilterPolicy, add_policy
+from source_clone.content_spec import ContentFilterSpec
+from source_clone.content_stage import SHALLOW_HISTORY_REFUSED, filter_repository
+from source_clone.subprocess_tracking import run_tracked
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -160,7 +160,7 @@ class TestTheFile:
         save_intent(tmp_path, old)
 
         with (
-            patch("gerrit_clone.content_intent.json.dump", side_effect=OSError("full")),
+            patch("source_clone.content_intent.json.dump", side_effect=OSError("full")),
             pytest.raises(IntentError),
         ):
             save_intent(tmp_path, FilterIntent.of_options(["new.txt"], None, False))
@@ -332,7 +332,7 @@ class TestGatheringRecords:
                 assert add_policy(mirror, FilterPolicy.of(["x"], [], False))
 
         with patch(
-            "gerrit_clone.content_origin.run_tracked",
+            "source_clone.content_origin.run_tracked",
             wraps=run_tracked,
         ) as launched:
             intent = gathered_intent(tmp_path / "tree")
@@ -381,7 +381,7 @@ class TestFilterRepository:
         intent = FilterIntent.of_options(["x"], {"p": [TOKEN]}, False)
         spec = ContentFilterSpec(None, None, False, tmp_path, intent)
 
-        with patch("gerrit_clone.content_stage.apply_content_filters") as apply:
+        with patch("source_clone.content_stage.apply_content_filters") as apply:
             reason = filter_repository(spec, tmp_path, "p", 30, apply=apply)
 
         assert reason is not None

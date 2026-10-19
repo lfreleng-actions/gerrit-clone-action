@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from gerrit_clone.refresh_worker import RefreshWorker
+from source_clone.refresh_worker import RefreshWorker
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -25,7 +25,7 @@ option the default for all clone operations.
 
 ## Changes Made
 
-### 1. Core Model Changes (`src/gerrit_clone/models.py`)
+### 1. Core Model Changes (`src/source_clone/models.py`)
 
 **Added Field:**
 
@@ -41,7 +41,7 @@ option the default for all clone operations.
   `None` with a warning
 - These options are mutually exclusive according to Git's constraints
 
-### 2. Worker Module Changes (`src/gerrit_clone/worker.py`)
+### 2. Worker Module Changes (`src/source_clone/worker.py`)
 
 **Modified Method:** `_build_clone_command()`
 
@@ -51,7 +51,7 @@ option the default for all clone operations.
 - **Non-Mirror Mode:** Uses original behavior with `--no-hardlinks`,
   `--quiet`, optional `--depth`, and optional `--branch`
 
-### 3. GitHub Worker Changes (`src/gerrit_clone/github_worker.py`)
+### 3. GitHub Worker Changes (`src/source_clone/github_worker.py`)
 
 **Modified Functions:**
 
@@ -61,7 +61,7 @@ option the default for all clone operations.
 **Behavior:** Same branching logic as worker.py - mirror mode uses
 `--mirror`, non-mirror mode allows depth/branch options.
 
-### 4. CLI Changes (`src/gerrit_clone/cli.py`)
+### 4. CLI Changes (`src/source_clone/cli.py`)
 
 **Added Option to `clone` Command:**
 
@@ -109,7 +109,7 @@ mirror: bool = typer.Option(
 Note: The `mirror` command defaults to `True` directly since it focuses
 specifically on mirror operations.
 
-### 5. Configuration Management Changes (`src/gerrit_clone/config.py`)
+### 5. Configuration Management Changes (`src/source_clone/config.py`)
 
 **Added to `load_config()` signature:**
 
@@ -290,11 +290,11 @@ explicitly use `--no-mirror` or set it in their config file/environment.
 
 **Modified:**
 
-- `src/gerrit_clone/models.py`
-- `src/gerrit_clone/worker.py`
-- `src/gerrit_clone/github_worker.py`
-- `src/gerrit_clone/cli.py`
-- `src/gerrit_clone/config.py`
+- `src/source_clone/models.py`
+- `src/source_clone/worker.py`
+- `src/source_clone/github_worker.py`
+- `src/source_clone/cli.py`
+- `src/source_clone/config.py`
 - `action.yaml`
 - `README.md`
 - `tests/test_config.py`

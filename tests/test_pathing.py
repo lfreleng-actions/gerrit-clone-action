@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gerrit_clone.pathing import (
+from source_clone.pathing import (
     AtomicClonePath,
     PathConflictError,
     PathValidationError,
@@ -346,7 +346,7 @@ class TestAtomicClonePath:
 
         assert atomic1.temp_path != atomic2.temp_path
 
-    @patch("gerrit_clone.pathing.shutil.rmtree")
+    @patch("source_clone.pathing.shutil.rmtree")
     def test_atomic_clone_path_cleanup_on_exception(self, mock_rmtree):
         """Test cleanup when exception occurs."""
         target_path = Path("/tmp/repos/project")
@@ -375,7 +375,7 @@ class TestAtomicClonePath:
         atomic_path.__exit__(None, None, None)
         # __exit__ should complete without error
 
-    @patch("gerrit_clone.pathing.shutil.rmtree")
+    @patch("source_clone.pathing.shutil.rmtree")
     @patch("os.path.exists")
     def test_atomic_clone_path_successful_completion(self, mock_exists, mock_rmtree):
         """Test successful atomic operation."""
@@ -428,7 +428,7 @@ class TestAtomicClonePath:
 
                 assert target_path.exists()
 
-    @patch("gerrit_clone.pathing.shutil.rmtree")
+    @patch("source_clone.pathing.shutil.rmtree")
     def test_atomic_clone_path_cleanup_error_handling(self, mock_rmtree):
         """Test error handling during cleanup."""
         mock_rmtree.side_effect = OSError("Permission denied")

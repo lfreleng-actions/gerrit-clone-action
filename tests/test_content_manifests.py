@@ -21,12 +21,12 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from typer.testing import CliRunner
 
-from gerrit_clone.cli import app
-from gerrit_clone.clone_reporting import write_manifest
-from gerrit_clone.content_intent import intent_path
-from gerrit_clone.content_intent_resolve import resolve_filters
-from gerrit_clone.content_spec import ContentFilterSpec
-from gerrit_clone.models import BatchResult, Config, Project, ProjectState
+from source_clone.cli import app
+from source_clone.clone_reporting import write_manifest
+from source_clone.content_intent import intent_path
+from source_clone.content_intent_resolve import resolve_filters
+from source_clone.content_spec import ContentFilterSpec
+from source_clone.models import BatchResult, Config, Project, ProjectState
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -183,15 +183,15 @@ class TestMirrorManifest:
     def test_it_summarises_the_intent(self, tree: Path) -> None:
         with (
             patch(
-                "gerrit_clone.cli_mirror_run.authenticate", return_value=_github_api()
+                "source_clone.cli_mirror_run.authenticate", return_value=_github_api()
             ),
-            patch("gerrit_clone.cli_mirror_run.resolve_org", return_value="org"),
+            patch("source_clone.cli_mirror_run.resolve_org", return_value="org"),
             patch(
-                "gerrit_clone.cli_hooks.discover_projects",
+                "source_clone.cli_hooks.discover_projects",
                 return_value=([Project("wanted", ProjectState.ACTIVE)], {}),
             ),
             patch(
-                "gerrit_clone.clone_orchestrator.CloneManager.clone_projects",
+                "source_clone.clone_orchestrator.CloneManager.clone_projects",
                 return_value=[],
             ),
         ):

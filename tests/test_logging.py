@@ -11,7 +11,7 @@ from io import StringIO
 
 from rich.console import Console
 
-from gerrit_clone.logging import (
+from source_clone.logging import (
     GerritRichHandler,
     get_logger,
     setup_logging,
@@ -84,8 +84,8 @@ class TestGetLogger:
 
     def test_get_logger_with_package_name(self) -> None:
         """Test get_logger with package-style names."""
-        logger = get_logger("gerrit_clone.test")
-        assert logger.name == "gerrit_clone.test"
+        logger = get_logger("source_clone.test")
+        assert logger.name == "source_clone.test"
 
 
 class TestSetupLogging:
@@ -131,9 +131,9 @@ class TestLoggingIntegration:
     def test_logger_hierarchy(self) -> None:
         """Test that logger hierarchy works correctly."""
         # Get loggers at different levels
-        parent_logger = get_logger("gerrit_clone")
-        child_logger = get_logger("gerrit_clone.api")
-        grandchild_logger = get_logger("gerrit_clone.api.client")
+        parent_logger = get_logger("source_clone")
+        child_logger = get_logger("source_clone.api")
+        grandchild_logger = get_logger("source_clone.api.client")
 
         # All should be different instances
         assert parent_logger is not child_logger

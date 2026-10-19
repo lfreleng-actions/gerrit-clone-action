@@ -18,9 +18,9 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from gerrit_clone.cli import app
-from gerrit_clone.config import ConfigManager, ConfigurationError, load_config
-from gerrit_clone.models import Config, DiscoveryMethod, SourceType
+from source_clone.cli import app
+from source_clone.config import ConfigManager, ConfigurationError, load_config
+from source_clone.models import Config, DiscoveryMethod, SourceType
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -809,7 +809,7 @@ class TestCliOutputPathSpellings:
                 success_rate=100.0,
             )
 
-        with patch("gerrit_clone.cli.clone_repositories", side_effect=fake_clone):
+        with patch("source_clone.cli.clone_repositories", side_effect=fake_clone):
             result = CliRunner().invoke(
                 app,
                 [
@@ -922,7 +922,7 @@ def _clone(
             success_rate=100.0,
         )
 
-    with patch("gerrit_clone.cli.clone_repositories", side_effect=fake_clone):
+    with patch("source_clone.cli.clone_repositories", side_effect=fake_clone):
         result = CliRunner().invoke(app, args)
 
     assert len(captured) == 1, result.output

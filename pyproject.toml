@@ -81,9 +81,9 @@ Issues = "https://github.com/lfreleng-actions/source-clone-action/issues"
 Changelog = "https://github.com/lfreleng-actions/source-clone-action/releases"
 
 [project.scripts]
-source-clone = "gerrit_clone.cli:app"
+source-clone = "source_clone.cli:app"
 # Alias kept so existing scripts and workflows keep working.
-gerrit-clone = "gerrit_clone.cli:app"
+gerrit-clone = "source_clone.cli:app"
 
 # Hatchling build configuration
 [tool.hatch.version]
@@ -94,10 +94,10 @@ source = "vcs"
 require-runtime-dependencies = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/gerrit_clone"]
+packages = ["src/source_clone"]
 # Include type information marker
 include = [
-    "src/gerrit_clone/py.typed",
+    "src/source_clone/py.typed",
 ]
 # Exclude test files from wheel
 exclude = [
@@ -145,8 +145,8 @@ dependencies = [
 
 [tool.hatch.envs.default.scripts]
 test = "pytest {args:tests}"
-test-cov = "pytest --cov=gerrit_clone --cov-report=term-missing {args:tests}"
-test-cov-html = "pytest --cov=gerrit_clone --cov-report=html {args:tests}"
+test-cov = "pytest --cov=source_clone --cov-report=term-missing {args:tests}"
+test-cov-html = "pytest --cov=source_clone --cov-report=html {args:tests}"
 lint = "pre-commit run --all-files"
 format = "ruff format src tests"
 check = "mypy src tests"
@@ -223,7 +223,7 @@ ignore = [
 #   - tests/ stack @patch decorators, and unittest.mock injects each
 #     mock positionally, so a keyword-only signature is impossible
 #     rather than merely inconvenient.
-#   - src/gerrit_clone/refresh_worker.py declares RefreshWorker.__init__
+#   - src/source_clone/refresh_worker.py declares RefreshWorker.__init__
 #     with eleven defaulted parameters.  The closely related PLR0913
 #     (too many arguments) is already ignored directly above for exactly
 #     that constructor.  PLR0917 counts only those arguments that may be
@@ -235,13 +235,13 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*" = ["ARG", "S101", "PLR2004"]
-"src/gerrit_clone/cli.py" = ["B008"]  # Typer requires function calls in defaults
-"src/gerrit_clone/progress.py" = ["F401", "PLR0911", "SIM102"]  # Rich imports and complex progress logic
-"src/gerrit_clone/pathing.py" = ["PLR0911", "TCH003"]  # Complex path checking logic and Path import needed at runtime
-"src/gerrit_clone/retry.py" = ["TCH003", "TCH001", "SIM103"]  # Type checking imports and condition simplification
-"src/gerrit_clone/worker.py" = ["PLR0911", "SIM103", "B904"]  # Complex error handling logic
-"src/gerrit_clone/refresh_worker.py" = ["PLR0911"]  # Complex refresh logic with many early returns
-"src/gerrit_clone/output_utils.py" = ["TCH001", "TCH002", "TCH003"]  # logging and Rich imports needed at runtime
+"src/source_clone/cli.py" = ["B008"]  # Typer requires function calls in defaults
+"src/source_clone/progress.py" = ["F401", "PLR0911", "SIM102"]  # Rich imports and complex progress logic
+"src/source_clone/pathing.py" = ["PLR0911", "TCH003"]  # Complex path checking logic and Path import needed at runtime
+"src/source_clone/retry.py" = ["TCH003", "TCH001", "SIM103"]  # Type checking imports and condition simplification
+"src/source_clone/worker.py" = ["PLR0911", "SIM103", "B904"]  # Complex error handling logic
+"src/source_clone/refresh_worker.py" = ["PLR0911"]  # Complex refresh logic with many early returns
+"src/source_clone/output_utils.py" = ["TCH001", "TCH002", "TCH003"]  # logging and Rich imports needed at runtime
 
 [tool.ruff.format]
 quote-style = "double"
@@ -282,7 +282,7 @@ minversion = "8.0"
 addopts = [
     "--strict-markers",
     "--strict-config",
-    "--cov=gerrit_clone",
+    "--cov=source_clone",
     "--cov-report=term-missing",
     "--cov-report=html",
     "--cov-report=xml",
@@ -307,7 +307,7 @@ asyncio_default_fixture_loop_scope = "function"
 # satisfies python-test-action's data_file configuration check.
 # COVERAGE_FILE (env) still takes precedence when set.
 data_file = "${TEMP-/tmp}/.coverage.source-clone-action"
-source = ["gerrit_clone"]
+source = ["source_clone"]
 branch = true
 omit = [
     "*/tests/*",
@@ -397,7 +397,7 @@ build-constraint-dependencies = [
 [dependency-groups]
 dev = [
     # Supplies the ``git-filter-repo`` executable that
-    # gerrit_clone.content_filter shells out to; declared here so both
+    # source_clone.content_filter shells out to; declared here so both
     # the test suite and CI resolve it from uv.lock (hash-pinned)
     # rather than an unpinned PyPI fetch.
     "git-filter-repo>=2.47.0",

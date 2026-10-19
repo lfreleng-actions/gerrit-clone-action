@@ -7,10 +7,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gerrit_clone.error_codes import DiscoveryError
-from gerrit_clone.gerrit_api import GerritAPIError, GerritConnectionError
-from gerrit_clone.models import Config, DiscoveryMethod, Project, ProjectState
-from gerrit_clone.unified_discovery import UnifiedDiscovery
+from source_clone.error_codes import DiscoveryError
+from source_clone.gerrit_api import GerritAPIError, GerritConnectionError
+from source_clone.models import Config, DiscoveryMethod, Project, ProjectState
+from source_clone.unified_discovery import UnifiedDiscovery
 
 
 class TestUnifiedDiscoveryErrorHandling:
@@ -48,7 +48,7 @@ class TestUnifiedDiscoveryErrorHandling:
         mock_config.discovery_method = DiscoveryMethod.HTTP
 
         with patch(
-            "gerrit_clone.unified_discovery.fetch_gerrit_projects"
+            "source_clone.unified_discovery.fetch_gerrit_projects"
         ) as mock_fetch:
             # Simulate a 404 error from Gerrit API
             mock_fetch.side_effect = GerritAPIError(
@@ -68,7 +68,7 @@ class TestUnifiedDiscoveryErrorHandling:
         mock_config.discovery_method = DiscoveryMethod.HTTP
 
         with patch(
-            "gerrit_clone.unified_discovery.fetch_gerrit_projects"
+            "source_clone.unified_discovery.fetch_gerrit_projects"
         ) as mock_fetch:
             # Simulate a connection error
             mock_fetch.side_effect = GerritConnectionError("Connection failed")
@@ -86,7 +86,7 @@ class TestUnifiedDiscoveryErrorHandling:
         mock_config.discovery_method = DiscoveryMethod.SSH
 
         with patch(
-            "gerrit_clone.unified_discovery.fetch_gerrit_projects_ssh"
+            "source_clone.unified_discovery.fetch_gerrit_projects_ssh"
         ) as mock_fetch:
             # Simulate an SSH error
             mock_fetch.side_effect = Exception("SSH connection failed")
@@ -104,7 +104,7 @@ class TestUnifiedDiscoveryErrorHandling:
         mock_config.discovery_method = DiscoveryMethod.HTTP
 
         with patch(
-            "gerrit_clone.unified_discovery.fetch_gerrit_projects"
+            "source_clone.unified_discovery.fetch_gerrit_projects"
         ) as mock_fetch:
             mock_fetch.return_value = (
                 sample_projects,
@@ -124,7 +124,7 @@ class TestUnifiedDiscoveryErrorHandling:
         mock_config.discovery_method = DiscoveryMethod.SSH
 
         with patch(
-            "gerrit_clone.unified_discovery.fetch_gerrit_projects_ssh"
+            "source_clone.unified_discovery.fetch_gerrit_projects_ssh"
         ) as mock_fetch:
             mock_fetch.return_value = (
                 sample_projects,
@@ -144,9 +144,9 @@ class TestUnifiedDiscoveryErrorHandling:
         mock_config.discovery_method = DiscoveryMethod.BOTH
 
         with (
-            patch("gerrit_clone.unified_discovery.fetch_gerrit_projects") as mock_http,
+            patch("source_clone.unified_discovery.fetch_gerrit_projects") as mock_http,
             patch(
-                "gerrit_clone.unified_discovery.fetch_gerrit_projects_ssh"
+                "source_clone.unified_discovery.fetch_gerrit_projects_ssh"
             ) as mock_ssh,
         ):
             # HTTP fails
@@ -172,9 +172,9 @@ class TestUnifiedDiscoveryErrorHandling:
         mock_config.discovery_method = DiscoveryMethod.BOTH
 
         with (
-            patch("gerrit_clone.unified_discovery.fetch_gerrit_projects") as mock_http,
+            patch("source_clone.unified_discovery.fetch_gerrit_projects") as mock_http,
             patch(
-                "gerrit_clone.unified_discovery.fetch_gerrit_projects_ssh"
+                "source_clone.unified_discovery.fetch_gerrit_projects_ssh"
             ) as mock_ssh,
         ):
             # HTTP succeeds
@@ -200,9 +200,9 @@ class TestUnifiedDiscoveryErrorHandling:
         mock_config.discovery_method = DiscoveryMethod.BOTH
 
         with (
-            patch("gerrit_clone.unified_discovery.fetch_gerrit_projects") as mock_http,
+            patch("source_clone.unified_discovery.fetch_gerrit_projects") as mock_http,
             patch(
-                "gerrit_clone.unified_discovery.fetch_gerrit_projects_ssh"
+                "source_clone.unified_discovery.fetch_gerrit_projects_ssh"
             ) as mock_ssh,
         ):
             # Both fail
@@ -223,9 +223,9 @@ class TestUnifiedDiscoveryErrorHandling:
         mock_config.discovery_method = DiscoveryMethod.BOTH
 
         with (
-            patch("gerrit_clone.unified_discovery.fetch_gerrit_projects") as mock_http,
+            patch("source_clone.unified_discovery.fetch_gerrit_projects") as mock_http,
             patch(
-                "gerrit_clone.unified_discovery.fetch_gerrit_projects_ssh"
+                "source_clone.unified_discovery.fetch_gerrit_projects_ssh"
             ) as mock_ssh,
         ):
             # Both succeed
@@ -250,7 +250,7 @@ class TestUnifiedDiscoveryErrorHandling:
         mock_config.discovery_method = DiscoveryMethod.HTTP
 
         with patch(
-            "gerrit_clone.unified_discovery.fetch_gerrit_projects"
+            "source_clone.unified_discovery.fetch_gerrit_projects"
         ) as mock_fetch:
             original_error = ValueError("Original error")
             mock_fetch.side_effect = original_error
@@ -279,7 +279,7 @@ class TestUnifiedDiscoveryIntegration:
         config.skip_archived = True
 
         with patch(
-            "gerrit_clone.unified_discovery.fetch_gerrit_projects"
+            "source_clone.unified_discovery.fetch_gerrit_projects"
         ) as mock_fetch:
             mock_fetch.side_effect = GerritAPIError("Server unavailable")
 

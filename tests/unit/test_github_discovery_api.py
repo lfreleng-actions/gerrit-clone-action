@@ -18,9 +18,9 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from gerrit_clone.github_discovery import discover_github_repositories
-from gerrit_clone.github_models import GitHubAuthError, GitHubNotFoundError
-from gerrit_clone.models import Config, SourceType
+from source_clone.github_discovery import discover_github_repositories
+from source_clone.github_models import GitHubAuthError, GitHubNotFoundError
+from source_clone.models import Config, SourceType
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -154,7 +154,7 @@ class FakeGitHub:
 @pytest.fixture
 def no_sleep() -> Iterator[Mock]:
     """Make GraphQL retry backoff instant, recording each pause."""
-    with patch("gerrit_clone.github_graphql_retry.time_mod.sleep") as sleep:
+    with patch("source_clone.github_graphql_retry.time_mod.sleep") as sleep:
         yield sleep
 
 

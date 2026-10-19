@@ -10,8 +10,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from gerrit_clone.models import RetryPolicy
-from gerrit_clone.retry import (
+from source_clone.models import RetryPolicy
+from source_clone.retry import (
     FatalError,
     RetryableError,
     RetryManager,
@@ -71,7 +71,7 @@ class TestCalculateDelay:
         delay = calculate_delay(5, policy)  # Would be 160.0 without cap
         assert delay == 15.0
 
-    @patch("gerrit_clone.retry.random.uniform")
+    @patch("source_clone.retry.random.uniform")
     def test_calculate_delay_with_jitter(self, mock_uniform):
         """Test jitter application."""
         mock_uniform.return_value = 0.5  # 50% jitter
@@ -116,7 +116,7 @@ class TestExecuteWithRetry:
         )
         policy = RetryPolicy(max_attempts=3, base_delay=0.01)  # Fast for testing
 
-        with patch("gerrit_clone.retry.time.sleep") as mock_sleep:
+        with patch("source_clone.retry.time.sleep") as mock_sleep:
             result = execute_with_retry(mock_func, policy)
 
         assert result == "success"
@@ -129,7 +129,7 @@ class TestExecuteWithRetry:
         policy = RetryPolicy(max_attempts=2, base_delay=0.01)
 
         with (
-            patch("gerrit_clone.retry.time.sleep"),
+            patch("source_clone.retry.time.sleep"),
             pytest.raises(RetryableError, match="Always fail"),
         ):
             execute_with_retry(mock_func, policy)
@@ -142,7 +142,7 @@ class TestExecuteWithRetry:
         policy = RetryPolicy(max_attempts=2, base_delay=0.01)
 
         with (
-            patch("gerrit_clone.retry.time.sleep"),
+            patch("source_clone.retry.time.sleep"),
             pytest.raises(Exception, match="permission denied"),
         ):
             execute_with_retry(mock_func, policy)
@@ -170,7 +170,7 @@ class TestExecuteWithRetry:
             "arg1", "arg2", kwarg1="value1", kwarg2="value2"
         )
 
-    @patch("gerrit_clone.retry.time.sleep")
+    @patch("source_clone.retry.time.sleep")
     def test_execute_with_retry_delay_calculation(self, mock_sleep: Mock) -> None:
         """Test that delays are calculated correctly."""
         mock_func = Mock(
@@ -199,7 +199,7 @@ class TestExecuteWithRetry:
                 raise RetryableError("Not yet")
             return "success"
 
-        with patch("gerrit_clone.retry.time.sleep"):
+        with patch("source_clone.retry.time.sleep"):
             result = execute_with_retry(failing_function, policy, "operation")
 
         assert result == "success"
@@ -211,8 +211,8 @@ class TestExecuteWithRetry:
         policy = RetryPolicy(max_attempts=2, base_delay=0.01)
 
         with (
-            patch("gerrit_clone.retry.time.sleep"),
-            patch("gerrit_clone.retry.logger.warning") as mock_log,
+            patch("source_clone.retry.time.sleep"),
+            patch("source_clone.retry.logger.warning") as mock_log,
         ):
             execute_with_retry(mock_func, policy, "operation")
 
@@ -314,7 +314,7 @@ class TestRetrySyncDecorator:
                 raise RetryableError(f"Fail {call_count}")
             return "success"
 
-        with patch("gerrit_clone.retry.time.sleep"):
+        with patch("source_clone.retry.time.sleep"):
             result = flaky_function()
 
         assert result == "success"
@@ -329,7 +329,7 @@ class TestRetrySyncDecorator:
             raise RetryableError("Always fail")
 
         with (
-            patch("gerrit_clone.retry.time.sleep"),
+            patch("source_clone.retry.time.sleep"),
             pytest.raises(RetryableError, match="Always fail"),
         ):
             always_fails()
@@ -355,7 +355,7 @@ class TestRetryManager:
         result = None
 
         with (
-            patch("gerrit_clone.retry.time.sleep"),
+            patch("source_clone.retry.time.sleep"),
             RetryManager(policy, "test_operation") as retry,
         ):
             while retry.should_retry():
@@ -377,7 +377,7 @@ class TestRetryManager:
         policy = RetryPolicy(max_attempts=2, base_delay=0.01)
 
         with (
-            patch("gerrit_clone.retry.time.sleep"),
+            patch("source_clone.retry.time.sleep"),
             pytest.raises(RetryableError),
             RetryManager(policy) as retry,
         ):
@@ -487,7 +487,7 @@ class TestRetryIntegration:
                 raise CustomRetryableError("Custom failure")
             return "success"
 
-        with patch("gerrit_clone.retry.time.sleep"):
+        with patch("source_clone.retry.time.sleep"):
             result = execute_with_retry(func_with_custom_error, policy, "test")
 
         assert result == "success"

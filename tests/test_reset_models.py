@@ -5,7 +5,7 @@
 
 from pathlib import Path
 
-from gerrit_clone.reset_models import (
+from source_clone.reset_models import (
     GitHubRepoStatus,
     LocalRepoStatus,
     ResetResult,

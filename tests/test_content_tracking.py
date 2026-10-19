@@ -24,26 +24,26 @@ from unittest.mock import patch
 
 import pytest
 
-from gerrit_clone import content_filter
-from gerrit_clone.concurrent_utils import interruptible_executor
-from gerrit_clone.content_filter import apply_content_filters
-from gerrit_clone.content_git import run_content_git
-from gerrit_clone.content_redaction import _run_replace_text
-from gerrit_clone.content_removal import (
+from source_clone import content_filter
+from source_clone.concurrent_utils import interruptible_executor
+from source_clone.content_filter import apply_content_filters
+from source_clone.content_git import run_content_git
+from source_clone.content_redaction import _run_replace_text
+from source_clone.content_removal import (
     _check_git_filter_repo,
     _list_tree_files,
     _remove_files_filter_repo,
 )
-from gerrit_clone.content_scan import is_shallow_repository, scan_repo_for_secrets
-from gerrit_clone.content_worktree import (
+from source_clone.content_scan import is_shallow_repository, scan_repo_for_secrets
+from source_clone.content_worktree import (
     _add_worktree,
     _cleanup_worktree,
     _commit_removal,
     _git_rm_files,
     _list_branch_heads,
 )
-from gerrit_clone.subprocess_streaming import popen_tracked
-from gerrit_clone.subprocess_tracking import (
+from source_clone.subprocess_streaming import popen_tracked
+from source_clone.subprocess_tracking import (
     ProcessAbandonedError,
     _thread_state,
     _tracked,
@@ -190,7 +190,7 @@ def _scan_promptly(
 
     thread = threading.Thread(target=scan, daemon=True)
     try:
-        with patch("gerrit_clone.content_scan._build_scan_command", return_value=cmd):
+        with patch("source_clone.content_scan._build_scan_command", return_value=cmd):
             thread.start()
             thread.join(PROMPT_SECONDS)
         assert not thread.is_alive(), "the scan waited on a helper holding its pipes"
@@ -268,7 +268,7 @@ def test_a_child_the_abandon_stopped_is_not_a_git_failure(
         return subprocess.CompletedProcess(cmd, -signal.SIGTERM, "", "")
 
     with (
-        patch("gerrit_clone.content_git.run_tracked", side_effect=stopped),
+        patch("source_clone.content_git.run_tracked", side_effect=stopped),
         pytest.raises(ProcessAbandonedError),
     ):
         helper(tmp_path)
@@ -351,7 +351,7 @@ def test_abandoning_the_batch_stops_a_running_scan(tmp_path: Path) -> None:
     try:
         with (
             patch(
-                "gerrit_clone.content_scan._build_scan_command", return_value=slow_log
+                "source_clone.content_scan._build_scan_command", return_value=slow_log
             ),
             interruptible_executor(max_workers=1) as executor,
         ):
@@ -403,7 +403,7 @@ def test_a_scan_that_raises_stops_a_helper_holding_its_pipes(
         proc.stdout.readline()
         raise KeyError("stop reading")
 
-    with patch("gerrit_clone.content_scan._consume_scan_stream", broken):
+    with patch("source_clone.content_scan._consume_scan_stream", broken):
         outcome = _scan_promptly(tmp_path, "both", "stall")
 
     assert isinstance(outcome.get("error"), KeyError)
@@ -428,10 +428,10 @@ def test_a_scan_gives_up_on_a_git_that_outlives_sigkill(tmp_path: Path) -> None:
     thread = threading.Thread(target=scan, daemon=True)
     try:
         with (
-            patch("gerrit_clone.content_scan._build_scan_command", return_value=cmd),
-            patch("gerrit_clone.process_groups._send"),
-            patch("gerrit_clone.process_groups._TERMINATE_GRACE_SECONDS", 0.2),
-            patch("gerrit_clone.process_groups._KILL_CONFIRM_SECONDS", 0.2),
+            patch("source_clone.content_scan._build_scan_command", return_value=cmd),
+            patch("source_clone.process_groups._send"),
+            patch("source_clone.process_groups._TERMINATE_GRACE_SECONDS", 0.2),
+            patch("source_clone.process_groups._KILL_CONFIRM_SECONDS", 0.2),
         ):
             thread.start()
             thread.join(PROMPT_SECONDS)

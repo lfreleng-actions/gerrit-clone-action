@@ -7,13 +7,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from gerrit_clone.clone_utils import (
+from source_clone.clone_utils import (
     analyze_git_clone_error,
     build_base_clone_command,
     is_retryable_git_error,
     should_cleanup_on_clone_error,
 )
-from gerrit_clone.models import Config
+from source_clone.models import Config
 
 
 class TestBuildBaseCloneCommand:

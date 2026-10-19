@@ -18,15 +18,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from gerrit_clone.cli import app
-from gerrit_clone.content_intent import INTENT_DIR
-from gerrit_clone.error_codes import ExitCode
-from gerrit_clone.github_transport import resolve_github_token
+from source_clone.cli import app
+from source_clone.content_intent import INTENT_DIR
+from source_clone.error_codes import ExitCode
+from source_clone.github_transport import resolve_github_token
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from gerrit_clone.models import Config
+    from source_clone.models import Config
 
 GITHUB_HOST = "github.com/example-org"
 BANNER = "Clone Configuration"
@@ -69,7 +69,7 @@ def _clone(
         "--disable-log-file",
         *extra,
     ]
-    with patch("gerrit_clone.cli.clone_repositories", side_effect=_succeed) as stub:
+    with patch("source_clone.cli.clone_repositories", side_effect=_succeed) as stub:
         result = CliRunner().invoke(app, args)
     return result.exit_code, result.output, stub
 
@@ -145,7 +145,7 @@ class TestLoggedTokenSource:
     @staticmethod
     def _logged_source(tmp_path: Path, *extra: str) -> tuple[str, str]:
         """Run clone; return the logged token source and every log call."""
-        with patch("gerrit_clone.cli_clone_setup.logger") as logger:
+        with patch("source_clone.cli_clone_setup.logger") as logger:
             exit_code, output, _stub = _clone(tmp_path, *extra)
         assert exit_code == 0, output
         calls = [c for c in logger.debug.call_args_list if "token from" in c.args[0]]

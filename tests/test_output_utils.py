@@ -12,7 +12,7 @@ from unittest.mock import patch
 from rich.console import Console
 from rich.table import Table
 
-from gerrit_clone.output_utils import format_rate_limit_table, log_and_print
+from source_clone.output_utils import format_rate_limit_table, log_and_print
 
 
 class TestLogAndPrint:

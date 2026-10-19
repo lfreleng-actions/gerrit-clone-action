@@ -20,20 +20,20 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
-from gerrit_clone.cli import app
-from gerrit_clone.cli_mirror_setup import start_logging as start_mirror_logging
-from gerrit_clone.cli_reset_run import _start_logging as start_reset_logging
-from gerrit_clone.cli_session import CliSession
-from gerrit_clone.error_codes import DiscoveryError
-from gerrit_clone.file_logging import file_logging_active, init_logging
+from source_clone.cli import app
+from source_clone.cli_mirror_setup import start_logging as start_mirror_logging
+from source_clone.cli_reset_run import _start_logging as start_reset_logging
+from source_clone.cli_session import CliSession
+from source_clone.error_codes import DiscoveryError
+from source_clone.file_logging import file_logging_active, init_logging
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
-    from gerrit_clone.cli_mirror_models import MirrorRequest
-    from gerrit_clone.cli_reset_run import ResetRequest
-    from gerrit_clone.models import Config
+    from source_clone.cli_mirror_models import MirrorRequest
+    from source_clone.cli_reset_run import ResetRequest
+    from source_clone.models import Config
 
 HOST = "gerrit.example.org"
 LOG_NAME = f"{HOST}.log"
@@ -45,7 +45,7 @@ SUMMARY_HEADING = "ERROR AND WARNING SUMMARY"
 def _close_file_handlers() -> Iterator[None]:
     """Release any log file a command left open on the app logger."""
     yield
-    app_logger = logging.getLogger("gerrit_clone")
+    app_logger = logging.getLogger("source_clone")
     for handler in app_logger.handlers[:]:
         if isinstance(handler, logging.FileHandler):
             handler.close()
@@ -54,7 +54,7 @@ def _close_file_handlers() -> Iterator[None]:
 
 def _fail_discovery(_config: Config) -> MagicMock:
     """Fail the way an early discovery error does, after logging it."""
-    logging.getLogger("gerrit_clone.discovery").error("discovery failed")
+    logging.getLogger("source_clone.discovery").error("discovery failed")
     raise DiscoveryError("Discovery failed")
 
 
@@ -78,7 +78,7 @@ def _clone(output_path: Path, *extra: str, fail: bool) -> tuple[int, str]:
     """Run ``clone`` with cloning stubbed; return exit code and output."""
     args = ["clone", "--host", HOST, "--output-path", str(output_path), *extra]
     stub = _fail_discovery if fail else _succeed
-    with patch("gerrit_clone.cli.clone_repositories", side_effect=stub):
+    with patch("source_clone.cli.clone_repositories", side_effect=stub):
         result = CliRunner().invoke(app, args)
     return result.exit_code, result.output
 

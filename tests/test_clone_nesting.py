@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from gerrit_clone.clone_nesting import (
+from source_clone.clone_nesting import (
     apply_late_nested_protection,
     apply_nested_protection,
     exclude_pattern,

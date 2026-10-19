@@ -19,8 +19,8 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
-from gerrit_clone import cli_config, cli_options_clone
-from gerrit_clone.cli import app
+from source_clone import cli_config, cli_options_clone
+from source_clone.cli import app
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -33,16 +33,16 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # Patch target of each command's run function, and the base arguments
 # that satisfy its other required options.
 COMMANDS: dict[str, tuple[tuple[str, ...], list[str]]] = {
-    "clone": (("gerrit_clone.cli_clone.run_clone",), ["--host", HOST]),
-    "mirror": (("gerrit_clone.cli_mirror.run_mirror",), ["--server", HOST]),
+    "clone": (("source_clone.cli_clone.run_clone",), ["--host", HOST]),
+    "mirror": (("source_clone.cli_mirror.run_mirror",), ["--server", HOST]),
     "refresh": (
         (
-            "gerrit_clone.cli_refresh.prepare_refresh",
-            "gerrit_clone.cli_refresh.run_refresh",
+            "source_clone.cli_refresh.prepare_refresh",
+            "source_clone.cli_refresh.run_refresh",
         ),
         [],
     ),
-    "reset": (("gerrit_clone.cli_reset.run_reset",), ["--org", ORG]),
+    "reset": (("source_clone.cli_reset.run_reset",), ["--org", ORG]),
 }
 
 

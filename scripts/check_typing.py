@@ -14,9 +14,9 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 try:
     # Import our modules to verify typing
-    from gerrit_clone.logging import get_logger
-    from gerrit_clone.models import Config, Project, ProjectState, RetryPolicy
-    from gerrit_clone.worker import CloneWorker
+    from source_clone.logging import get_logger
+    from source_clone.models import Config, Project, ProjectState, RetryPolicy
+    from source_clone.worker import CloneWorker
 
     print("✅ All imports successful")
 
