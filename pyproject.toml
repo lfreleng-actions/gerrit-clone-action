@@ -11,9 +11,9 @@ requires = ["hatchling>=1.27.0,<2.0.0", "hatch-vcs>=0.5.0,<1.0.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "gerrit-clone"
+name = "source-clone"
 dynamic = ["version"]
-description = "A multi-threaded CLI tool for bulk cloning repositories from Gerrit servers"
+description = "A multi-threaded CLI tool for bulk cloning, mirroring and refreshing repositories from Gerrit servers and GitHub organisations"
 readme = "README.md"
 license = "Apache-2.0"
 authors = [
@@ -24,6 +24,7 @@ maintainers = [
 ]
 keywords = [
     "gerrit",
+    "github",
     "git",
     "clone",
     "bulk",
@@ -31,6 +32,7 @@ keywords = [
     "ci-cd",
     "ssh",
     "multi-threaded",
+    "mirror",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -72,13 +74,15 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/lfreleng-actions/gerrit-clone-action"
-Documentation = "https://github.com/lfreleng-actions/gerrit-clone-action#readme"
-Repository = "https://github.com/lfreleng-actions/gerrit-clone-action.git"
-Issues = "https://github.com/lfreleng-actions/gerrit-clone-action/issues"
-Changelog = "https://github.com/lfreleng-actions/gerrit-clone-action/releases"
+Homepage = "https://github.com/lfreleng-actions/source-clone-action"
+Documentation = "https://github.com/lfreleng-actions/source-clone-action#readme"
+Repository = "https://github.com/lfreleng-actions/source-clone-action.git"
+Issues = "https://github.com/lfreleng-actions/source-clone-action/issues"
+Changelog = "https://github.com/lfreleng-actions/source-clone-action/releases"
 
 [project.scripts]
+source-clone = "gerrit_clone.cli:app"
+# Alias kept so existing scripts and workflows keep working.
 gerrit-clone = "gerrit_clone.cli:app"
 
 # Hatchling build configuration
@@ -302,7 +306,7 @@ asyncio_default_fixture_loop_scope = "function"
 # unset and the /tmp fallback applies. An explicit value also
 # satisfies python-test-action's data_file configuration check.
 # COVERAGE_FILE (env) still takes precedence when set.
-data_file = "${TEMP-/tmp}/.coverage.gerrit-clone-action"
+data_file = "${TEMP-/tmp}/.coverage.source-clone-action"
 source = ["gerrit_clone"]
 branch = true
 omit = [

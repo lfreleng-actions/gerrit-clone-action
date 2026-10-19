@@ -132,7 +132,7 @@ class BranchRepairMixin(RepositoryStateMixin):
         """Determine the default branch using only local refs (no network).
 
         Reads the locally cached ``refs/remotes/origin/HEAD`` symbolic ref, which
-        gerrit-clone sets at clone time. Returns None if it is not available so
+        source-clone sets at clone time. Returns None if it is not available so
         callers can decide whether a networked lookup is warranted.
 
         Args:

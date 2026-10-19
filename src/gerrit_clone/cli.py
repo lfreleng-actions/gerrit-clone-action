@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2025 Matthew Watkins <mwatkins@linuxfoundation.org>
 
-"""Typer-based CLI for gerrit-clone tool.
+"""Typer-based CLI for source-clone tool.
 
 This module is the public entry point for the command line interface.  It
 assembles the Typer application by importing every command module and

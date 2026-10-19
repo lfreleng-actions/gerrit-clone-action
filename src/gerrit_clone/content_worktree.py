@@ -27,6 +27,9 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 #: Commit message used for the removal commit created on each branch.
+#: It and the commit author keep the old tool name deliberately, for
+#: compatibility: :mod:`gerrit_clone.content_legacy` recognises the
+#: commits earlier releases wrote by this text.
 _REMOVAL_COMMIT_MESSAGE = (
     "Remove filtered files for platform sync\n\n"
     "Files removed by gerrit-clone content filter "
@@ -163,6 +166,7 @@ def _commit_removal(
             "-C",
             worktree_dir,
             "-c",
+            # Old tool name kept deliberately: see _REMOVAL_COMMIT_MESSAGE.
             "user.name=gerrit-clone",
             "-c",
             "user.email=gerrit-clone@noreply",
@@ -220,6 +224,8 @@ def _remove_files_on_branch(
     Raises:
         RuntimeError: If the worktree, removal or commit step fails.
     """
+    # The prefix keeps the old tool name deliberately, so a worktree an
+    # interrupted run leaves behind has one name whichever release made it.
     worktree_dir = tempfile.mkdtemp(prefix=f"gerrit-clone-filter-{repo_path.name}-")
     try:
         _add_worktree(repo_path, worktree_dir, branch, timeout)

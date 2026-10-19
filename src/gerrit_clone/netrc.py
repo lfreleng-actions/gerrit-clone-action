@@ -214,8 +214,8 @@ def resolve_gerrit_credentials(
         4. Fallback environment variables (GERRIT_USERNAME/GERRIT_PASSWORD)
 
     This function is used by:
-        - gerrit-clone clone command
-        - gerrit-clone mirror command
+        - source-clone clone command
+        - source-clone mirror command
         - GerritAPIClient for HTTP Basic Auth
 
     Args:

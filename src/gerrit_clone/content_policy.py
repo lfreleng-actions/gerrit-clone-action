@@ -51,6 +51,8 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+#: These keys keep the old tool name deliberately, for compatibility
+#: with the repositories earlier ``gerrit-clone`` releases filtered.
 _REMOVED = "gerrit-clone.filteredRemoves"
 _TOKEN = "gerrit-clone.filteredTokenSha256"
 _REDACTED = "gerrit-clone.filteredRedactsSecrets"
@@ -210,6 +212,7 @@ def _stored(repo_path: Path) -> tuple[FilterPolicy, bool]:
         PolicyReadError: If the config could not be read.  Only git's
             exit status 1 -- no key set -- reads as no record.
     """
+    # The old tool name is kept deliberately: see the keys above.
     result = git_config(repo_path, "--null", "--get-regexp", r"^gerrit-clone\.")
     if result is None or result.returncode not in (0, 1):
         detail = result.stderr.strip() if result is not None else "git failed"

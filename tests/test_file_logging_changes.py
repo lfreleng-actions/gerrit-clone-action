@@ -52,7 +52,7 @@ class TestDynamicLogFileNaming:
     def test_get_default_log_path_no_host(self) -> None:
         """Test default log path without host parameter."""
         log_path = get_default_log_path()
-        assert log_path.name == "gerrit-clone.log"
+        assert log_path.name == "source-clone.log"
         assert log_path.parent == Path.cwd()
 
     def test_get_default_log_path_with_host(self) -> None:
@@ -99,7 +99,7 @@ class TestDynamicLogFileNaming:
 
         for host in test_cases:
             log_path = get_default_log_path(host)
-            assert log_path.name == "gerrit-clone.log"
+            assert log_path.name == "source-clone.log"
 
     def test_init_logging_with_host_parameter(self) -> None:
         """Test init_logging creates log file with dynamic name."""
@@ -141,7 +141,7 @@ class TestDynamicLogFileNaming:
                 )
 
                 # Check that default log file was created
-                expected_log_path = Path(tmpdir) / "gerrit-clone.log"
+                expected_log_path = Path(tmpdir) / "source-clone.log"
                 assert expected_log_path.exists()
 
             finally:
@@ -184,7 +184,7 @@ class TestDynamicLogFileNaming:
             ("192.168.1.1:8080", "192.168.1.1.log"),
             (
                 "::1:8080",
-                "gerrit-clone.log",
+                "source-clone.log",
             ),  # IPv6 - first part before colon is empty, falls back to default
             ("host-with-dashes.example.org", "host-with-dashes.example.org.log"),
             ("host_with_underscores", "host_with_underscores.log"),
@@ -258,7 +258,7 @@ class TestLogHeaderCommand:
     def test_header_records_the_invoked_subcommand(self) -> None:
         for command in ("clone", "refresh", "mirror", "reset"):
             header = self._header_for(command)
-            assert f"Command: gerrit-clone {command} --host" in header
+            assert f"Command: source-clone {command} --host" in header
 
     def test_header_defaults_to_clone(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -269,4 +269,4 @@ class TestLogHeaderCommand:
                 quiet=True,
                 cli_args={"host": "gerrit.example.org"},
             )
-            assert "Command: gerrit-clone clone --host" in log_path.read_text()
+            assert "Command: source-clone clone --host" in log_path.read_text()

@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2025 Matthew Watkins <mwatkins@linuxfoundation.org>
 
-"""Gerrit Clone - A multi-threaded CLI tool for bulk cloning Gerrit repositories."""
+"""Source Clone - bulk clone, mirror and refresh Gerrit and GitHub repositories."""
 
 try:
     from importlib.metadata import version
 
-    __version__ = version("gerrit-clone")
+    __version__ = version("source-clone")
 except ImportError:
     # Fallback for development/editable installs
     __version__ = "0.0.0+dev"

@@ -91,7 +91,7 @@ def show_startup_banner(console: Console, config: Any) -> None:
     if config.source_type == SourceType.GITHUB:
         title = "[bold]GitHub Clone Configuration[/bold]"
     else:
-        title = "[bold]Gerrit Clone Configuration[/bold]"
+        title = "[bold]Source Clone Configuration[/bold]"
 
     panel = Panel(
         summary_text,

@@ -308,7 +308,7 @@ class RepositoryStateMixin(GitEnvironmentMixin):
                     "push",
                     "--include-untracked",
                     "-m",
-                    "gerrit-clone refresh auto-stash",
+                    "source-clone refresh auto-stash",
                 ],
                 repo_path,
                 timeout=30,

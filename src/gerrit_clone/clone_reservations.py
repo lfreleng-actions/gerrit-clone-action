@@ -43,7 +43,7 @@ _Owner = tuple[int, str]
 #: destination, and it is the only one that can remove it.
 #:
 #: The registry is per-process, which is the scope this tool works in:
-#: a workspace shared with another ``gerrit-clone`` process has no
+#: a workspace shared with another ``source-clone`` process has no
 #: locking of any kind, so guarding one dictionary would not make that
 #: arrangement safe.
 _owned_paths: dict[Path, _Owner] = {}

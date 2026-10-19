@@ -11,7 +11,7 @@ not planned features or development history.
 
 ## OVERVIEW
 
-The gerrit-clone tool is a Python-based CLI application that discovers and
+The source-clone tool is a Python-based CLI application that discovers and
 bulk clones repositories from Gerrit servers. It features multi-threaded
 concurrent operations, robust error handling with retry logic, and maintains
 Gerrit project hierarchy locally.
@@ -88,7 +88,8 @@ concerns:
 - **File Formats**: YAML and JSON configuration file support
 - **Validation**: Type conversion and constraint checking
 - **Environment Variables**: All CLI options available as `GERRIT_*` vars
-- **Config Locations**: `~/.config/gerrit-clone/config.{yaml,json}`
+- **Config Locations**: `~/.config/source-clone/config.{yaml,json}`, then
+  `~/.config/gerrit-clone/` (the directory earlier releases used)
 
 #### API Discovery (`discovery.py`)
 
@@ -220,13 +221,13 @@ The tool supports three SSH authentication methods:
 
 ```bash
 ssh-add ~/.ssh/gerrit_key
-gerrit-clone --host gerrit.example.org --ssh-user username
+source-clone clone --host gerrit.example.org --ssh-user username
 ```
 
 #### Identity File
 
 ```bash
-gerrit-clone --host gerrit.example.org \
+source-clone clone --host gerrit.example.org \
   --ssh-user username \
   --ssh-private-key ~/.ssh/gerrit_key
 ```
@@ -294,7 +295,7 @@ inputs:
 
 1. **Input Validation**: Check required inputs
 2. **SSH Setup**: Configure SSH agent and keys if provided
-3. **CLI Installation**: Install gerrit-clone via uv/pip
+3. **CLI Installation**: Install source-clone via uv/pip
 4. **Command Execution**: Build and execute CLI command
 5. **Output Processing**: Extract results from manifest JSON
 
@@ -488,7 +489,7 @@ The modular architecture enables future enhancements:
 
 ## SUMMARY
 
-The gerrit-clone implementation delivers a production-ready, type-safe,
+The source-clone implementation delivers a production-ready, type-safe,
 concurrent repository cloning solution. The modular architecture supports
 testing, maintenance, and future enhancement while providing reliable
 operation in CI/CD environments. Comprehensive error handling, retry logic,

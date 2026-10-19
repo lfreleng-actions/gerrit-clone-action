@@ -73,46 +73,46 @@ def mirror(
     Examples:
 
         # Mirror all projects to a GitHub org
-        gerrit-clone mirror --host gerrit.onap.org --org myorg
+        source-clone mirror --host gerrit.onap.org --org myorg
 
         # Mirror specific projects (renamed from --projects)
-        gerrit-clone mirror --host gerrit.onap.org --org myorg \
+        source-clone mirror --host gerrit.onap.org --org myorg \
           --include-projects "ccsdk, oom, cps"
 
         # Exclude a problematic repository
-        gerrit-clone mirror --host gerrit.onap.org --org myorg \
+        source-clone mirror --host gerrit.onap.org --org myorg \
           --exclude-projects "testsuite/pythonsdk-tests"
 
         # Combine include and exclude with wildcards
-        gerrit-clone mirror --host gerrit.onap.org --org myorg \
+        source-clone mirror --host gerrit.onap.org --org myorg \
           --include-projects "ccsdk, oom" --exclude-projects "*test*"
 
         # Recreate existing GitHub repos
-        gerrit-clone mirror --host gerrit.onap.org --org myorg \
+        source-clone mirror --host gerrit.onap.org --org myorg \
           --recreate --overwrite
 
         # Use HTTPS for cloning and include archived projects
-        gerrit-clone mirror --host gerrit.onap.org --org myorg \
+        source-clone mirror --host gerrit.onap.org --org myorg \
           --https --include-archived
 
         # Mirror without setting default branch on GitHub
-        gerrit-clone mirror --host gerrit.onap.org --org myorg \
+        source-clone mirror --host gerrit.onap.org --org myorg \
           --no-set-default-branch
 
         # Disable the post-sync default branch repair pass
-        gerrit-clone mirror --host gerrit.onap.org --org myorg \
+        source-clone mirror --host gerrit.onap.org --org myorg \
           --no-fix-default-branch
 
         # Use HTTP API for discovery (no SSH required)
-        gerrit-clone mirror --host gerrit.onap.org --org myorg \
+        source-clone mirror --host gerrit.onap.org --org myorg \
           --discovery-method http --https
 
         # Mirror with explicit HTTP credentials (highest priority)
-        gerrit-clone mirror --host gerrit.onap.org --org myorg \
+        source-clone mirror --host gerrit.onap.org --org myorg \
           --https --http-user myuser --http-password mypass
 
         # Mirror with credentials from specific .netrc file
-        gerrit-clone mirror --host gerrit.onap.org --org myorg \
+        source-clone mirror --host gerrit.onap.org --org myorg \
           --https --netrc-file ~/.netrc.gerrit
     """
     # Configure graceful interrupt handling for multi-threaded operations

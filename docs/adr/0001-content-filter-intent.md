@@ -64,6 +64,9 @@ Two layers, each authoritative for one question.
   intent or the journal, as git finds `.git`, and creates the file at
   the output path otherwise. Discovery already skips hidden directories,
   which keeps `.gerrit-clone/` from passing for a project.
+- **Name.** `.gerrit-clone/` and the `gerrit-clone.*` git config keys
+  keep the tool's old name after its rename to `source-clone`, for
+  compatibility with the trees and repositories earlier releases wrote.
 
 ### Each run
 

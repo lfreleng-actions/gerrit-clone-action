@@ -43,6 +43,8 @@ from gerrit_clone.models import match_project_pattern
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterable, Mapping
 
+#: Keeps the old tool name deliberately, for compatibility with the
+#: trees earlier ``gerrit-clone`` releases wrote.
 INTENT_DIR = ".gerrit-clone"
 INTENT_FILE = "filter-policy.json"
 #: Kept beside the intent: see :mod:`gerrit_clone.content_journal`.
@@ -255,8 +257,8 @@ def _held(root: Path, path: Path, wait: float) -> Generator[None, None, None]:
             if time.monotonic() >= deadline:
                 raise IntentError(
                     f"Gave up after {wait:.0f}s waiting for another "
-                    f"gerrit-clone run on this tree to release {path}; run "
-                    f"again once it finishes"
+                    f"source-clone or gerrit-clone run on this tree to release "
+                    f"{path}; run again once it finishes"
                 )
             time.sleep(0.1)
         try:

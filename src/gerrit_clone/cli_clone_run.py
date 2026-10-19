@@ -63,7 +63,7 @@ def run_clone(request: CloneRequest, session: CliSession) -> None:
     # Log version to file in GitHub Actions environment (file only, no console)
     if is_github_actions_context():
         try:
-            file_logger.debug("gerrit-clone version %s", __version__)
+            file_logger.debug("source-clone version %s", __version__)
         except Exception:
             file_logger.warning("Version information not available")
 

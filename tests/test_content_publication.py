@@ -283,7 +283,7 @@ class TestOneRewriteAtATime:
             reason = filter_repository(spec, mirror, "proj", 0, apply=apply)
 
         assert reason is not None
-        assert "another gerrit-clone run" in reason
+        assert "another source-clone or gerrit-clone run" in reason
         assert applied == []
         assert filter_repository(spec, mirror, "proj", 0, apply=apply) is None
         assert applied == ["proj"]

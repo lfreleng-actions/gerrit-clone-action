@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2025 Matthew Watkins <mwatkins@linuxfoundation.org>
 
-"""Standardized error codes and error handling for gerrit-clone-action.
+"""Standardized error codes and error handling for source-clone.
 
 This module provides consistent exit codes and error handling patterns
 similar to github2gerrit-action for better automation and debugging.
@@ -25,7 +25,7 @@ logger = get_logger(__name__)
 
 
 class ExitCode(IntEnum):
-    """Standard exit codes for gerrit-clone operations."""
+    """Standard exit codes for source-clone operations."""
 
     SUCCESS = 0
     """Operation completed successfully."""
@@ -89,7 +89,7 @@ ERROR_MESSAGES = {
 
 
 class GerritCloneError(Exception):
-    """Base exception class for gerrit-clone errors with exit codes."""
+    """Base exception class for source-clone errors with exit codes."""
 
     def __init__(
         self,

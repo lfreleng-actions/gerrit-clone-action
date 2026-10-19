@@ -56,35 +56,35 @@ def refresh(
     Examples:
 
         # Refresh all repos in current directory
-        gerrit-clone refresh
+        source-clone refresh
 
         # Refresh ONAP repositories
-        gerrit-clone refresh --output-path ~/repos/onap
+        source-clone refresh --output-path ~/repos/onap
 
         # Refresh only specific projects (with wildcard)
-        gerrit-clone refresh --output-path ~/repos --include-projects "ccsdk*"
+        source-clone refresh --output-path ~/repos --include-projects "ccsdk*"
 
         # Refresh all except a problematic repo
-        gerrit-clone refresh --exclude-projects "testsuite/pythonsdk-tests"
+        source-clone refresh --exclude-projects "testsuite/pythonsdk-tests"
 
         # Fetch only (don't merge)
-        gerrit-clone refresh --output-path ~/repos --fetch-only
+        source-clone refresh --output-path ~/repos --fetch-only
 
         # Use 16 threads for faster refresh
-        gerrit-clone refresh --output-path ~/repos --threads 16
+        source-clone refresh --output-path ~/repos --threads 16
 
         # Auto-stash uncommitted changes
-        gerrit-clone refresh --output-path ~/repos --auto-stash
+        source-clone refresh --output-path ~/repos --auto-stash
 
         # Hard-reset local content to exactly match the remote
         # (discards local-only commits and divergence)
-        gerrit-clone refresh --output-path ~/repos --force-hard
+        source-clone refresh --output-path ~/repos --force-hard
 
         # Dry run (show what would be updated)
-        gerrit-clone refresh --output-path ~/repos --dry-run
+        source-clone refresh --output-path ~/repos --dry-run
 
         # Refresh only repositories cloned from Gerrit
-        gerrit-clone refresh --output-path ~/repos --gerrit-only
+        source-clone refresh --output-path ~/repos --gerrit-only
     """
     # Configure graceful interrupt handling for multi-threaded operations
     handle_sigint_gracefully()

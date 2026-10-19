@@ -9,7 +9,7 @@ log files, CI runners, and post-mortem analysis) and to a Rich console
 (for immediate, styled terminal feedback).
 
 The approach is inspired by the dependamerge project's ``output_utils``
-module but adapted for the gerrit-clone-action domain, adding a
+module but adapted for the source-clone domain, adding a
 ``format_rate_limit_table`` helper that renders GitHub API rate-limit
 diagnostics as a compact Rich table suitable for both interactive
 terminals and CI log output.

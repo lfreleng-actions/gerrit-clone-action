@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2025 Matthew Watkins <mwatkins@linuxfoundation.org>
 
-"""Unified logging system for gerrit-clone.
+"""Unified logging system for source-clone.
 
 This module provides both file-based logging and console logging setup.
 The init_logging() function is the main entry point that sets up both
@@ -51,7 +51,7 @@ def _format_cli_command(cli_args: dict[str, Any], command: str) -> str:
     Returns:
         The reconstructed command line.
     """
-    cmd_parts = ["gerrit-clone", command]
+    cmd_parts = ["source-clone", command]
     for key, value in cli_args.items():
         if value is None or value is False:
             continue
@@ -99,7 +99,7 @@ class FileLogger:
         enabled: bool = True,
         log_level: str = "DEBUG",
     ):
-        self.log_file_path = log_file_path or Path("gerrit-clone.log")
+        self.log_file_path = log_file_path or Path("source-clone.log")
         self.enabled = enabled
         self.log_level = getattr(logging, log_level.upper(), logging.DEBUG)
         self.error_collector = ErrorCollector()
@@ -219,7 +219,7 @@ def setup_file_logging(
     Setup file-based logging system.
 
     Args:
-        log_file_path: Path to log file (default: gerrit-clone.log)
+        log_file_path: Path to log file (default: source-clone.log)
         enabled: Whether to enable file logging
         log_level: Logging level for file output
         cli_args: CLI arguments to include in log header
@@ -297,7 +297,7 @@ def get_default_log_path(host: str | None = None, path: Path | None = None) -> P
         if clean_host:
             return base_dir / f"{clean_host}.log"
 
-    return base_dir / "gerrit-clone.log"
+    return base_dir / "source-clone.log"
 
 
 def init_logging(
@@ -319,7 +319,7 @@ def init_logging(
     setup_file_logging + setup_logging calls.
 
     Args:
-        log_file: Path to log file (default: gerrit-clone.log)
+        log_file: Path to log file (default: source-clone.log)
         disable_file: Whether to disable file logging
         log_level: Logging level for file output
         console_level: Base logging level for console (overridden by quiet/verbose)

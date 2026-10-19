@@ -120,7 +120,9 @@ class TestWaiting:
         monkeypatch.setattr("gerrit_clone.content_intent.LOCK_WAIT", 0.3)
         started = time.monotonic()
 
-        with pytest.raises(IntentError, match="another gerrit-clone run"):
+        with pytest.raises(
+            IntentError, match="another source-clone or gerrit-clone run"
+        ):
             resolve_filters(tree, _options(tree, "a.txt"), persist=True)
 
         assert time.monotonic() - started < 10
@@ -181,7 +183,9 @@ class TestAnyPlatform:
             assert ready.exists(), "the other process never took the lock"
             monkeypatch.setattr("gerrit_clone.content_intent.LOCK_WAIT", 0.3)
 
-            with pytest.raises(IntentError, match="another gerrit-clone run"):
+            with pytest.raises(
+                IntentError, match="another source-clone or gerrit-clone run"
+            ):
                 resolve_filters(tree, _options(tree, "a.txt"), persist=True)
         finally:
             release.touch()

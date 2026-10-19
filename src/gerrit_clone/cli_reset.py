@@ -58,16 +58,16 @@ def reset(
     Examples:
 
         # List repos and prompt for confirmation (excludes automation PRs)
-        gerrit-clone reset --org my-test-org
+        source-clone reset --org my-test-org
 
         # Include automation PRs in counts
-        gerrit-clone reset --org my-test-org --include-automation-prs
+        source-clone reset --org my-test-org --include-automation-prs
 
         # Compare with local clone before deletion
-        gerrit-clone reset --org my-test-org --output-path /tmp/gerrit-mirror --compare
+        source-clone reset --org my-test-org --output-path /tmp/gerrit-mirror --compare
 
         # Delete immediately without prompt (DANGEROUS!)
-        gerrit-clone reset --org my-test-org --no-confirm
+        source-clone reset --org my-test-org --no-confirm
     """
     console = Console(stderr=True)
     session = CliSession(console=console)

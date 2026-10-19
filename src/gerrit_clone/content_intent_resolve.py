@@ -64,7 +64,7 @@ def resolve_filters(
     options: ContentFilterSpec | None,
     *,
     persist: bool,
-    command: str = "gerrit-clone",
+    command: str = "source-clone",
 ) -> ContentFilterSpec | None:
     """The filters this run applies to the tree containing *start*.
 

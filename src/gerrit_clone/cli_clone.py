@@ -89,34 +89,34 @@ def clone(
     Examples:
 
         # Clone all active repositories from Gerrit server
-        gerrit-clone clone --host gerrit.example.org
+        source-clone clone --host gerrit.example.org
 
         # Clone all repositories from GitHub organization (auto-refresh existing)
-        gerrit-clone clone --host github.com/lfreleng-actions
+        source-clone clone --host github.com/lfreleng-actions
 
         # Clone without refreshing existing repos
-        gerrit-clone clone --host github.com/myorg --no-refresh
+        source-clone clone --host github.com/myorg --no-refresh
 
         # Force refresh existing repos (stash local changes)
-        gerrit-clone clone --host github.com/myorg --force
+        source-clone clone --host github.com/myorg --force
 
         # Clone GitHub org with gh CLI (preserves upstream/origin)
-        gerrit-clone clone --host github.com/myorg --use-gh-cli
+        source-clone clone --host github.com/myorg --use-gh-cli
 
         # Clone to specific directory with custom threads
-        gerrit-clone clone --host gerrit.example.org --output-path ./repos --threads 8
+        source-clone clone --host gerrit.example.org --output-path ./repos --threads 8
 
         # Clone with shallow depth and specific branch
-        gerrit-clone clone --host gerrit.example.org --no-mirror --depth 10 --branch main
+        source-clone clone --host gerrit.example.org --no-mirror --depth 10 --branch main
 
         # Clone with explicit HTTP credentials (highest priority)
-        gerrit-clone clone --host gerrit.example.org --https --http-user myuser --http-password mypass
+        source-clone clone --host gerrit.example.org --https --http-user myuser --http-password mypass
 
         # Clone with credentials from specific .netrc file
-        gerrit-clone clone --host gerrit.example.org --netrc-file ~/.netrc.gerrit
+        source-clone clone --host gerrit.example.org --netrc-file ~/.netrc.gerrit
 
         # Clone requiring .netrc credentials (fail if not found)
-        gerrit-clone clone --host gerrit.example.org --netrc-required
+        source-clone clone --host gerrit.example.org --netrc-required
     """
     # Configure graceful interrupt handling for multi-threaded operations
     handle_sigint_gracefully()

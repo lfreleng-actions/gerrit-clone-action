@@ -87,7 +87,7 @@ class GerritAPIClient:
                 max_keepalive_connections=5, max_connections=10, keepalive_expiry=30.0
             ),
             headers={
-                "User-Agent": "gerrit-clone/0.1.0",
+                "User-Agent": "source-clone/0.1.0",
                 "Accept": "application/json",
             },
         )

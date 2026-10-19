@@ -178,6 +178,8 @@ class StagedCheckoutMixin(FilteredRefreshMixin):
         Returns:
             What *work* returned, and whether the copy has gone.
         """
+        # The prefix keeps the old tool name deliberately, so a stage an
+        # interrupted run leaves behind has one name whichever release made it.
         stage_parent = Path(tempfile.mkdtemp(prefix="gerrit-clone-stage-", dir=git_dir))
         try:
             done = work(stage_parent / "repo.git")

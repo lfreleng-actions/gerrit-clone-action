@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tests for CLI netrc and HTTP credential options in gerrit-clone.
+Tests for CLI netrc and HTTP credential options in source-clone.
 
 This module tests the CLI integration of credential options including:
 - --http-user/--http-password: Explicit HTTP credentials (highest priority)

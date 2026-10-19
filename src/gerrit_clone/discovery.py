@@ -47,7 +47,7 @@ class GerritAPIDiscovery:
             timeout=self.timeout,
             follow_redirects=True,
             headers={
-                "User-Agent": "gerrit-clone/0.1.0",
+                "User-Agent": "source-clone/0.1.0",
                 "Accept": "application/json",
             },
         )

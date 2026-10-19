@@ -24,9 +24,12 @@ class ConfigManager(EnvConfigLoader):
 
     def __init__(self) -> None:
         """Initialize configuration manager."""
+        # ~/.config/gerrit-clone/ is the directory earlier releases read,
+        # kept as a fallback so existing configuration keeps working.
         self._config_paths = [
-            Path.home() / ".config" / "gerrit-clone" / "config.yaml",
-            Path.home() / ".config" / "gerrit-clone" / "config.json",
+            Path.home() / ".config" / name / filename
+            for name in ("source-clone", "gerrit-clone")
+            for filename in ("config.yaml", "config.json")
         ]
 
     def load_config(

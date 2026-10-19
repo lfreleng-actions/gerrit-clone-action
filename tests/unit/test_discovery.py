@@ -43,7 +43,7 @@ class TestGerritAPIDiscovery:
         """Test GerritAPIDiscovery initialization."""
         assert discovery.timeout.connect == 10.0
         assert discovery.client.timeout.connect == 10.0
-        assert "gerrit-clone" in discovery.client.headers["User-Agent"]
+        assert "source-clone" in discovery.client.headers["User-Agent"]
         assert discovery.client.headers["Accept"] == "application/json"
 
     def test_context_manager(self):

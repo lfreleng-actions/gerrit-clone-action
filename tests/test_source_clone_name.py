@@ -35,11 +35,9 @@ def _flat(text: str) -> str:
 class TestDistribution:
     """The installed distribution and its console scripts."""
 
-    @pytest.mark.xfail(strict=True, reason="distribution not yet renamed")
     def test_the_distribution_version_resolves(self) -> None:
         assert version(DISTRIBUTION)
 
-    @pytest.mark.xfail(strict=True, reason="distribution not yet renamed")
     def test_both_commands_run_the_same_cli(self) -> None:
         scripts = {
             entry.name: entry
@@ -56,13 +54,11 @@ class TestDistribution:
 class TestUserFacingName:
     """Help and version output name ``source-clone``."""
 
-    @pytest.mark.xfail(strict=True, reason="command not yet renamed")
     def test_version_names_source_clone(self) -> None:
         result = CliRunner().invoke(cli.app, ["--version"])
         assert result.exit_code == 0
         assert "source-clone version" in result.output
 
-    @pytest.mark.xfail(strict=True, reason="help not yet updated")
     def test_help_names_both_sources(self) -> None:
         result = CliRunner().invoke(cli.app, ["--help"])
         assert result.exit_code == 0
@@ -70,11 +66,9 @@ class TestUserFacingName:
         assert "Gerrit servers" in text
         assert "GitHub organisations" in text
 
-    @pytest.mark.xfail(strict=True, reason="command not yet renamed")
     def test_app_is_named_source_clone(self) -> None:
         assert cli.app.info.name == "source-clone"
 
-    @pytest.mark.xfail(strict=True, reason="log file not yet renamed")
     def test_default_log_file_without_a_host(self) -> None:
         assert get_default_log_path().name == "source-clone.log"
 
@@ -121,7 +115,6 @@ class TestConfigDirectory:
         self._write(tmp_path, "gerrit-clone", 3)
         assert ConfigManager()._load_file_config() == {"threads": 3}
 
-    @pytest.mark.xfail(strict=True, reason="new config directory not yet read")
     def test_the_new_directory_wins(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

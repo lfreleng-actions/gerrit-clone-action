@@ -8,7 +8,7 @@
 ## Overview
 
 This document describes the implementation of `--mirror` mode as the default
-behavior for the gerrit-clone-action tool. The `--mirror` flag creates bare
+behavior for the source-clone-action tool. The `--mirror` flag creates bare
 Git repositories with complete metadata, including all branches, tags, refs,
 and notes.
 
@@ -19,7 +19,7 @@ and notes.
 ## Motivation
 
 We needed to ensure that by default, all content cloned by the
-gerrit-clone-action and gerrit-clone Python CLI tool contains complete
+source-clone-action and source-clone Python CLI tool contains complete
 metadata from remote repositories. We do this by making Git's `--mirror`
 option the default for all clone operations.
 
@@ -163,21 +163,21 @@ mirror:
 **Default (Mirror Mode - no flag specified):**
 
 ```bash
-gerrit-clone clone --host gerrit.example.org
+source-clone clone --host gerrit.example.org
 # Creates bare repos with all metadata (uses Config.mirror=True default)
 ```
 
 **Explicit Mirror Mode:**
 
 ```bash
-gerrit-clone clone --host gerrit.example.org --mirror
+source-clone clone --host gerrit.example.org --mirror
 # Explicitly enables mirror mode (overrides config file if present)
 ```
 
 **Non-Mirror Mode:**
 
 ```bash
-gerrit-clone clone --host gerrit.example.org --no-mirror
+source-clone clone --host gerrit.example.org --no-mirror
 # Creates standard repos with working directory (overrides default/config)
 ```
 
@@ -185,11 +185,11 @@ gerrit-clone clone --host gerrit.example.org --no-mirror
 
 ```bash
 # If config.yaml has: mirror: false
-gerrit-clone clone --host gerrit.example.org
+source-clone clone --host gerrit.example.org
 # Uses config file setting (non-mirror mode)
 
 # Override config file to use mirror mode
-gerrit-clone clone --host gerrit.example.org --mirror
+source-clone clone --host gerrit.example.org --mirror
 ```
 
 **With Environment Variable:**
@@ -197,11 +197,11 @@ gerrit-clone clone --host gerrit.example.org --mirror
 ```bash
 # Environment variable sets the default
 export GERRIT_MIRROR=false
-gerrit-clone clone --host gerrit.example.org
+source-clone clone --host gerrit.example.org
 # Uses environment setting (non-mirror mode)
 
 # CLI flag overrides environment
-gerrit-clone clone --host gerrit.example.org --mirror
+source-clone clone --host gerrit.example.org --mirror
 ```
 
 ### GitHub Actions Usage
@@ -209,7 +209,7 @@ gerrit-clone clone --host gerrit.example.org --mirror
 **Default (Mirror Mode - no input specified):**
 
 ```yaml
-- uses: lfreleng-actions/gerrit-clone-action@v1
+- uses: lfreleng-actions/source-clone-action@v1
   with:
     host: gerrit.example.org
     # No mirror input = uses Config.mirror=True default
@@ -218,7 +218,7 @@ gerrit-clone clone --host gerrit.example.org --mirror
 **Explicit Mirror Mode:**
 
 ```yaml
-- uses: lfreleng-actions/gerrit-clone-action@v1
+- uses: lfreleng-actions/source-clone-action@v1
   with:
     host: gerrit.example.org
     mirror: true
@@ -227,7 +227,7 @@ gerrit-clone clone --host gerrit.example.org --mirror
 **Non-Mirror Mode:**
 
 ```yaml
-- uses: lfreleng-actions/gerrit-clone-action@v1
+- uses: lfreleng-actions/source-clone-action@v1
   with:
     host: gerrit.example.org
     mirror: false

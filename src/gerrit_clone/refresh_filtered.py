@@ -270,6 +270,8 @@ class FilteredRefreshMixin(ForceModeMixin):
             True if the mirror now holds the refreshed, filtered refs, and
             the copy has gone.
         """
+        # The prefix keeps the old tool name deliberately, so a stage an
+        # interrupted run leaves behind has one name whichever release made it.
         stage_parent = Path(
             tempfile.mkdtemp(prefix=".gerrit-clone-stage-", dir=repo_path.parent)
         )

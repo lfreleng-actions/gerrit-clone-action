@@ -119,7 +119,7 @@ def build_auth_headers(token: str | None) -> dict[str, str]:
     return {
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github.v3+json",
-        "User-Agent": "gerrit-clone-mirror",
+        "User-Agent": "source-clone",
     }
 
 

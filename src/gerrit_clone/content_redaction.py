@@ -47,6 +47,9 @@ def _generate_replacement_string(original: str) -> str:
     # non-reversible replacement.  Truncate to 12 hex chars (48 bits)
     # which is enough to be unique within a repo while being a
     # clearly different from typical token lengths.
+    # The salt keeps the old tool name deliberately: renaming it would
+    # change every replacement, so a tree an earlier release redacted
+    # would no longer match a fresh rewrite.
     digest = hashlib.sha256(f"gerrit-clone-redact:{original}".encode()).hexdigest()[:12]
     return f"REDACTED_{digest}"
 
@@ -69,7 +72,7 @@ def _write_replacements_file(tokens: list[str]) -> tuple[str, int]:
     """
     with tempfile.NamedTemporaryFile(
         mode="w",
-        prefix="gerrit-clone-replacements-",
+        prefix="source-clone-replacements-",
         suffix=".txt",
         delete=False,
         # Pin the encoding and newline so the mapping file is

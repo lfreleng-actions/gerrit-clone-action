@@ -213,7 +213,7 @@ def abandon_generation(generation: int) -> int:
 #: the launch to finish before it can take its snapshot.  A single
 #: worker also keeps launches serialised, which the lock already
 #: required.  The thread is created on first use, not at import.
-_launcher = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gerrit-clone-launch")
+_launcher = ThreadPoolExecutor(max_workers=1, thread_name_prefix="source-clone-launch")
 
 
 def terminate_tracked_children() -> int:

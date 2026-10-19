@@ -328,7 +328,7 @@ EXIT_ON_ERROR = typer.Option(
 LOG_FILE = typer.Option(
     None,
     "--log-file",
-    help="Custom log file path (default: gerrit-clone.log in current directory)",
+    help="Custom log file path (default: source-clone.log in current directory)",
     envvar="GERRIT_LOG_FILE",
     file_okay=True,
     dir_okay=False,

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 The Linux Foundation
 
-"""Typer application object shared by every gerrit-clone command module.
+"""Typer application object shared by every source-clone command module.
 
 The application lives here rather than in :mod:`gerrit_clone.cli` so that the
 per-command modules can register themselves against it without importing the
@@ -42,12 +42,12 @@ def format_version_string(command: str = "", styled: bool = True) -> str:
     """
     if styled:
         if command:
-            return f"🏷️  [bold]gerrit-clone {command}[/bold] version [cyan]{__version__}[/cyan]"
-        return f"🏷️  gerrit-clone version [cyan]{__version__}[/cyan]"
+            return f"🏷️  [bold]source-clone {command}[/bold] version [cyan]{__version__}[/cyan]"
+        return f"🏷️  source-clone version [cyan]{__version__}[/cyan]"
     else:
         if command:
-            return f"🏷️  gerrit-clone {command} version {__version__}"
-        return f"🏷️  gerrit-clone version {__version__}"
+            return f"🏷️  source-clone {command} version {__version__}"
+        return f"🏷️  source-clone version {__version__}"
 
 
 # Show version information when --help is used.
@@ -62,7 +62,7 @@ if "--help" in sys.argv:
     except Exception as exc:
         logger.debug("Failed to format version string: %s", exc, exc_info=True)
         sys.stdout.write(
-            "\u26a0\ufe0f gerrit-clone version information not available\n"
+            "\u26a0\ufe0f source-clone version information not available\n"
         )
 
 
@@ -75,8 +75,11 @@ def version_callback(value: bool) -> None:
 
 
 app = typer.Typer(
-    name="gerrit-clone",
-    help="A multi-threaded CLI tool for bulk cloning repositories from Gerrit servers.",
+    name="source-clone",
+    help=(
+        "A multi-threaded CLI tool for bulk cloning, mirroring and refreshing "
+        "repositories from Gerrit servers and GitHub organisations."
+    ),
     no_args_is_help=True,
     rich_markup_mode="rich",
     add_completion=True,
