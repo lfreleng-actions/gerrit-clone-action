@@ -589,3 +589,30 @@ class TestNoEmptyExpressions:
             "Found unclosed ${{{{ expression(s) in action.yaml run "
             "blocks:\n" + "\n".join(f"  - {v}" for v in violations)
         )
+
+
+@pytest.fixture
+def install_script(action_yaml: dict[str, Any]) -> str:
+    """The run block of the step that installs the CLI."""
+    for step in action_yaml["runs"]["steps"]:
+        script = step.get("run", "")
+        if "uvx " in script:
+            return str(script)
+    raise ValueError("Could not find the install step in action.yaml")
+
+
+class TestActionRunsSourceClone:
+    """The Action installs and runs the CLI as ``source-clone``."""
+
+    @pytest.mark.xfail(strict=True, reason="Action not yet renamed")
+    def test_install_step_uses_source_clone(self, install_script: str) -> None:
+        assert "command -v source-clone " in install_script
+        assert "uvx source-clone --help" in install_script
+        assert "exec uvx source-clone " in install_script
+        assert '"$HOME/.local/bin/source-clone"' in install_script
+        assert "gerrit-clone" not in install_script
+
+    @pytest.mark.xfail(strict=True, reason="Action not yet renamed")
+    def test_command_array_starts_source_clone(self, action_shell_script: str) -> None:
+        assert "cmd=(source-clone clone)" in action_shell_script
+        assert "gerrit-clone" not in action_shell_script
