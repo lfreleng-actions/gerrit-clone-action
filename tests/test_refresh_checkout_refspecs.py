@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from gerrit_clone.refresh_checkout_refs import staged_refspec
+from source_clone.refresh_checkout_refs import staged_refspec
 
 
 @pytest.mark.parametrize(

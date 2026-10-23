@@ -24,11 +24,11 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from typer.testing import CliRunner
 
-from gerrit_clone import refresh_git_env
-from gerrit_clone.cli import app
-from gerrit_clone.models import RefreshStatus, RetryPolicy
-from gerrit_clone.refresh_manager import RefreshManager, refresh_repositories
-from gerrit_clone.refresh_worker import RefreshWorker
+from source_clone import refresh_git_env
+from source_clone.cli import app
+from source_clone.models import RefreshStatus, RetryPolicy
+from source_clone.refresh_manager import RefreshManager, refresh_repositories
+from source_clone.refresh_worker import RefreshWorker
 
 if TYPE_CHECKING:
     from pathlib import Path

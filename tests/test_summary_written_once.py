@@ -20,34 +20,34 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
-from gerrit_clone.cli import app
-from gerrit_clone.cli_session import CliSession
-from gerrit_clone.error_codes import DiscoveryError
-from gerrit_clone.file_logging import ErrorCollector
-from gerrit_clone.mirror_models import MirrorResult, MirrorStatus
-from gerrit_clone.model_enums import ProjectState
-from gerrit_clone.models import Project
-from gerrit_clone.reset_models import ResetResult
+from source_clone.cli import app
+from source_clone.cli_session import CliSession
+from source_clone.error_codes import DiscoveryError
+from source_clone.file_logging import ErrorCollector
+from source_clone.mirror_models import MirrorResult, MirrorStatus
+from source_clone.model_enums import ProjectState
+from source_clone.models import Project
+from source_clone.reset_models import ResetResult
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
-    from gerrit_clone.models import Config
+    from source_clone.models import Config
 
 HOST = "gerrit.example.org"
 ORG = "example-org"
 SUMMARY_HEADING = "ERROR AND WARNING SUMMARY"
 TOKEN_VARIABLES = ("GITHUB_TOKEN", "GERRIT_CLONE_TOKEN")
 
-_stub_logger = logging.getLogger("gerrit_clone.test_summary_written_once")
+_stub_logger = logging.getLogger("source_clone.test_summary_written_once")
 
 
 @pytest.fixture(autouse=True)
 def _close_file_handlers() -> Iterator[None]:
     """Release any log file a command left open on the app logger."""
     yield
-    app_logger = logging.getLogger("gerrit_clone")
+    app_logger = logging.getLogger("source_clone")
     for handler in app_logger.handlers[:]:
         if isinstance(handler, logging.FileHandler):
             handler.close()
@@ -78,7 +78,7 @@ def _batch(failed: int) -> MagicMock:
 def _clone(output: Path, stub: object, *extra: str) -> int:
     """Run ``clone`` against *HOST* with cloning replaced by *stub*."""
     args = ["clone", "--host", HOST, "--output-path", str(output), "--quiet", *extra]
-    with patch("gerrit_clone.cli.clone_repositories", side_effect=stub):
+    with patch("source_clone.cli.clone_repositories", side_effect=stub):
         result = CliRunner().invoke(app, args)
     return result.exit_code
 
@@ -184,10 +184,10 @@ def _mirror(output: Path, status: MirrorStatus) -> int:
         "--quiet",
     ]
     with (
-        patch("gerrit_clone.cli_mirror_run.authenticate", return_value=MagicMock()),
-        patch("gerrit_clone.cli_mirror_run.resolve_org", return_value=ORG),
-        patch("gerrit_clone.cli.discover_projects", return_value=([project], {})),
-        patch("gerrit_clone.cli_mirror_run.MirrorManager", return_value=manager),
+        patch("source_clone.cli_mirror_run.authenticate", return_value=MagicMock()),
+        patch("source_clone.cli_mirror_run.resolve_org", return_value=ORG),
+        patch("source_clone.cli.discover_projects", return_value=([project], {})),
+        patch("source_clone.cli_mirror_run.MirrorManager", return_value=manager),
     ):
         result = CliRunner().invoke(app, args)
     return result.exit_code
@@ -241,7 +241,7 @@ def _reset(path: Path, deleted: int) -> int:
         "--no-confirm",
         "--quiet",
     ]
-    with patch("gerrit_clone.cli_reset_run.ResetManager", return_value=manager):
+    with patch("source_clone.cli_reset_run.ResetManager", return_value=manager):
         result = CliRunner().invoke(app, args)
     return result.exit_code
 

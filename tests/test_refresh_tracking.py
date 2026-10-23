@@ -22,11 +22,11 @@ from unittest.mock import patch
 
 import pytest
 
-from gerrit_clone.concurrent_utils import interruptible_executor
-from gerrit_clone.models import RefreshResult, RefreshStatus, RetryPolicy
-from gerrit_clone.refresh_git_env import run_git
-from gerrit_clone.refresh_worker import RefreshWorker
-from gerrit_clone.subprocess_tracking import (
+from source_clone.concurrent_utils import interruptible_executor
+from source_clone.models import RefreshResult, RefreshStatus, RetryPolicy
+from source_clone.refresh_git_env import run_git
+from source_clone.refresh_worker import RefreshWorker
+from source_clone.subprocess_tracking import (
     ProcessAbandonedError,
     _thread_state,
     _tracked,
@@ -185,7 +185,7 @@ def test_a_refused_refresh_propagates_without_a_retry(
 
     with (
         patch.object(worker, operation, wraps=getattr(worker, operation)) as launched,
-        patch("gerrit_clone.refresh_execution.time.sleep") as slept,
+        patch("source_clone.refresh_execution.time.sleep") as slept,
         pytest.raises(ProcessAbandonedError),
     ):
         worker._execute_adaptive_refresh(tmp_path, result, bare=bare)
@@ -249,7 +249,7 @@ def test_a_whole_refresh_in_an_abandoned_batch_reports_abandonment(
     """Not an "Unexpected error": the batch gave up, and no git ran."""
     repo = _hanging_mirror(tmp_path)
 
-    with patch("gerrit_clone.refresh_git_env.run_tracked", wraps=run_tracked) as launch:
+    with patch("source_clone.refresh_git_env.run_tracked", wraps=run_tracked) as launch:
         result = RefreshWorker(
             filter_gerrit_only=False, ssh_jitter_seconds=0
         ).refresh_repository(repo)

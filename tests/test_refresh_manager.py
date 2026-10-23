@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 import pytest
 
-from gerrit_clone.models import RefreshBatchResult, RefreshResult, RefreshStatus
-from gerrit_clone.refresh_manager import RefreshManager, refresh_repositories
+from source_clone.models import RefreshBatchResult, RefreshResult, RefreshStatus
+from source_clone.refresh_manager import RefreshManager, refresh_repositories
 
 
 @pytest.fixture
@@ -161,7 +161,7 @@ class TestRefreshManager:
         assert result.success_count == 0
         assert result.failed_count == 0
 
-    @patch("gerrit_clone.refresh_worker.RefreshWorker.refresh_repository")
+    @patch("source_clone.refresh_worker.RefreshWorker.refresh_repository")
     def test_refresh_repositories_dry_run(self, mock_refresh, temp_git_repos, tmp_path):
         """Test dry run mode."""
 
@@ -187,7 +187,7 @@ class TestRefreshManager:
         # In dry run, repos should show as success or have status info
         assert result.success_count >= 0
 
-    @patch("gerrit_clone.refresh_worker.RefreshWorker.refresh_repository")
+    @patch("source_clone.refresh_worker.RefreshWorker.refresh_repository")
     def test_refresh_repositories_with_specific_repos(
         self, mock_refresh, temp_git_repos, tmp_path
     ):
@@ -212,7 +212,7 @@ class TestRefreshManager:
 
         assert result.total_count == 2
 
-    @patch("gerrit_clone.refresh_worker.RefreshWorker.refresh_repository")
+    @patch("source_clone.refresh_worker.RefreshWorker.refresh_repository")
     def test_refresh_repositories_parallel_execution(
         self, mock_refresh, temp_git_repos, tmp_path
     ):
@@ -239,7 +239,7 @@ class TestRefreshManager:
         # All should be successful
         assert result.success_count == 3
 
-    @patch("gerrit_clone.refresh_worker.RefreshWorker.refresh_repository")
+    @patch("source_clone.refresh_worker.RefreshWorker.refresh_repository")
     def test_refresh_repositories_exit_on_error(
         self, mock_refresh, temp_git_repos, tmp_path
     ):
@@ -287,7 +287,7 @@ class TestRefreshManager:
         assert manager._get_status_emoji(RefreshStatus.SKIPPED) == "⊘"
         assert manager._get_status_emoji(RefreshStatus.CONFLICTS) == "⚠️"
 
-    @patch("gerrit_clone.refresh_worker.RefreshWorker.refresh_repository")
+    @patch("source_clone.refresh_worker.RefreshWorker.refresh_repository")
     def test_refresh_repositories_batch_result(
         self, mock_refresh, temp_git_repos, tmp_path
     ):
@@ -350,7 +350,7 @@ class TestRefreshManagerHelpers:
         assert result.base_path == tmp_path
         assert result.total_count == 0  # No repos in empty dir
 
-    @patch("gerrit_clone.refresh_manager.RefreshManager.refresh_repositories")
+    @patch("source_clone.refresh_manager.RefreshManager.refresh_repositories")
     def test_refresh_repositories_passes_config(self, mock_refresh, tmp_path):
         """Test that convenience function passes config correctly."""
         mock_refresh.return_value = RefreshBatchResult(

@@ -13,14 +13,14 @@ from typing import TypedDict
 
 import pytest
 
-from gerrit_clone.config import load_config
-from gerrit_clone.discovery import (
+from source_clone.config import load_config
+from source_clone.discovery import (
     GerritAPIDiscovery,
     GerritDiscoveryError,
     check_gerrit_api_access,
     discover_gerrit_base_url,
 )
-from gerrit_clone.gerrit_api import GerritAPIClient
+from source_clone.gerrit_api import GerritAPIClient
 
 
 class GerritServerConfig(TypedDict):

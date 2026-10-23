@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gerrit_clone.content_filter import (
+from source_clone.content_filter import (
     SCAN_PATTERNS,
     _check_git_filter_repo,
     _generate_replacement_string,
@@ -53,7 +53,7 @@ def _unrecorded(_repo_path: Path, _policy: object) -> Generator[list[str], None,
 
 @pytest.fixture
 def _no_policy_record() -> Generator[None, None, None]:
-    with patch("gerrit_clone.content_filter.content_filtering", _unrecorded):
+    with patch("source_clone.content_filter.content_filtering", _unrecorded):
         yield
 
 
@@ -346,7 +346,7 @@ class TestRemoveFilesFromBareRepo:
         assert removed == []
 
     @patch(
-        "gerrit_clone.content_filter._check_git_filter_repo",
+        "source_clone.content_filter._check_git_filter_repo",
         return_value=False,
     )
     def test_worktree_removal(
@@ -456,7 +456,7 @@ class TestReplaceTokensInHistory:
         """Raises RuntimeError when git-filter-repo is not available."""
         with (
             patch(
-                "gerrit_clone.content_filter._check_git_filter_repo",
+                "source_clone.content_filter._check_git_filter_repo",
                 return_value=False,
             ),
             pytest.raises(RuntimeError, match="git filter-repo"),
@@ -504,8 +504,8 @@ def _completed(returncode: int, stderr: str = "") -> subprocess.CompletedProcess
 class TestRemoveFilesFilterRepo:
     """Unit tests for the git filter-repo code path."""
 
-    @patch("gerrit_clone.content_filter._check_git_filter_repo", return_value=True)
-    @patch("gerrit_clone.content_git.run_tracked")
+    @patch("source_clone.content_filter._check_git_filter_repo", return_value=True)
+    @patch("source_clone.content_git.run_tracked")
     def test_glob_pattern_builds_path_glob_flag(
         self,
         mock_run: MagicMock,
@@ -526,8 +526,8 @@ class TestRemoveFilesFilterRepo:
         assert "*.pyc" in cmd
         assert "--invert-paths" in cmd
 
-    @patch("gerrit_clone.content_filter._check_git_filter_repo", return_value=True)
-    @patch("gerrit_clone.content_git.run_tracked")
+    @patch("source_clone.content_filter._check_git_filter_repo", return_value=True)
+    @patch("source_clone.content_git.run_tracked")
     def test_regex_pattern_builds_path_regex_flag(
         self,
         mock_run: MagicMock,
@@ -548,8 +548,8 @@ class TestRemoveFilesFilterRepo:
         assert r"\.pyc$" in cmd
         assert "--invert-paths" in cmd
 
-    @patch("gerrit_clone.content_filter._check_git_filter_repo", return_value=True)
-    @patch("gerrit_clone.content_git.run_tracked")
+    @patch("source_clone.content_filter._check_git_filter_repo", return_value=True)
+    @patch("source_clone.content_git.run_tracked")
     def test_exact_path_builds_path_flag(
         self,
         mock_run: MagicMock,
@@ -574,8 +574,8 @@ class TestRemoveFilesFilterRepo:
         assert cmd[idx + 1] == ".github/dependabot.yml"
         assert "--invert-paths" in cmd
 
-    @patch("gerrit_clone.content_filter._check_git_filter_repo", return_value=True)
-    @patch("gerrit_clone.content_git.run_tracked")
+    @patch("source_clone.content_filter._check_git_filter_repo", return_value=True)
+    @patch("source_clone.content_git.run_tracked")
     def test_mixed_patterns_combined_in_single_command(
         self,
         mock_run: MagicMock,
@@ -597,8 +597,8 @@ class TestRemoveFilesFilterRepo:
         assert "--path-glob" in cmd
         assert "--path-regex" in cmd
 
-    @patch("gerrit_clone.content_filter._check_git_filter_repo", return_value=True)
-    @patch("gerrit_clone.content_git.run_tracked")
+    @patch("source_clone.content_filter._check_git_filter_repo", return_value=True)
+    @patch("source_clone.content_git.run_tracked")
     def test_failure_raises_runtime_error(
         self,
         mock_run: MagicMock,
@@ -613,8 +613,8 @@ class TestRemoveFilesFilterRepo:
         with pytest.raises(RuntimeError, match="git filter-repo failed"):
             _remove_files_filter_repo(repo, ["*.pyc"])
 
-    @patch("gerrit_clone.content_filter._check_git_filter_repo", return_value=True)
-    @patch("gerrit_clone.content_git.run_tracked")
+    @patch("source_clone.content_filter._check_git_filter_repo", return_value=True)
+    @patch("source_clone.content_git.run_tracked")
     def test_empty_regex_pattern_is_skipped(
         self,
         mock_run: MagicMock,
@@ -638,8 +638,8 @@ class TestRemoveFilesFilterRepo:
         assert result == []
         mock_run.assert_not_called()
 
-    @patch("gerrit_clone.content_filter._check_git_filter_repo", return_value=True)
-    @patch("gerrit_clone.content_git.run_tracked")
+    @patch("source_clone.content_filter._check_git_filter_repo", return_value=True)
+    @patch("source_clone.content_git.run_tracked")
     def test_empty_regex_dropped_from_mixed_patterns(
         self,
         mock_run: MagicMock,
@@ -678,7 +678,7 @@ class TestApplyContentFilters:
         }
         # Mock the actual filtering to just verify matching
         with patch(
-            "gerrit_clone.content_filter.replace_tokens_in_history",
+            "source_clone.content_filter.replace_tokens_in_history",
             return_value=True,
         ) as mock_replace:
             success, error = apply_content_filters(
@@ -696,7 +696,7 @@ class TestApplyContentFilters:
             "testsuite/*": ["token123"],
         }
         with patch(
-            "gerrit_clone.content_filter.replace_tokens_in_history",
+            "source_clone.content_filter.replace_tokens_in_history",
         ) as mock_replace:
             success, _error = apply_content_filters(
                 Path("/fake"),
@@ -1056,7 +1056,7 @@ class TestScanRepoForSecrets:
             return next(calls, 1_000_000.0)
 
         monkeypatch.setattr(
-            "gerrit_clone.content_scan.time.monotonic",
+            "source_clone.content_scan.time.monotonic",
             fake_monotonic,
         )
         with pytest.raises(RuntimeError, match="Secret scan timed out"):
@@ -1076,11 +1076,11 @@ class TestApplyContentFiltersRedactSecrets:
         """When redact_secrets=True, scan_repo_for_secrets is called."""
         with (
             patch(
-                "gerrit_clone.content_filter.scan_repo_for_secrets",
+                "source_clone.content_filter.scan_repo_for_secrets",
                 return_value=["fake-token-123"],
             ) as mock_scan,
             patch(
-                "gerrit_clone.content_filter.replace_tokens_in_history",
+                "source_clone.content_filter.replace_tokens_in_history",
                 return_value=True,
             ) as mock_replace,
         ):
@@ -1101,7 +1101,7 @@ class TestApplyContentFiltersRedactSecrets:
     def test_redact_secrets_no_findings(self) -> None:
         """No error when scan finds nothing."""
         with patch(
-            "gerrit_clone.content_filter.scan_repo_for_secrets",
+            "source_clone.content_filter.scan_repo_for_secrets",
             return_value=[],
         ) as mock_scan:
             success, error = apply_content_filters(
@@ -1116,7 +1116,7 @@ class TestApplyContentFiltersRedactSecrets:
     def test_redact_secrets_false_skips_scan(self) -> None:
         """When redact_secrets=False (default), no scan runs."""
         with patch(
-            "gerrit_clone.content_filter.scan_repo_for_secrets",
+            "source_clone.content_filter.scan_repo_for_secrets",
         ) as mock_scan:
             success, error = apply_content_filters(
                 Path("/fake/repo"),
@@ -1131,7 +1131,7 @@ class TestApplyContentFiltersRedactSecrets:
         """An OSError from the scan is reported, not bubbled up."""
         # e.g. git binary missing -> FileNotFoundError from Popen.
         with patch(
-            "gerrit_clone.content_filter.scan_repo_for_secrets",
+            "source_clone.content_filter.scan_repo_for_secrets",
             side_effect=FileNotFoundError("git not found"),
         ):
             success, error = apply_content_filters(
@@ -1152,11 +1152,11 @@ class TestApplyContentFiltersRedactSecrets:
         }
         with (
             patch(
-                "gerrit_clone.content_filter.replace_tokens_in_history",
+                "source_clone.content_filter.replace_tokens_in_history",
                 return_value=True,
             ) as mock_replace,
             patch(
-                "gerrit_clone.content_filter.scan_repo_for_secrets",
+                "source_clone.content_filter.scan_repo_for_secrets",
                 return_value=["auto-discovered-token"],
             ),
         ):
@@ -1175,11 +1175,11 @@ class TestApplyContentFiltersRedactSecrets:
         """Failure during auto-redaction is reported."""
         with (
             patch(
-                "gerrit_clone.content_filter.scan_repo_for_secrets",
+                "source_clone.content_filter.scan_repo_for_secrets",
                 return_value=["leaked-token"],
             ),
             patch(
-                "gerrit_clone.content_filter.replace_tokens_in_history",
+                "source_clone.content_filter.replace_tokens_in_history",
                 return_value=False,
             ),
         ):
@@ -1289,6 +1289,6 @@ class TestMatchFilePatternMalformedGlob:
         # downstream re.fullmatch raises re.error; the guard must catch
         # it and return False rather than propagating.
         monkeypatch.setattr(
-            "gerrit_clone.content_filter._glob_to_regex", lambda _pat: "["
+            "source_clone.content_filter._glob_to_regex", lambda _pat: "["
         )
         assert match_file_pattern("some/path.txt", "whatever") is False

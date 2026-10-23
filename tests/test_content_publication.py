@@ -20,18 +20,18 @@ from unittest.mock import patch
 
 import pytest
 
-from gerrit_clone import content_stage, refresh_filtered
-from gerrit_clone.content_intent import IntentError, project_locked
-from gerrit_clone.content_intent_resolve import resolve_filters
-from gerrit_clone.content_spec import ContentFilterSpec
-from gerrit_clone.content_stage import (
+from source_clone import content_stage, refresh_filtered
+from source_clone.content_intent import IntentError, project_locked
+from source_clone.content_intent_resolve import resolve_filters
+from source_clone.content_spec import ContentFilterSpec
+from source_clone.content_stage import (
     STALE_INTENT_REFUSAL,
     UNJOURNALLED_REFUSAL,
     filter_repository,
 )
-from gerrit_clone.models import RefreshStatus, RetryPolicy
-from gerrit_clone.refresh_filtered import OVERTAKEN_REFUSAL
-from gerrit_clone.refresh_worker import RefreshWorker
+from source_clone.models import RefreshStatus, RetryPolicy
+from source_clone.refresh_filtered import OVERTAKEN_REFUSAL
+from source_clone.refresh_worker import RefreshWorker
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -186,7 +186,7 @@ class TestSymbolicLinks:
         self, tree: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Without O_NOFOLLOW, as on Windows, the link is checked for."""
-        monkeypatch.setattr("gerrit_clone.content_intent.NO_FOLLOW", 0)
+        monkeypatch.setattr("source_clone.content_intent.NO_FOLLOW", 0)
         target = tmp_path / "target.txt"
         target.write_text("keep\n")
         (tree / ".gerrit-clone").mkdir()
@@ -272,7 +272,7 @@ class TestOneRewriteAtATime:
         _git("clone", "-q", "--mirror", upstream.as_uri(), str(mirror))
         spec = _resolved(tree, "a.txt")
         assert spec.journal is not None
-        monkeypatch.setattr("gerrit_clone.content_stage.LOCK_WAIT", 0.3)
+        monkeypatch.setattr("source_clone.content_stage.LOCK_WAIT", 0.3)
         applied: list[str] = []
 
         def apply(*_args: object, **_kwargs: object) -> tuple[bool, str | None]:
@@ -283,7 +283,7 @@ class TestOneRewriteAtATime:
             reason = filter_repository(spec, mirror, "proj", 0, apply=apply)
 
         assert reason is not None
-        assert "another gerrit-clone run" in reason
+        assert "another source-clone or gerrit-clone run" in reason
         assert applied == []
         assert filter_repository(spec, mirror, "proj", 0, apply=apply) is None
         assert applied == ["proj"]

@@ -13,9 +13,9 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from gerrit_clone.cli import app
-from gerrit_clone.config import ConfigurationError, load_config
-from gerrit_clone.ssh_identity import looks_like_key_content, parse_identity_file
+from source_clone.cli import app
+from source_clone.config import ConfigurationError, load_config
+from source_clone.ssh_identity import looks_like_key_content, parse_identity_file
 
 # Assembled at runtime so secret scanners do not flag this fixture.
 _MARKER = "OPENSSH " + "PRIVATE KEY"

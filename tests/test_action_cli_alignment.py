@@ -4,7 +4,7 @@
 """Tests to verify alignment between action.yaml inputs and CLI flags.
 
 This test suite ensures that the GitHub Action interface (action.yaml) correctly
-maps to the gerrit-clone CLI flags. It catches mismatches like using `--path`
+maps to the source-clone CLI flags. It catches mismatches like using `--path`
 instead of `--output-path` in the action's shell script.
 """
 
@@ -20,7 +20,7 @@ import pytest
 import yaml
 
 # Import the CLI app to introspect its options
-from gerrit_clone.cli import clone as clone_command
+from source_clone.cli import clone as clone_command
 
 # Path to the action.yaml file (relative to project root)
 ACTION_YAML_PATH = Path(__file__).parent.parent / "action.yaml"
@@ -72,7 +72,7 @@ def cli_option_names() -> set[str]:
 @pytest.fixture
 def action_shell_script(action_yaml: dict[str, Any]) -> str:
     """Extract the main shell script from action.yaml that builds the command."""
-    # Find the step that builds and executes the gerrit-clone command
+    # Find the step that builds and executes the source-clone command
     steps = action_yaml.get("runs", {}).get("steps", [])
     for step in steps:
         if step.get("id") == "clone" and "run" in step:
@@ -331,11 +331,12 @@ class TestBooleanFlagConsistency:
 class TestCLIFlagExecution:
     """Test that CLI flags can actually be parsed (without executing clone)."""
 
-    def test_output_path_flag_is_accepted(self, tmp_path: Path) -> None:
-        """Verify --output-path flag is accepted by CLI."""
+    @pytest.mark.parametrize("command", ["source-clone", "gerrit-clone"])
+    def test_output_path_flag_is_accepted(self, tmp_path: Path, command: str) -> None:
+        """Verify --output-path flag is accepted by CLI under either name."""
         result = subprocess.run(
             [
-                "gerrit-clone",
+                command,
                 "clone",
                 "--host",
                 "test.example.org",
@@ -349,7 +350,7 @@ class TestCLIFlagExecution:
         )
         # Verify the command succeeded (help should return 0)
         assert result.returncode == 0, (
-            f"gerrit-clone failed with code {result.returncode}.\n"
+            f"{command} failed with code {result.returncode}.\n"
             f"stdout: {result.stdout}\n"
             f"stderr: {result.stderr}"
         )
@@ -366,7 +367,7 @@ class TestCLIFlagExecution:
         """Verify --path flag is NOT accepted by CLI (should suggest --output-path)."""
         result = subprocess.run(
             [
-                "gerrit-clone",
+                "source-clone",
                 "clone",
                 "--host",
                 "test.example.org",
@@ -589,3 +590,28 @@ class TestNoEmptyExpressions:
             "Found unclosed ${{{{ expression(s) in action.yaml run "
             "blocks:\n" + "\n".join(f"  - {v}" for v in violations)
         )
+
+
+@pytest.fixture
+def install_script(action_yaml: dict[str, Any]) -> str:
+    """The run block of the step that installs the CLI."""
+    for step in action_yaml["runs"]["steps"]:
+        script = step.get("run", "")
+        if "uvx " in script:
+            return str(script)
+    raise ValueError("Could not find the install step in action.yaml")
+
+
+class TestActionRunsSourceClone:
+    """The Action installs and runs the CLI as ``source-clone``."""
+
+    def test_install_step_uses_source_clone(self, install_script: str) -> None:
+        assert "command -v source-clone " in install_script
+        assert "uvx source-clone --help" in install_script
+        assert "exec uvx source-clone " in install_script
+        assert '"$HOME/.local/bin/source-clone"' in install_script
+        assert "gerrit-clone" not in install_script
+
+    def test_command_array_starts_source_clone(self, action_shell_script: str) -> None:
+        assert "cmd=(source-clone clone)" in action_shell_script
+        assert "gerrit-clone" not in action_shell_script

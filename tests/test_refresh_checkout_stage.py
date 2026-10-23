@@ -25,22 +25,22 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
-from gerrit_clone import content_stage, refresh_checkout_stage
-from gerrit_clone.cli import app
-from gerrit_clone.content_journal import refs_digest
-from gerrit_clone.content_origin import NO_PUSH_URL
-from gerrit_clone.content_policy import stored_policy
-from gerrit_clone.content_spec import ContentFilterSpec
-from gerrit_clone.models import RefreshResult, RefreshStatus, RetryPolicy
-from gerrit_clone.refresh_checkout_refs import PUBLISHED
-from gerrit_clone.refresh_checkout_stage import (
+from source_clone import content_stage, refresh_checkout_stage
+from source_clone.cli import app
+from source_clone.content_journal import refs_digest
+from source_clone.content_origin import NO_PUSH_URL
+from source_clone.content_policy import stored_policy
+from source_clone.content_spec import ContentFilterSpec
+from source_clone.models import RefreshResult, RefreshStatus, RetryPolicy
+from source_clone.refresh_checkout_refs import PUBLISHED
+from source_clone.refresh_checkout_stage import (
     CANNOT_FOLLOW_REFUSAL,
     NO_FILTER_REPO_REFUSAL,
     UPSTREAM_GONE_REFUSAL,
 )
-from gerrit_clone.refresh_filtered import OVERTAKEN_REFUSAL, SHALLOW_HISTORY_REFUSAL
-from gerrit_clone.refresh_manager import RefreshManager
-from gerrit_clone.refresh_worker import (
+from source_clone.refresh_filtered import OVERTAKEN_REFUSAL, SHALLOW_HISTORY_REFUSAL
+from source_clone.refresh_manager import RefreshManager
+from source_clone.refresh_worker import (
     FILTERED_REFRESH_REFUSAL,
     FILTERED_WORKING_COPY_REFUSAL,
     RefreshWorker,
@@ -278,7 +278,7 @@ class TestLeftAsItWas:
         _commit(upstream, "secret.txt", "hunter2\n")
 
         with patch(
-            "gerrit_clone.refresh_checkout_stage.apply_content_filters", _failing
+            "source_clone.refresh_checkout_stage.apply_content_filters", _failing
         ):
             result = _worker(_spec(checkout)).refresh_repository(checkout)
 
@@ -293,7 +293,7 @@ class TestLeftAsItWas:
         _commit(upstream, "secret.txt", "hunter2\n")
 
         with patch(
-            "gerrit_clone.refresh_checkout_stage.apply_content_filters", _failing
+            "source_clone.refresh_checkout_stage.apply_content_filters", _failing
         ):
             result = _worker(_spec(checkout), auto_stash=True).refresh_repository(
                 checkout
@@ -329,7 +329,7 @@ class TestLeftAsItWas:
         _commit(upstream, "file.txt", "two\n")
 
         with patch(
-            "gerrit_clone.refresh_checkout_stage.tempfile.mkdtemp",
+            "source_clone.refresh_checkout_stage.tempfile.mkdtemp",
             side_effect=OSError("no space left"),
         ):
             result = _worker(_spec(checkout), auto_stash=True).refresh_repository(
@@ -509,10 +509,10 @@ class TestLeftAsItWas:
 
         with (
             patch(
-                "gerrit_clone.content_filter._check_git_filter_repo", return_value=False
+                "source_clone.content_filter._check_git_filter_repo", return_value=False
             ),
             patch(
-                "gerrit_clone.refresh_checkout_stage._check_git_filter_repo",
+                "source_clone.refresh_checkout_stage._check_git_filter_repo",
                 return_value=False,
             ),
         ):
@@ -535,7 +535,7 @@ class TestLeftAsItWas:
             _git("config", "remote.origin.pushurl", "nowhere", cwd=repo)
             return False
 
-        with patch("gerrit_clone.content_policy.block_pushes", side_effect=halfway):
+        with patch("source_clone.content_policy.block_pushes", side_effect=halfway):
             result = _worker(_spec(checkout)).refresh_repository(checkout)
 
         assert result.status == RefreshStatus.FAILED
@@ -729,7 +729,7 @@ class TestCheckoutStage:
         seen: list[Path] = []
 
         with patch(
-            "gerrit_clone.refresh_filtered.shutil.rmtree",
+            "source_clone.refresh_filtered.shutil.rmtree",
             side_effect=OSError("busy"),
         ):
             done = _worker(_spec(checkout))._in_checkout_stage(

@@ -23,12 +23,12 @@ from unittest.mock import patch
 
 import pytest
 
-from gerrit_clone import clone_cleanup, clone_conflicts, clone_timeout
-from gerrit_clone.clone_cleanup import _hold_back, hold_back_running_claims
-from gerrit_clone.clone_conflicts import resolve_path_conflict
-from gerrit_clone.clone_nesting import apply_late_nested_protection
-from gerrit_clone.clone_orchestrator import CloneManager
-from gerrit_clone.clone_reservations import (
+from source_clone import clone_cleanup, clone_conflicts, clone_timeout
+from source_clone.clone_cleanup import _hold_back, hold_back_running_claims
+from source_clone.clone_conflicts import resolve_path_conflict
+from source_clone.clone_nesting import apply_late_nested_protection
+from source_clone.clone_orchestrator import CloneManager
+from source_clone.clone_reservations import (
     TargetOwnedError,
     _lingering,
     _owned_paths,
@@ -39,10 +39,10 @@ from gerrit_clone.clone_reservations import (
     release_claims,
     reserved_by_other,
 )
-from gerrit_clone.concurrent_utils import _TrackedThreadPoolExecutor
-from gerrit_clone.github_gh_cli import clone_with_gh_cli
-from gerrit_clone.github_worker import clone_github_repository
-from gerrit_clone.models import (
+from source_clone.concurrent_utils import _TrackedThreadPoolExecutor
+from source_clone.github_gh_cli import clone_with_gh_cli
+from source_clone.github_worker import clone_github_repository
+from source_clone.models import (
     CloneResult,
     CloneStatus,
     Config,
@@ -50,8 +50,8 @@ from gerrit_clone.models import (
     ProjectState,
     SourceType,
 )
-from gerrit_clone.pathing import get_project_path, move_conflicting_path
-from gerrit_clone.subprocess_tracking import (
+from source_clone.pathing import get_project_path, move_conflicting_path
+from source_clone.subprocess_tracking import (
     ProcessAbandonedError,
     _thread_state,
     abandon_generation,
@@ -60,7 +60,7 @@ from gerrit_clone.subprocess_tracking import (
     new_generation,
     refuse_generation,
 )
-from gerrit_clone.worker import CloneError, CloneWorker
+from source_clone.worker import CloneError, CloneWorker
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -391,7 +391,7 @@ class TestPartialCloneCleanup:
         future.set_running_or_notify_cancel()
         results: list[CloneResult] = []
 
-        with patch("gerrit_clone.clone_timeout._SETTLE_TIMEOUT_SECONDS", 0.2):
+        with patch("source_clone.clone_timeout._SETTLE_TIMEOUT_SECONDS", 0.2):
             begin = time.monotonic()
             manager._handle_clone_timeout({future: project}, results, OVERALL_TIMEOUT)
             elapsed = time.monotonic() - begin
@@ -491,7 +491,7 @@ class TestOwnership:
         _own(target)
         enter_generation(new_generation())
 
-        with patch("gerrit_clone.github_worker.run_tracked") as mock_run:
+        with patch("source_clone.github_worker.run_tracked") as mock_run:
             result = clone_github_repository(project, config)
 
         assert result.status == CloneStatus.FAILED
@@ -645,7 +645,7 @@ class TestOwnership:
         _own(target)
         enter_generation(new_generation())
 
-        with patch("gerrit_clone.worker.run_tracked") as mock_run:
+        with patch("source_clone.worker.run_tracked") as mock_run:
             result = CloneWorker(config).clone_project(project)
 
         assert result.status == CloneStatus.FAILED
@@ -723,7 +723,7 @@ class TestOwnership:
         (child_path / "cloned.txt").write_text("the child's clone")
 
         failed = subprocess.CompletedProcess(["gh"], 1, "", "clone failed")
-        with patch("gerrit_clone.github_gh_cli.run_tracked", return_value=failed):
+        with patch("source_clone.github_gh_cli.run_tracked", return_value=failed):
             result = clone_with_gh_cli(parent, config, parent_path, datetime.now(UTC))
 
         assert result.status == CloneStatus.FAILED
@@ -766,7 +766,7 @@ class TestOwnership:
             project=_project("incomplete"), status=CloneStatus.PENDING, path=target
         )
         with patch(
-            "gerrit_clone.clone_conflicts.shutil.rmtree",
+            "source_clone.clone_conflicts.shutil.rmtree",
             side_effect=PermissionError("read-only"),
         ):
             stop = resolve_path_conflict(
@@ -801,7 +801,7 @@ class TestOwnership:
         )
         refused = False
         with patch(
-            "gerrit_clone.clone_conflicts.reservation_beneath",
+            "source_clone.clone_conflicts.reservation_beneath",
             side_effect=abandon_meanwhile,
         ):
             try:
@@ -875,7 +875,7 @@ class TestOwnership:
                 rival_refused.append(False)
             enter_generation(generation)
 
-        with patch("gerrit_clone.clone_timeout.discard_partial_clone", observe):
+        with patch("source_clone.clone_timeout.discard_partial_clone", observe):
             manager._handle_clone_timeout(
                 {Future(): project}, [], OVERALL_TIMEOUT, generation
             )
@@ -930,7 +930,7 @@ class TestOwnership:
         (target / "objects").mkdir()
         future = _running_future()
 
-        with patch("gerrit_clone.clone_timeout._SETTLE_TIMEOUT_SECONDS", 0.2):
+        with patch("source_clone.clone_timeout._SETTLE_TIMEOUT_SECONDS", 0.2):
             manager._handle_clone_timeout(
                 {future: project}, [], OVERALL_TIMEOUT, generation
             )
@@ -998,7 +998,7 @@ class TestOwnership:
             CloneResult(project=intruder, status=CloneStatus.FAILED, path=target)
         )
 
-        with patch("gerrit_clone.clone_timeout._SETTLE_TIMEOUT_SECONDS", 0.2):
+        with patch("source_clone.clone_timeout._SETTLE_TIMEOUT_SECONDS", 0.2):
             manager._handle_clone_timeout(
                 {refused: intruder, _running_future(): owner},
                 [],
@@ -1137,8 +1137,8 @@ class TestOwnership:
         enter_generation(generation)
 
         with (
-            patch("gerrit_clone.github_worker._is_gh_cli_available", return_value=True),
-            patch("gerrit_clone.github_worker.clone_with_gh_cli") as gh_clone,
+            patch("source_clone.github_worker._is_gh_cli_available", return_value=True),
+            patch("source_clone.github_worker.clone_with_gh_cli") as gh_clone,
         ):
             gh_clone.return_value = CloneResult(
                 project=project, status=CloneStatus.SUCCESS, path=target
@@ -1162,8 +1162,8 @@ class TestOwnership:
 
         enter_generation(new_generation())
         with (
-            patch("gerrit_clone.github_worker._is_gh_cli_available", return_value=True),
-            patch("gerrit_clone.github_worker.clone_with_gh_cli") as gh_clone,
+            patch("source_clone.github_worker._is_gh_cli_available", return_value=True),
+            patch("source_clone.github_worker.clone_with_gh_cli") as gh_clone,
         ):
             result = clone_github_repository(project, gh_config)
 
@@ -1187,7 +1187,7 @@ class TestOwnership:
 
         with (
             patch(
-                "gerrit_clone.clone_timeout.wait_for_futures",
+                "source_clone.clone_timeout.wait_for_futures",
                 side_effect=KeyboardInterrupt,
             ),
             pytest.raises(KeyboardInterrupt),
@@ -1285,7 +1285,7 @@ class TestOwnership:
         generation = _own(target, project.name)
         abandon_generation(generation)
 
-        with patch("gerrit_clone.worker.run_tracked") as mock_run:
+        with patch("source_clone.worker.run_tracked") as mock_run:
             result = CloneWorker(config).clone_project(project)
 
         assert result.status == CloneStatus.FAILED
@@ -1312,8 +1312,8 @@ class TestOwnership:
 
         refused = False
         with (
-            patch("gerrit_clone.worker.recheck_nested_ancestor") as recheck,
-            patch("gerrit_clone.worker.run_tracked") as mock_run,
+            patch("source_clone.worker.recheck_nested_ancestor") as recheck,
+            patch("source_clone.worker.run_tracked") as mock_run,
         ):
             try:
                 CloneWorker(config)._perform_clone(project, target, result)
@@ -1367,7 +1367,7 @@ class TestOwnership:
 
         with (
             patch(
-                "gerrit_clone.clone_reservations.batch_abandoned",
+                "source_clone.clone_reservations.batch_abandoned",
                 side_effect=abandon_midway,
             ),
             pytest.raises(TargetOwnedError, match="abandoned"),
@@ -1627,7 +1627,7 @@ class TestOwnership:
             return set(), {late}
 
         with patch(
-            "gerrit_clone.clone_timeout.wait_for_futures",
+            "source_clone.clone_timeout.wait_for_futures",
             side_effect=finish_during_wait,
         ):
             manager._handle_clone_timeout(
@@ -1707,7 +1707,7 @@ class TestOwnership:
             )
 
         with patch(
-            "gerrit_clone.github_worker.run_tracked", side_effect=terminated_clone
+            "source_clone.github_worker.run_tracked", side_effect=terminated_clone
         ):
             result = clone_github_repository(project, gh_config)
 
@@ -1818,7 +1818,7 @@ class TestOwnership:
         running = _running_future()
 
         with patch(
-            "gerrit_clone.clone_timeout.wait_for_futures",
+            "source_clone.clone_timeout.wait_for_futures",
             return_value=(set(), {running}),
         ):
             manager._handle_clone_timeout(
@@ -1944,7 +1944,7 @@ class TestOwnership:
         child_future = _running_future()
 
         with patch(
-            "gerrit_clone.clone_timeout.wait_for_futures",
+            "source_clone.clone_timeout.wait_for_futures",
             return_value=(set(), {parent_future, child_future}),
         ):
             manager._handle_clone_timeout(
@@ -1991,7 +1991,7 @@ class TestOwnership:
         )
 
         with patch(
-            "gerrit_clone.clone_timeout.wait_for_futures",
+            "source_clone.clone_timeout.wait_for_futures",
             return_value=(set(), {parent_future}),
         ):
             manager._handle_clone_timeout(
@@ -2037,7 +2037,7 @@ class TestOwnership:
 
         with (
             patch(
-                "gerrit_clone.clone_timeout.wait_for_futures",
+                "source_clone.clone_timeout.wait_for_futures",
                 return_value=(set(), {parent_future, child_future}),
             ),
             patch.object(clone_cleanup, "hold_back_claim", finishes),
@@ -2087,7 +2087,7 @@ class TestOwnership:
 
         with (
             patch(
-                "gerrit_clone.clone_timeout.wait_for_futures",
+                "source_clone.clone_timeout.wait_for_futures",
                 return_value=(set(), {child_future}),
             ),
             patch.object(clone_cleanup, "hold_back_claim", finishes),
@@ -2120,7 +2120,7 @@ class TestOwnership:
         sibling_future = _running_future()
 
         with patch(
-            "gerrit_clone.clone_timeout.wait_for_futures",
+            "source_clone.clone_timeout.wait_for_futures",
             return_value=(set(), {alone_future, sibling_future}),
         ):
             manager._handle_clone_timeout(
@@ -2181,7 +2181,7 @@ class TestBatchReturnsPromptly:
             with (
                 patch.object(manager, "_clone_project_with_progress", slow_clone),
                 patch(
-                    "gerrit_clone.clone_orchestrator.consume_clone_futures",
+                    "source_clone.clone_orchestrator.consume_clone_futures",
                     consume,
                 ),
             ):

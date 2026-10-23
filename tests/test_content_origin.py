@@ -11,9 +11,9 @@ from unittest.mock import patch
 
 import pytest
 
-from gerrit_clone import content_origin
-from gerrit_clone.content_origin import NO_PUSH_URL, block_pushes, origin_kept
-from gerrit_clone.subprocess_tracking import (
+from source_clone import content_origin
+from source_clone.content_origin import NO_PUSH_URL, block_pushes, origin_kept
+from source_clone.subprocess_tracking import (
     ProcessAbandonedError,
     _thread_state,
     enter_generation,

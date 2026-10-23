@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gerrit_clone.models import (
+from source_clone.models import (
     BatchResult,
     CloneResult,
     CloneStatus,
@@ -281,8 +281,8 @@ class TestConfig:
         # Force a high core count on a non-Darwin path so the halved default
         # would exceed the ceiling without the cap.
         with (
-            patch("gerrit_clone.models.platform.system", return_value="Linux"),
-            patch("gerrit_clone.models.os.cpu_count", return_value=64),
+            patch("source_clone.models.platform.system", return_value="Linux"),
+            patch("source_clone.models.os.cpu_count", return_value=64),
         ):
             gerrit = Config(host="gerrit.example.org", source_type=SourceType.GERRIT)
             assert gerrit.effective_threads == 8

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from gerrit_clone.content_redaction import (
+from source_clone.content_redaction import (
     _generate_replacement_string,
     _write_replacements_file,
 )

@@ -25,12 +25,12 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
-from gerrit_clone.cli import app
-from gerrit_clone.content_intent import IntentError, intent_path
-from gerrit_clone.content_intent_resolve import resolve_filters
-from gerrit_clone.content_journal import sources
-from gerrit_clone.content_spec import ContentFilterSpec
-from gerrit_clone.content_stage import UNJOURNALLED_REFUSAL, filter_repository
+from source_clone.cli import app
+from source_clone.content_intent import IntentError, intent_path
+from source_clone.content_intent_resolve import resolve_filters
+from source_clone.content_journal import sources
+from source_clone.content_spec import ContentFilterSpec
+from source_clone.content_stage import UNJOURNALLED_REFUSAL, filter_repository
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -332,7 +332,7 @@ class TestUnreadableRefs:
             applied.append(args)
             return True, None
 
-        with patch("gerrit_clone.content_journal.refs_digest", return_value=None):
+        with patch("source_clone.content_journal.refs_digest", return_value=None):
             reason = filter_repository(
                 _spec(tree), tree / "com" / "parent", "com/parent", 60, apply=apply
             )
@@ -344,7 +344,7 @@ class TestUnreadableRefs:
     def test_without_refs_after_the_rewrite_stays_unfinished(self, tree: Path) -> None:
         spec = _spec(tree)
         with patch(
-            "gerrit_clone.content_journal.refs_digest", side_effect=["a" * 64, None]
+            "source_clone.content_journal.refs_digest", side_effect=["a" * 64, None]
         ):
             filter_repository(
                 spec, tree / "com" / "parent", "com/parent", 60, apply=_unchanged
@@ -365,7 +365,7 @@ class TestDurability:
         spec = _spec(tree)
 
         with patch(
-            "gerrit_clone.content_journal._sync_directory", side_effect=synced.append
+            "source_clone.content_journal._sync_directory", side_effect=synced.append
         ):
             for _ in range(2):
                 filter_repository(
@@ -442,7 +442,7 @@ class TestSources:
         assert sources(repo) == {"origin": first}
 
     def test_remotes_it_cannot_read_refuse_the_rewrite(self, tree: Path) -> None:
-        with patch("gerrit_clone.content_journal.sources", return_value=None):
+        with patch("source_clone.content_journal.sources", return_value=None):
             reason = filter_repository(
                 _spec(tree), tree / "com" / "parent", "com/parent", 60, apply=_unchanged
             )
@@ -459,7 +459,7 @@ class TestSources:
             if status is None
             else subprocess.CompletedProcess([], status, stdout="", stderr="")
         )
-        with patch("gerrit_clone.content_journal.git", return_value=ran):
+        with patch("source_clone.content_journal.git", return_value=ran):
             assert sources(tree / "com" / "parent") == found
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")

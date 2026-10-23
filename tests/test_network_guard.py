@@ -21,8 +21,8 @@ from typing import Any
 
 import pytest
 
-from gerrit_clone.discovery import GerritAPIDiscovery
-from gerrit_clone.models import Config
+from source_clone.discovery import GerritAPIDiscovery
+from source_clone.models import Config
 
 
 def _clear(attempts: list[str]) -> None:

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from gerrit_clone.url_credentials import (
+from source_clone.url_credentials import (
     REDACTED,
     UNRECOGNISED_URL,
     RemoteLocation,

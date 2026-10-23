@@ -15,8 +15,8 @@ if TYPE_CHECKING:
 
 import pytest
 
-from gerrit_clone.clone_manager import clone_repositories
-from gerrit_clone.models import (
+from source_clone.clone_manager import clone_repositories
+from source_clone.models import (
     CloneStatus,
     Config,
     Project,
@@ -170,13 +170,13 @@ class TestGitHubRefreshInCloneManager:
             duration_seconds=0.1,
         )
 
-        with patch("gerrit_clone.clone_manager.RefreshWorker") as MockRefreshWorker:
+        with patch("source_clone.clone_manager.RefreshWorker") as MockRefreshWorker:
             mock_worker = Mock()
             mock_worker.refresh_repository.return_value = mock_refresh_result
             MockRefreshWorker.return_value = mock_worker
 
             # Mock discovery to return our test project
-            with patch("gerrit_clone.clone_manager.discover_projects") as mock_discover:
+            with patch("source_clone.clone_manager.discover_projects") as mock_discover:
                 mock_discover.return_value = ([github_project], {})
 
                 # Run clone_repositories with refresh enabled
@@ -266,12 +266,12 @@ class TestGitHubRefreshInCloneManager:
             duration_seconds=0.1,
         )
 
-        with patch("gerrit_clone.clone_manager.RefreshWorker") as MockRefreshWorker:
+        with patch("source_clone.clone_manager.RefreshWorker") as MockRefreshWorker:
             mock_worker = Mock()
             mock_worker.refresh_repository.return_value = mock_refresh_result
             MockRefreshWorker.return_value = mock_worker
 
-            with patch("gerrit_clone.clone_manager.discover_projects") as mock_discover:
+            with patch("source_clone.clone_manager.discover_projects") as mock_discover:
                 mock_discover.return_value = ([github_project], {})
 
                 clone_repositories(github_config)
@@ -290,7 +290,7 @@ class TestGitHubRefreshInCloneManager:
         """Test that --no-refresh flag skips GitHub repo refresh."""
         github_config.auto_refresh = False
 
-        with patch("gerrit_clone.clone_manager.discover_projects") as mock_discover:
+        with patch("source_clone.clone_manager.discover_projects") as mock_discover:
             mock_discover.return_value = ([github_project], {})
 
             batch_result = clone_repositories(github_config)
@@ -317,12 +317,12 @@ class TestGitHubRefreshInCloneManager:
             duration_seconds=0.1,
         )
 
-        with patch("gerrit_clone.clone_manager.RefreshWorker") as MockRefreshWorker:
+        with patch("source_clone.clone_manager.RefreshWorker") as MockRefreshWorker:
             mock_worker = Mock()
             mock_worker.refresh_repository.return_value = mock_refresh_result
             MockRefreshWorker.return_value = mock_worker
 
-            with patch("gerrit_clone.clone_manager.discover_projects") as mock_discover:
+            with patch("source_clone.clone_manager.discover_projects") as mock_discover:
                 mock_discover.return_value = ([github_project], {})
                 clone_repositories(github_config)
 
@@ -348,12 +348,12 @@ class TestGitHubRefreshInCloneManager:
             duration_seconds=0.1,
         )
 
-        with patch("gerrit_clone.clone_manager.RefreshWorker") as MockRefreshWorker:
+        with patch("source_clone.clone_manager.RefreshWorker") as MockRefreshWorker:
             mock_worker = Mock()
             mock_worker.refresh_repository.return_value = mock_refresh_result
             MockRefreshWorker.return_value = mock_worker
 
-            with patch("gerrit_clone.clone_manager.discover_projects") as mock_discover:
+            with patch("source_clone.clone_manager.discover_projects") as mock_discover:
                 mock_discover.return_value = ([github_project], {})
 
                 clone_repositories(github_config)
@@ -384,12 +384,12 @@ class TestGitHubRefreshInCloneManager:
             duration_seconds=0.1,
         )
 
-        with patch("gerrit_clone.clone_manager.RefreshWorker") as MockRefreshWorker:
+        with patch("source_clone.clone_manager.RefreshWorker") as MockRefreshWorker:
             mock_worker = Mock()
             mock_worker.refresh_repository.return_value = mock_refresh_result
             MockRefreshWorker.return_value = mock_worker
 
-            with patch("gerrit_clone.clone_manager.discover_projects") as mock_discover:
+            with patch("source_clone.clone_manager.discover_projects") as mock_discover:
                 mock_discover.return_value = ([github_project], {})
 
                 clone_repositories(github_config)
@@ -482,12 +482,12 @@ class TestGitHubRefreshInCloneManager:
             duration_seconds=0.1,
         )
 
-        with patch("gerrit_clone.clone_manager.RefreshWorker") as MockRefreshWorker:
+        with patch("source_clone.clone_manager.RefreshWorker") as MockRefreshWorker:
             mock_worker = Mock()
             mock_worker.refresh_repository.return_value = mock_refresh_result
             MockRefreshWorker.return_value = mock_worker
 
-            with patch("gerrit_clone.clone_manager.discover_projects") as mock_discover:
+            with patch("source_clone.clone_manager.discover_projects") as mock_discover:
                 mock_discover.return_value = (projects, {})
 
                 clone_repositories(github_config)
@@ -519,12 +519,12 @@ class TestGitHubRefreshInCloneManager:
             error_message="git fetch failed: unable to connect",
         )
 
-        with patch("gerrit_clone.clone_manager.RefreshWorker") as MockRefreshWorker:
+        with patch("source_clone.clone_manager.RefreshWorker") as MockRefreshWorker:
             mock_worker = Mock()
             mock_worker.refresh_repository.return_value = mock_refresh_result
             MockRefreshWorker.return_value = mock_worker
 
-            with patch("gerrit_clone.clone_manager.discover_projects") as mock_discover:
+            with patch("source_clone.clone_manager.discover_projects") as mock_discover:
                 mock_discover.return_value = ([github_project], {})
 
                 batch_result = clone_repositories(github_config)
@@ -552,14 +552,14 @@ class TestGitHubRefreshInCloneManager:
     ) -> None:
         """Test that refresh exceptions include the project name in the error message."""
         # Mock a refresh exception
-        with patch("gerrit_clone.clone_manager.RefreshWorker") as MockRefreshWorker:
+        with patch("source_clone.clone_manager.RefreshWorker") as MockRefreshWorker:
             mock_worker = Mock()
             mock_worker.refresh_repository.side_effect = RuntimeError(
                 "Unexpected error"
             )
             MockRefreshWorker.return_value = mock_worker
 
-            with patch("gerrit_clone.clone_manager.discover_projects") as mock_discover:
+            with patch("source_clone.clone_manager.discover_projects") as mock_discover:
                 mock_discover.return_value = ([github_project], {})
 
                 batch_result = clone_repositories(github_config)
@@ -615,10 +615,10 @@ class TestGitHubRefreshInCloneManager:
         # Don't create any commits - this simulates an empty repository
 
         # Mock get_current_commit_sha to return None (empty local repo)
-        with patch("gerrit_clone.clone_manager.get_current_commit_sha") as mock_get_sha:
+        with patch("source_clone.clone_manager.get_current_commit_sha") as mock_get_sha:
             mock_get_sha.return_value = None  # No commits locally
 
-            with patch("gerrit_clone.clone_manager.discover_projects") as mock_discover:
+            with patch("source_clone.clone_manager.discover_projects") as mock_discover:
                 mock_discover.return_value = ([empty_project], {})
 
                 # Run clone_repositories with auto_refresh enabled

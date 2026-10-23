@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tests for CLI netrc and HTTP credential options in gerrit-clone.
+Tests for CLI netrc and HTTP credential options in source-clone.
 
 This module tests the CLI integration of credential options including:
 - --http-user/--http-password: Explicit HTTP credentials (highest priority)
@@ -26,9 +26,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from gerrit_clone.cli import app
-from gerrit_clone.error_codes import ExitCode
-from gerrit_clone.netrc import CredentialSource, GerritCredentials
+from source_clone.cli import app
+from source_clone.error_codes import ExitCode
+from source_clone.netrc import CredentialSource, GerritCredentials
 
 
 def create_mock_clone_result() -> MagicMock:
@@ -106,8 +106,8 @@ class TestNetrcFileOption:
         assert result.exit_code != 0
         assert "does not exist" in result.output or "Invalid value" in result.output
 
-    @patch("gerrit_clone.cli.discover_projects")
-    @patch("gerrit_clone.cli.clone_repositories")
+    @patch("source_clone.cli.discover_projects")
+    @patch("source_clone.cli.clone_repositories")
     def test_netrc_file_option_accepts_valid_file(
         self, mock_clone, mock_discover, runner, netrc_file, tmp_path
     ):
@@ -135,8 +135,8 @@ class TestNetrcFileOption:
 class TestNoNetrcOption:
     """Tests for --no-netrc option."""
 
-    @patch("gerrit_clone.cli.discover_projects")
-    @patch("gerrit_clone.cli.clone_repositories")
+    @patch("source_clone.cli.discover_projects")
+    @patch("source_clone.cli.clone_repositories")
     def test_no_netrc_option_accepted(
         self, mock_clone, mock_discover, runner, netrc_file, tmp_path
     ):
@@ -190,8 +190,8 @@ class TestNetrcRequiredOption:
         assert result.exit_code == ExitCode.CONFIGURATION_ERROR
         assert "--netrc-required" in result.output
 
-    @patch("gerrit_clone.cli.discover_projects")
-    @patch("gerrit_clone.cli.clone_repositories")
+    @patch("source_clone.cli.discover_projects")
+    @patch("source_clone.cli.clone_repositories")
     def test_netrc_required_succeeds_when_present(
         self, mock_clone, mock_discover, runner, netrc_file, tmp_path
     ):
@@ -221,8 +221,8 @@ class TestNetrcRequiredOption:
 class TestNetrcOptionalOption:
     """Tests for --netrc-optional option (default behavior)."""
 
-    @patch("gerrit_clone.cli.discover_projects")
-    @patch("gerrit_clone.cli.clone_repositories")
+    @patch("source_clone.cli.discover_projects")
+    @patch("source_clone.cli.clone_repositories")
     def test_netrc_optional_continues_when_missing(
         self, mock_clone, mock_discover, runner, empty_netrc_dir, tmp_path
     ):
@@ -246,8 +246,8 @@ class TestNetrcOptionalOption:
         # Should not fail due to missing netrc when optional
         assert "netrc-required" not in result.output.lower() or result.exit_code == 0
 
-    @patch("gerrit_clone.cli.discover_projects")
-    @patch("gerrit_clone.cli.clone_repositories")
+    @patch("source_clone.cli.discover_projects")
+    @patch("source_clone.cli.clone_repositories")
     def test_default_is_netrc_optional(
         self, mock_clone, mock_discover, runner, empty_netrc_dir, tmp_path
     ):
@@ -275,9 +275,9 @@ class TestNetrcOptionalOption:
 class TestNetrcWithHttps:
     """Tests for netrc integration with HTTPS cloning."""
 
-    @patch("gerrit_clone.cli.discover_projects")
-    @patch("gerrit_clone.cli.clone_repositories")
-    @patch("gerrit_clone.cli.resolve_gerrit_credentials")
+    @patch("source_clone.cli.discover_projects")
+    @patch("source_clone.cli.clone_repositories")
+    @patch("source_clone.cli.resolve_gerrit_credentials")
     def test_netrc_credentials_loaded_with_https(
         self,
         mock_resolve_creds,
@@ -319,8 +319,8 @@ class TestNetrcWithHttps:
 class TestHttpCredentialOptions:
     """Tests for --http-user and --http-password CLI options."""
 
-    @patch("gerrit_clone.cli.discover_projects")
-    @patch("gerrit_clone.cli.clone_repositories")
+    @patch("source_clone.cli.discover_projects")
+    @patch("source_clone.cli.clone_repositories")
     def test_http_user_option_accepted(
         self, mock_clone, mock_discover, runner, tmp_path
     ):
@@ -348,8 +348,8 @@ class TestHttpCredentialOptions:
         assert "Error: No such option" not in result.output
         assert "unrecognized" not in result.output.lower()
 
-    @patch("gerrit_clone.cli.discover_projects")
-    @patch("gerrit_clone.cli.clone_repositories")
+    @patch("source_clone.cli.discover_projects")
+    @patch("source_clone.cli.clone_repositories")
     def test_http_credentials_take_priority_over_netrc(
         self, mock_clone, mock_discover, runner, netrc_file, tmp_path
     ):
@@ -378,8 +378,8 @@ class TestHttpCredentialOptions:
         # Should not fail - CLI credentials should be used
         assert "Error" not in result.output or result.exit_code == 0
 
-    @patch("gerrit_clone.cli.discover_projects")
-    @patch("gerrit_clone.cli.clone_repositories")
+    @patch("source_clone.cli.discover_projects")
+    @patch("source_clone.cli.clone_repositories")
     def test_http_user_without_password_uses_netrc(
         self, mock_clone, mock_discover, runner, netrc_file, tmp_path
     ):

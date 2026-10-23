@@ -3,11 +3,28 @@
 # SPDX-FileCopyrightText: 2025 Matthew Watkins <mwatkins@linuxfoundation.org>
 -->
 
-# 🔄 Gerrit Clone
+# 🔄 Source Clone
 
-A production-ready multi-threaded CLI tool and GitHub Action for bulk cloning
-repositories from Gerrit servers with automatic API discovery. Designed for
+A production-ready multi-threaded CLI tool and GitHub Action that bulk-clones,
+mirrors and refreshes repositories from Gerrit servers and GitHub
+organisations or user accounts, with automatic API discovery. Designed for
 reliability, speed, and CI/CD compatibility.
+
+## Renamed from gerrit-clone
+
+This tool used to be `gerrit-clone`. The PyPI package and the command are now
+`source-clone`.
+
+- The `gerrit-clone` command still works: the package installs it as an alias
+  of `source-clone`.
+- Environment variables (`GERRIT_*`, `GERRIT_CLONE_TOKEN`, `OUTPUT_PATH` and
+  the rest), command options and Action inputs have not changed.
+- Names the tool writes into your trees and repositories keep the old name, so
+  trees an earlier release wrote keep working: the `.gerrit-clone/` directory
+  and the `gerrit-clone.*` git config keys.
+- The tool reads `~/.config/source-clone/` first, then falls back to
+  `~/.config/gerrit-clone/`.
+- Earlier releases remain on PyPI under the `gerrit-clone` name.
 
 ## Features
 
@@ -44,23 +61,25 @@ reliability, speed, and CI/CD compatibility.
 For one-time execution without installation:
 
 ```bash
-uvx gerrit-clone --host gerrit.example.org
+uvx source-clone clone --host gerrit.example.org
 ```
 
 ### Using uv
 
 ```bash
-uv tool install gerrit-clone
-./gerrit-clone --host gerrit.example.org
+uv tool install source-clone
+
+# The installed command is on PATH
+source-clone clone --host gerrit.example.org
 ```
 
 ### From Source
 
 ```bash
-git clone https://github.com/lfreleng-actions/gerrit-clone-action.git
-cd gerrit-clone-action
+git clone https://github.com/lfreleng-actions/source-clone-action.git
+cd source-clone-action
 uv sync
-uv run gerrit-clone --host gerrit.example.org
+uv run source-clone clone --host gerrit.example.org
 ```
 
 ## CLI Usage
@@ -69,8 +88,9 @@ uv run gerrit-clone --host gerrit.example.org
 
 The tool provides five main commands:
 
-- **`clone`**: Clone all repositories from a Gerrit server
-- **`refresh`**: Refresh local content cloned from a Gerrit server
+- **`clone`**: Clone all repositories from a Gerrit server or GitHub
+  organisation
+- **`refresh`**: Refresh local content cloned from a Gerrit server or GitHub
 - **`mirror`**: Mirror repositories from a Gerrit server to GitHub
 - **`reset`**: Remove all repositories from a GitHub organization
 - **`config`**: Show effective configuration from all sources
@@ -80,13 +100,13 @@ The tool provides five main commands:
 Clone all active repositories from a Gerrit server:
 
 ```bash
-gerrit-clone clone --host gerrit.example.org
+source-clone clone --host gerrit.example.org
 ```
 
 Clone to a specific directory with custom thread count:
 
 ```bash
-gerrit-clone clone --host gerrit.example.org \
+source-clone clone --host gerrit.example.org \
   --output-path ./repositories \
   --threads 8
 ```
@@ -94,7 +114,7 @@ gerrit-clone clone --host gerrit.example.org \
 Clone with shallow depth and specific branch (requires --no-mirror):
 
 ```bash
-gerrit-clone clone --host gerrit.example.org \
+source-clone clone --host gerrit.example.org \
   --no-mirror \
   --depth 10 \
   --branch main \
@@ -104,14 +124,14 @@ gerrit-clone clone --host gerrit.example.org \
 Clone without mirror mode (standard clone with working directory):
 
 ```bash
-gerrit-clone clone --host gerrit.example.org \
+source-clone clone --host gerrit.example.org \
   --no-mirror
 ```
 
 Include archived repositories and use custom SSH key:
 
 ```bash
-gerrit-clone clone --host gerrit.example.org \
+source-clone clone --host gerrit.example.org \
   --include-archived \
   --ssh-user myuser \
   --ssh-identity-file ~/.ssh/gerrit_rsa
@@ -132,7 +152,7 @@ An empty environment variable or a `null` config-file `path` counts as
 unset, so the next source applies. When no source holds a value, or
 the value that applies is empty or a spelling of `.` (`.` components and
 slashes with no leading slash: `.`, `./`, `.//`, `./.`, `././`),
-`gerrit-clone` automatically creates an organized folder structure to
+`source-clone` automatically creates an organized folder structure to
 prevent naming conflicts when cloning from different sources. An
 explicit `--output-path .` or `--output-path ""` gives that structure
 even when a lower source names a path:
@@ -141,10 +161,10 @@ even when a lower source names a path:
 
 ```bash
 # Clones to: ./gerrit.example.org/project-name
-gerrit-clone clone --host gerrit.example.org
+source-clone clone --host gerrit.example.org
 
 # Strips port from output-path: ./gerrit.example.org/project-name
-gerrit-clone clone --host gerrit.example.org:29418
+source-clone clone --host gerrit.example.org:29418
 ```
 
 **GitHub sources** (these need a token, even for public repositories:
@@ -152,21 +172,21 @@ set `GITHUB_TOKEN` or `GERRIT_CLONE_TOKEN`, or pass `--github-token`):
 
 ```bash
 # Clones to: ./github.com/myorg/repo-name
-gerrit-clone clone --host github.com/myorg
+source-clone clone --host github.com/myorg
 
 # GitHub Enterprise: ./github.enterprise.com/engineering/repo-name
-gerrit-clone clone --host github.enterprise.com/engineering
+source-clone clone --host github.enterprise.com/engineering
 ```
 
 **Custom path (no auto-structure):**
 
 ```bash
 # Clones directly to: ./my-repos/project-name
-gerrit-clone clone --host gerrit.example.org --output-path ./my-repos
+source-clone clone --host gerrit.example.org --output-path ./my-repos
 
 # Clones directly to: $PWD/project-name (the tool keeps an absolute path
 # as given, even when it names the current directory)
-gerrit-clone clone --host gerrit.example.org --output-path "$PWD"
+source-clone clone --host gerrit.example.org --output-path "$PWD"
 ```
 
 The tool uses any value that is not empty or a spelling of `.` exactly
@@ -179,7 +199,7 @@ clone operations in the same directory (e.g., on GitHub Actions runners).
 
 ### Understanding Mirror Mode
 
-By default, `gerrit-clone` uses `git clone --mirror` to create **bare repositories**
+By default, `source-clone` uses `git clone --mirror` to create **bare repositories**
 that contain complete metadata from the remote repository:
 
 - ✅ All branches (not just the default)
@@ -222,12 +242,13 @@ rather than reporting success.
 Content filtering (`--remove-files`, `--git-filter`, `--redact-secrets`) is a
 decision about a whole clone tree, and later runs keep to it. The first run
 that filters writes the decision to `.gerrit-clone/filter-policy.json` at the
-root of the tree. Every later `clone`, `refresh` or `mirror` in that tree
-applies it, even without the options: to repositories cloned later, to files
-that appear upstream later, and to a repository you delete and clone again.
-Options add to the decision; leaving one out never removes a filter. The file
-keeps each `--git-filter` token as a SHA-256 digest only, so a run must pass
-those tokens again. If a run lacks a project's tokens, `refresh` skips that
+root of the tree; the directory keeps the old tool name, for compatibility.
+Every later `clone`, `refresh` or `mirror` in that tree applies it, even
+without the options: to repositories cloned later, to files that appear
+upstream later, and to a repository you delete and clone again. Options add
+to the decision; leaving one out never removes a filter. The file keeps each
+`--git-filter` token as a SHA-256 digest only, so a run must pass those tokens
+again. If a run lacks a project's tokens, `refresh` skips that
 project, `clone` exits with a filtering failure, and `mirror` aborts the
 whole batch before it pushes anything; each gives the number of tokens the
 project needs. A file the tool cannot read stops the run.
@@ -277,38 +298,38 @@ A `--dry-run` applies no content filters and records nothing.
 Refresh all repositories in the current directory:
 
 ```bash
-gerrit-clone refresh
+source-clone refresh
 ```
 
 Refresh ONAP repositories in a specific directory:
 
 ```bash
-gerrit-clone refresh --output-path ~/repos/onap
+source-clone refresh --output-path ~/repos/onap
 ```
 
 Fetch only (don't merge changes):
 
 ```bash
-gerrit-clone refresh --output-path ~/onap --fetch-only
+source-clone refresh --output-path ~/onap --fetch-only
 ```
 
 Use 16 threads for faster refresh:
 
 ```bash
-gerrit-clone refresh --output-path ~/onap --threads 16
+source-clone refresh --output-path ~/onap --threads 16
 ```
 
 Automatically stash uncommitted changes before refresh:
 
 ```bash
-gerrit-clone refresh --output-path ~/onap --auto-stash
+source-clone refresh --output-path ~/onap --auto-stash
 ```
 
 Force refresh (stash local changes, fix detached HEAD, restore feature-branch
 checkouts to the default branch):
 
 ```bash
-gerrit-clone refresh --output-path ~/onap --force
+source-clone refresh --output-path ~/onap --force
 ```
 
 Hard reset: make local content exactly match the remote, discarding local-only
@@ -316,7 +337,7 @@ commits and any divergence. This is the single, explicit way to force-reset
 local content and is a strict superset of `--force`:
 
 ```bash
-gerrit-clone refresh --output-path ~/onap --force-hard
+source-clone refresh --output-path ~/onap --force-hard
 ```
 
 > **Note:** `--force-hard` is destructive: it permanently discards
@@ -326,19 +347,19 @@ gerrit-clone refresh --output-path ~/onap --force-hard
 Use rebase strategy instead of merge:
 
 ```bash
-gerrit-clone refresh --output-path ~/onap --strategy rebase
+source-clone refresh --output-path ~/onap --strategy rebase
 ```
 
 Dry run to see what changes would occur:
 
 ```bash
-gerrit-clone refresh --output-path ~/onap --dry-run
+source-clone refresh --output-path ~/onap --dry-run
 ```
 
 Refresh only the repositories cloned from Gerrit:
 
 ```bash
-gerrit-clone refresh --output-path ~/repos --gerrit-only
+source-clone refresh --output-path ~/repos --gerrit-only
 ```
 
 By default, `refresh` refreshes every repository under the path, wherever
@@ -364,7 +385,7 @@ Here's a complete example showing the refresh workflow:
 
 ```bash
 # Refresh ONAP repositories with auto-stash and 16 threads
-gerrit-clone refresh \
+source-clone refresh \
   --output-path ~/repos/onap \
   --threads 16 \
   --auto-stash \
@@ -374,7 +395,7 @@ gerrit-clone refresh \
 **Expected Output**:
 
 ```text
-🏷️  gerrit-clone refresh version X.Y.Z
+🏷️  source-clone refresh version X.Y.Z
 
 Refresh Configuration
 Base Path: ~/repos/onap
@@ -440,13 +461,13 @@ Issues:
 Mirror all repositories from Gerrit to a GitHub organization:
 
 ```bash
-gerrit-clone mirror --server gerrit.onap.org --org modeseven-onap
+source-clone mirror --server gerrit.onap.org --org modeseven-onap
 ```
 
 Mirror specific projects with hierarchical filtering:
 
 ```bash
-gerrit-clone mirror \
+source-clone mirror \
   --server gerrit.onap.org \
   --org modeseven-onap \
   --output-path /tmp/modeseven-onap \
@@ -456,7 +477,7 @@ gerrit-clone mirror \
 Use HTTP API for discovery and HTTPS for cloning (no SSH required):
 
 ```bash
-gerrit-clone mirror \
+source-clone mirror \
   --server gerrit.onap.org \
   --org modeseven-onap \
   --discovery-method http \
@@ -466,7 +487,7 @@ gerrit-clone mirror \
 Include archived/read-only repositories:
 
 ```bash
-gerrit-clone mirror \
+source-clone mirror \
   --server gerrit.onap.org \
   --org modeseven-onap \
   --include-archived
@@ -475,7 +496,7 @@ gerrit-clone mirror \
 Delete and recreate existing GitHub repositories and overwrite local clones:
 
 ```bash
-gerrit-clone mirror \
+source-clone mirror \
   --server gerrit.onap.org \
   --org modeseven-onap \
   --recreate \
@@ -492,7 +513,7 @@ personal access token that has the required permissions:
 
 ```bash
 export GITHUB_TOKEN=github_pat_your_token_here
-gerrit-clone mirror --server gerrit.example.org --org your-org
+source-clone mirror --server gerrit.example.org --org your-org
 ```
 
 **Token Requirements**:
@@ -513,7 +534,7 @@ Here's a complete example showing the full workflow with expected output:
 export GITHUB_TOKEN="github_pat_XXXXXXXX"
 
 # Mirror specific projects with recreation
-gerrit-clone mirror \
+source-clone mirror \
   --server gerrit.onap.org \
   --org modeseven-onap \
   --output-path /tmp/modeseven-onap \
@@ -525,7 +546,7 @@ gerrit-clone mirror \
 **Expected Output**:
 
 ```text
-🏷️  gerrit-clone mirror version X.Y.Z
+🏷️  source-clone mirror version X.Y.Z
 
 🔑 Authenticating with GitHub...
 ✓ Using specified organization: modeseven-onap
@@ -557,19 +578,19 @@ Remove all repositories from a GitHub organization (with safety prompts):
 
 ```bash
 # By default, excludes automation PRs from counts
-gerrit-clone reset --org my-test-org
+source-clone reset --org my-test-org
 ```
 
 Include automation PRs (dependabot, pre-commit.ci, etc.) in counts:
 
 ```bash
-gerrit-clone reset --org my-test-org --include-automation-prs
+source-clone reset --org my-test-org --include-automation-prs
 ```
 
 Compare local Gerrit clone with remote GitHub before deletion:
 
 ```bash
-gerrit-clone reset --org my-test-org \
+source-clone reset --org my-test-org \
   --output-path /tmp/gerrit-mirror \
   --compare
 ```
@@ -577,7 +598,7 @@ gerrit-clone reset --org my-test-org \
 Delete immediately without confirmation (DANGEROUS!):
 
 ```bash
-gerrit-clone reset --org my-test-org --no-confirm
+source-clone reset --org my-test-org --no-confirm
 ```
 
 **⚠️ WARNING: This operation is DESTRUCTIVE and IRREVERSIBLE!**
@@ -623,7 +644,7 @@ To create a classic token:
 
 ```bash
 export GITHUB_TOKEN="ghp_your_classic_token_here"
-gerrit-clone reset --org my-test-org
+source-clone reset --org my-test-org
 ```
 
 ### Reset Command Options
@@ -652,7 +673,7 @@ gerrit-clone reset --org my-test-org
 ### Clone Command Options
 
 ```text
-Usage: gerrit-clone clone [OPTIONS]
+Usage: source-clone clone [OPTIONS]
 
 Options:
   --host, -h TEXT                 Source hostname (Gerrit server or GitHub
@@ -784,12 +805,12 @@ export GERRIT_RETRY_ATTEMPTS=5
 export GERRIT_DISCOVERY_METHOD=ssh
 export GERRIT_CLEANUP=0
 
-gerrit-clone  # Uses environment variables
+source-clone clone  # Uses environment variables
 ```
 
 ### Using .netrc Files
 
-Gerrit-clone supports loading HTTP credentials from `.netrc` files, following
+Source-clone supports loading HTTP credentials from `.netrc` files, following
 the standard format used by curl and other tools.
 
 **Search order:**
@@ -838,20 +859,22 @@ ecosystem.
 
 ```bash
 # Use CLI credentials (highest priority)
-gerrit-clone clone --host gerrit.example.org --https \
+source-clone clone --host gerrit.example.org --https \
   --http-user myuser --http-password mytoken
 
 # Use .netrc file
-gerrit-clone clone --host gerrit.example.org --https \
+source-clone clone --host gerrit.example.org --https \
   --netrc-file ~/.netrc.gerrit
 
 # Require .netrc credentials (fail if not found)
-gerrit-clone clone --host gerrit.example.org --https --netrc-required
+source-clone clone --host gerrit.example.org --https --netrc-required
 ```
 
 ### Configuration Files
 
-Create `~/.config/gerrit-clone/config.yaml`:
+Create `~/.config/source-clone/config.yaml`. When that directory holds no
+config file, the tool reads `~/.config/gerrit-clone/`, the directory earlier
+releases used:
 
 ```yaml
 host: gerrit.example.org
@@ -866,7 +889,7 @@ retry_attempts: 3
 retry_base_delay: 2.0
 ```
 
-Or JSON format `~/.config/gerrit-clone/config.json`:
+Or JSON format `~/.config/source-clone/config.json`:
 
 ```json
 {
@@ -986,13 +1009,13 @@ Basic mirror to an organization:
 
 ```bash
 export GITHUB_TOKEN=ghp_your_token_here
-gerrit-clone mirror --server gerrit.onap.org --org modeseven-onap
+source-clone mirror --server gerrit.onap.org --org modeseven-onap
 ```
 
 Mirror specific projects with custom local output-path:
 
 ```bash
-gerrit-clone mirror \
+source-clone mirror \
   --server gerrit.onap.org \
   --org modeseven-onap \
   --output-path /tmp/modeseven-onap \
@@ -1002,7 +1025,7 @@ gerrit-clone mirror \
 Force-update all existing repositories:
 
 ```bash
-gerrit-clone mirror \
+source-clone mirror \
   --server gerrit.onap.org \
   --org modeseven-onap \
   --recreate \
@@ -1012,7 +1035,7 @@ gerrit-clone mirror \
 Mirror using custom SSH settings:
 
 ```bash
-gerrit-clone mirror \
+source-clone mirror \
   --server gerrit.onap.org \
   --org modeseven-onap \
   --ssh-user myuser \
@@ -1052,7 +1075,7 @@ The mirror command generates a JSON manifest file
 
 ## Nested Repository Support
 
-Gerrit Clone includes intelligent support for nested repositories (projects with
+Source Clone includes intelligent support for nested repositories (projects with
 hierarchical names like `parent/child`):
 
 ### Automatic Detection
@@ -1068,7 +1091,7 @@ hierarchical names like `parent/child`):
 #### Skip Conflicting
 
 ```bash
-gerrit-clone clone --host gerrit.example.org --no-move-conflicting
+source-clone clone --host gerrit.example.org --no-move-conflicting
 ```
 
 Skips nested repositories when parent contains conflicting files/directories.
@@ -1077,7 +1100,7 @@ Provides clear warnings about skipped repos.
 #### Move Conflicting (Default - Recommended for Data Mining)
 
 ```bash
-gerrit-clone clone --host gerrit.example.org
+source-clone clone --host gerrit.example.org
 ```
 
 Automatically moves conflicting content in parent repositories to
@@ -1118,7 +1141,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Clone repositories
-        uses: lfreleng-actions/gerrit-clone-action@v1
+        uses: lfreleng-actions/source-clone-action@v1
         with:
           host: gerrit.example.org
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -1140,7 +1163,7 @@ jobs:
     steps:
       - name: Clone repositories
         id: clone
-        uses: lfreleng-actions/gerrit-clone-action@v1
+        uses: lfreleng-actions/source-clone-action@v1
         with:
           host: gerrit.example.org
           port: 29418
@@ -1188,7 +1211,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Clone repositories using HTTPS
-        uses: lfreleng-actions/gerrit-clone-action@v1
+        uses: lfreleng-actions/source-clone-action@v1
         with:
           host: gerrit.example.org
           base-url: https://gerrit.example.org/r
@@ -1222,7 +1245,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Clone all repositories (including nested with conflicts)
-        uses: lfreleng-actions/gerrit-clone-action@v1
+        uses: lfreleng-actions/source-clone-action@v1
         with:
           host: gerrit.example.org
           use-https: true
@@ -1262,9 +1285,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Clone repositories
-        uses: lfreleng-actions/gerrit-clone-action@v1
+        uses: lfreleng-actions/source-clone-action@v1
         with:
-          config-file: .gerrit-clone-config.yaml
+          config-file: .source-clone-config.yaml
           verbose: true
 ```
 
@@ -1399,7 +1422,7 @@ Three authentication methods provide automatic fallback:
 4. Clone with agent authentication:
 
    ```bash
-   gerrit-clone clone --host gerrit.example.org --ssh-user myuser
+   source-clone clone --host gerrit.example.org --ssh-user myuser
    ```
 
 #### Using SSH Identity File (Recommended for CI/CD)
@@ -1415,7 +1438,7 @@ Three authentication methods provide automatic fallback:
 3. Clone with identity file:
 
    ```bash
-   gerrit-clone clone --host gerrit.example.org \
+   source-clone clone --host gerrit.example.org \
      --ssh-user myuser \
      --ssh-identity-file /path/to/private_key
    ```
@@ -1425,7 +1448,7 @@ Three authentication methods provide automatic fallback:
    ```bash
    export GERRIT_SSH_USER=myuser
    export GERRIT_SSH_PRIVATE_KEY=/path/to/private_key
-   gerrit-clone clone --host gerrit.example.org
+   source-clone clone --host gerrit.example.org
    ```
 
 ### SSH Config
@@ -1514,7 +1537,7 @@ Each run generates a detailed JSON manifest (`clone-manifest.json`):
 
 ```bash
 # Accept new host keys (use with caution)
-gerrit-clone --host gerrit.example.org --accept-unknown-host
+source-clone clone --host gerrit.example.org --accept-unknown-host
 
 # Recommended: Pre-populate known_hosts
 ssh-keyscan -H -p 29418 gerrit.example.org >> ~/.ssh/known_hosts
@@ -1612,8 +1635,8 @@ cloned, while maintaining visibility into discovery issues between the two metho
 ### Setup
 
 ```bash
-git clone https://github.com/lfreleng-actions/gerrit-clone-action.git
-cd gerrit-clone-action
+git clone https://github.com/lfreleng-actions/source-clone-action.git
+cd source-clone-action
 uv sync --dev
 ```
 
@@ -1624,7 +1647,7 @@ uv sync --dev
 uv run pytest
 
 # Run with coverage report
-uv run pytest --cov=gerrit_clone --cov-report=html --cov-report=term-missing
+uv run pytest --cov=source_clone --cov-report=html --cov-report=term-missing
 
 # Run integration tests (requires network)
 uv run pytest tests/integration/ -v
@@ -1661,8 +1684,8 @@ This project uses the Apache License 2.0. See LICENSE for details.
 ## Support
 
 - **GitHub Issues**: Report bugs and request features at
-  [lfreleng-actions/gerrit-clone-action](https://github.com/lfreleng-actions/gerrit-clone-action/issues)
+  [lfreleng-actions/source-clone-action](https://github.com/lfreleng-actions/source-clone-action/issues)
 - **Documentation**: This README, IMPLEMENTATION.md, and inline help
-  (`gerrit-clone --help`)
+  (`source-clone --help`)
 - **Examples**: Advanced usage patterns in repository examples/
 - **Integration Tests**: Real-world server validation in tests/integration/

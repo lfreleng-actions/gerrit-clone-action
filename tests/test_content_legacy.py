@@ -19,19 +19,19 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from gerrit_clone import content_legacy
-from gerrit_clone.content_filter import apply_content_filters
-from gerrit_clone.content_intent import FilterIntent
-from gerrit_clone.content_legacy import LEGACY_REMOVAL_SUBJECT
-from gerrit_clone.content_policy import (
+from source_clone import content_legacy
+from source_clone.content_filter import apply_content_filters
+from source_clone.content_intent import FilterIntent
+from source_clone.content_legacy import LEGACY_REMOVAL_SUBJECT
+from source_clone.content_policy import (
     PolicyReadError,
     recorded_policy,
 )
-from gerrit_clone.content_spec import ContentFilterSpec
-from gerrit_clone.github_api import GitHubRepo, transform_gerrit_name_to_github
-from gerrit_clone.mirror_manager import MirrorManager
-from gerrit_clone.mirror_models import MirrorResult, MirrorStatus
-from gerrit_clone.models import (
+from source_clone.content_spec import ContentFilterSpec
+from source_clone.github_api import GitHubRepo, transform_gerrit_name_to_github
+from source_clone.mirror_manager import MirrorManager
+from source_clone.mirror_models import MirrorResult, MirrorStatus
+from source_clone.models import (
     CloneResult,
     CloneStatus,
     Config,
@@ -39,8 +39,8 @@ from gerrit_clone.models import (
     ProjectState,
     RefreshStatus,
 )
-from gerrit_clone.refresh_manager import RefreshManager
-from gerrit_clone.refresh_worker import EARLIER_RELEASE_REFUSAL, RefreshWorker
+from source_clone.refresh_manager import RefreshManager
+from source_clone.refresh_worker import EARLIER_RELEASE_REFUSAL, RefreshWorker
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -250,7 +250,7 @@ class TestThisReleaseIsNotMistaken:
             cwd=mirror,
         )
         with patch(
-            "gerrit_clone.content_filter._check_git_filter_repo", return_value=False
+            "source_clone.content_filter._check_git_filter_repo", return_value=False
         ):
             ok, error = apply_content_filters(
                 mirror, "proj", remove_patterns=["secret.txt"]
@@ -336,7 +336,7 @@ def _overwrite(
     api.batch_delete_repos = AsyncMock(return_value={})
     api.batch_create_repos = AsyncMock(return_value={github_name: (repo, None)})
     with (
-        patch("gerrit_clone.clone_orchestrator.CloneManager.clone_projects", clone),
+        patch("source_clone.clone_orchestrator.CloneManager.clone_projects", clone),
         patch.object(MirrorManager, "_push_to_github", push),
     ):
         results = MirrorManager(

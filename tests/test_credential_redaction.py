@@ -18,9 +18,9 @@ from unittest.mock import Mock
 import pytest
 from typer.testing import CliRunner
 
-from gerrit_clone.cli import app
-from gerrit_clone.mirror_manager import MirrorManager
-from gerrit_clone.models import Config
+from source_clone.cli import app
+from source_clone.mirror_manager import MirrorManager
+from source_clone.models import Config
 
 if TYPE_CHECKING:
     from pathlib import Path

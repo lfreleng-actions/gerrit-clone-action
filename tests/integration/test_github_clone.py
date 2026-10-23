@@ -18,9 +18,9 @@ import pytest
 if TYPE_CHECKING:
     from pathlib import Path
 
-from gerrit_clone.clone_manager import clone_repositories
-from gerrit_clone.github_discovery import discover_github_repositories
-from gerrit_clone.models import CloneStatus, Config, DiscoveryMethod, SourceType
+from source_clone.clone_manager import clone_repositories
+from source_clone.github_discovery import discover_github_repositories
+from source_clone.models import CloneStatus, Config, DiscoveryMethod, SourceType
 
 
 @pytest.fixture

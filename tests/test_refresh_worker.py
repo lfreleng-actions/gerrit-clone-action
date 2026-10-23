@@ -12,8 +12,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from gerrit_clone.models import Config, RefreshResult, RefreshStatus, RetryPolicy
-from gerrit_clone.refresh_worker import (
+from source_clone.models import Config, RefreshResult, RefreshStatus, RetryPolicy
+from source_clone.refresh_worker import (
     RefreshAuthError,
     RefreshError,
     RefreshTimeoutError,
@@ -22,8 +22,8 @@ from gerrit_clone.refresh_worker import (
 )
 
 #: Every refresh git command is launched through this one name, via
-#: ``gerrit_clone.refresh_git_env.run_git``.
-RUN_TRACKED = "gerrit_clone.refresh_git_env.run_tracked"
+#: ``source_clone.refresh_git_env.run_git``.
+RUN_TRACKED = "source_clone.refresh_git_env.run_tracked"
 
 
 def _completed(
@@ -920,9 +920,9 @@ class TestGetDefaultBranch:
 class TestFixDetachedHead:
     """Test detached HEAD fixing functionality."""
 
-    @patch("gerrit_clone.refresh_worker.RefreshWorker._is_meta_only_repo")
-    @patch("gerrit_clone.refresh_worker.RefreshWorker._get_default_branch")
-    @patch("gerrit_clone.refresh_worker.RefreshWorker._is_on_meta_config")
+    @patch("source_clone.refresh_worker.RefreshWorker._is_meta_only_repo")
+    @patch("source_clone.refresh_worker.RefreshWorker._get_default_branch")
+    @patch("source_clone.refresh_worker.RefreshWorker._is_on_meta_config")
     @patch(RUN_TRACKED)
     def test_fix_detached_head_success(
         self,
@@ -961,9 +961,9 @@ class TestFixDetachedHead:
         assert success is True
         assert mock_run.call_count == 3
 
-    @patch("gerrit_clone.refresh_worker.RefreshWorker._is_meta_only_repo")
-    @patch("gerrit_clone.refresh_worker.RefreshWorker._get_default_branch")
-    @patch("gerrit_clone.refresh_worker.RefreshWorker._is_on_meta_config")
+    @patch("source_clone.refresh_worker.RefreshWorker._is_meta_only_repo")
+    @patch("source_clone.refresh_worker.RefreshWorker._get_default_branch")
+    @patch("source_clone.refresh_worker.RefreshWorker._is_on_meta_config")
     @patch(RUN_TRACKED)
     def test_fix_detached_head_meta_only_repo(
         self,
@@ -995,9 +995,9 @@ class TestFixDetachedHead:
         assert result.error_message is not None
         assert "meta-only" in result.error_message
 
-    @patch("gerrit_clone.refresh_worker.RefreshWorker._is_meta_only_repo")
-    @patch("gerrit_clone.refresh_worker.RefreshWorker._get_default_branch")
-    @patch("gerrit_clone.refresh_worker.RefreshWorker._is_on_meta_config")
+    @patch("source_clone.refresh_worker.RefreshWorker._is_meta_only_repo")
+    @patch("source_clone.refresh_worker.RefreshWorker._get_default_branch")
+    @patch("source_clone.refresh_worker.RefreshWorker._is_on_meta_config")
     @patch(RUN_TRACKED)
     def test_fix_detached_head_no_default_branch(
         self,
@@ -1028,9 +1028,9 @@ class TestFixDetachedHead:
 
         assert success is False
 
-    @patch("gerrit_clone.refresh_worker.RefreshWorker._is_meta_only_repo")
-    @patch("gerrit_clone.refresh_worker.RefreshWorker._get_default_branch")
-    @patch("gerrit_clone.refresh_worker.RefreshWorker._is_on_meta_config")
+    @patch("source_clone.refresh_worker.RefreshWorker._is_meta_only_repo")
+    @patch("source_clone.refresh_worker.RefreshWorker._get_default_branch")
+    @patch("source_clone.refresh_worker.RefreshWorker._is_on_meta_config")
     @patch(RUN_TRACKED)
     def test_fix_detached_head_checkout_fails(
         self,
@@ -1068,9 +1068,9 @@ class TestFixDetachedHead:
 
         assert success is False
 
-    @patch("gerrit_clone.refresh_worker.RefreshWorker._is_meta_only_repo")
-    @patch("gerrit_clone.refresh_worker.RefreshWorker._get_default_branch")
-    @patch("gerrit_clone.refresh_worker.RefreshWorker._is_on_meta_config")
+    @patch("source_clone.refresh_worker.RefreshWorker._is_meta_only_repo")
+    @patch("source_clone.refresh_worker.RefreshWorker._get_default_branch")
+    @patch("source_clone.refresh_worker.RefreshWorker._is_on_meta_config")
     @patch(RUN_TRACKED)
     def test_fix_detached_head_fetch_fails(
         self,
@@ -1108,7 +1108,7 @@ class TestFixDetachedHead:
 
         assert success is True  # Should succeed despite fetch failure
 
-    @patch("gerrit_clone.refresh_worker.RefreshWorker._is_on_meta_config")
+    @patch("source_clone.refresh_worker.RefreshWorker._is_on_meta_config")
     @patch(RUN_TRACKED)
     def test_fix_detached_head_exception(
         self, mock_run, mock_meta_config, worker, temp_git_repo
@@ -1423,7 +1423,7 @@ class TestAuthRetryBudget:
                 "_perform_refresh",
                 side_effect=RefreshAuthError("Authentication error during pull"),
             ) as mock_refresh,
-            patch("gerrit_clone.refresh_worker.time.sleep") as mock_sleep,
+            patch("source_clone.refresh_worker.time.sleep") as mock_sleep,
         ):
             ok = worker._execute_adaptive_refresh(Path("/tmp/repo"), result)
 
@@ -1445,7 +1445,7 @@ class TestAuthRetryBudget:
                 "_perform_refresh",
                 side_effect=RefreshError("Network error during pull"),
             ) as mock_refresh,
-            patch("gerrit_clone.refresh_worker.time.sleep") as mock_sleep,
+            patch("source_clone.refresh_worker.time.sleep") as mock_sleep,
         ):
             ok = worker._execute_adaptive_refresh(Path("/tmp/repo"), result)
 
@@ -1473,7 +1473,7 @@ class TestAuthRetryBudget:
                 "_perform_refresh",
                 side_effect=RefreshTimeoutError("Fetch timeout after 300s"),
             ),
-            patch("gerrit_clone.refresh_worker.time.sleep"),
+            patch("source_clone.refresh_worker.time.sleep"),
         ):
             ok = worker._execute_adaptive_refresh(Path("/tmp/repo"), result)
 
@@ -1493,7 +1493,7 @@ class TestAuthRetryBudget:
                 "_perform_refresh",
                 side_effect=[RefreshTimeoutError("Pull timeout after 300s"), True],
             ),
-            patch("gerrit_clone.refresh_worker.time.sleep"),
+            patch("source_clone.refresh_worker.time.sleep"),
         ):
             ok = worker._execute_adaptive_refresh(Path("/tmp/repo"), result)
 
@@ -1774,7 +1774,7 @@ class TestSshJitter:
     def test_jitter_zero_no_sleep(self):
         """Zero jitter performs no sleep."""
         worker = RefreshWorker(ssh_jitter_seconds=0)
-        with patch("gerrit_clone.refresh_worker.time.sleep") as mock_sleep:
+        with patch("source_clone.refresh_worker.time.sleep") as mock_sleep:
             worker._ssh_handshake_jitter(Path("/tmp/repo"))
             mock_sleep.assert_not_called()
 
@@ -1785,7 +1785,7 @@ class TestSshJitter:
             patch.object(
                 worker, "_get_remote_url", return_value="ssh://gerrit:29418/x"
             ),
-            patch("gerrit_clone.refresh_worker.time.sleep") as mock_sleep,
+            patch("source_clone.refresh_worker.time.sleep") as mock_sleep,
         ):
             worker._ssh_handshake_jitter(Path("/tmp/repo"))
             mock_sleep.assert_called_once()
@@ -1801,7 +1801,7 @@ class TestSshJitter:
                 "_get_remote_url",
                 return_value="https://github.com/org/repo.git",
             ),
-            patch("gerrit_clone.refresh_worker.time.sleep") as mock_sleep,
+            patch("source_clone.refresh_worker.time.sleep") as mock_sleep,
         ):
             worker._ssh_handshake_jitter(Path("/tmp/repo"))
             mock_sleep.assert_not_called()
@@ -1813,7 +1813,7 @@ class TestSshJitter:
             patch.object(
                 worker, "_get_remote_url", return_value="git@github.com:org/repo.git"
             ),
-            patch("gerrit_clone.refresh_worker.time.sleep") as mock_sleep,
+            patch("source_clone.refresh_worker.time.sleep") as mock_sleep,
         ):
             worker._ssh_handshake_jitter(Path("/tmp/repo"))
             mock_sleep.assert_called_once()
@@ -1823,7 +1823,7 @@ class TestSshJitter:
         worker = RefreshWorker(ssh_jitter_seconds=0.1)
         with (
             patch.object(worker, "_get_remote_url", return_value=None),
-            patch("gerrit_clone.refresh_worker.time.sleep") as mock_sleep,
+            patch("source_clone.refresh_worker.time.sleep") as mock_sleep,
         ):
             worker._ssh_handshake_jitter(Path("/tmp/repo"))
             mock_sleep.assert_called_once()
@@ -1834,7 +1834,7 @@ class TestSshJitter:
         for url in ("file:///srv/git/repo.git", "/srv/git/repo.git", "../peer"):
             with (
                 patch.object(worker, "_get_remote_url", return_value=url),
-                patch("gerrit_clone.refresh_worker.time.sleep") as mock_sleep,
+                patch("source_clone.refresh_worker.time.sleep") as mock_sleep,
             ):
                 worker._ssh_handshake_jitter(Path("/tmp/repo"))
                 mock_sleep.assert_not_called()

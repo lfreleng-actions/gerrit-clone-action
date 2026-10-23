@@ -20,16 +20,16 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from gerrit_clone.cli import app
-from gerrit_clone.cli_clone_run import _apply_content_filters
-from gerrit_clone.clone_manager import _refresh_repositories
-from gerrit_clone.content_filter import apply_content_filters
-from gerrit_clone.content_intent import load_intent
-from gerrit_clone.content_intent_resolve import gathered_intent
-from gerrit_clone.content_spec import ContentFilterSpec
-from gerrit_clone.github_api import GitHubRepo
-from gerrit_clone.mirror_manager import MirrorManager
-from gerrit_clone.models import (
+from source_clone.cli import app
+from source_clone.cli_clone_run import _apply_content_filters
+from source_clone.clone_manager import _refresh_repositories
+from source_clone.content_filter import apply_content_filters
+from source_clone.content_intent import load_intent
+from source_clone.content_intent_resolve import gathered_intent
+from source_clone.content_spec import ContentFilterSpec
+from source_clone.github_api import GitHubRepo
+from source_clone.mirror_manager import MirrorManager
+from source_clone.models import (
     BatchResult,
     CloneResult,
     CloneStatus,
@@ -187,7 +187,7 @@ class TestRefresh:
         _commit(tree.parent / "up" / "child", "secret.txt", "hunter2\n")
 
         with patch(
-            "gerrit_clone.refresh_filtered.apply_content_filters",
+            "source_clone.refresh_filtered.apply_content_filters",
             return_value=(False, "filter-repo failed"),
         ):
             again = _refresh(tree)
@@ -260,7 +260,7 @@ class TestMirrorOverwrite:
 
         with (
             patch(
-                "gerrit_clone.clone_orchestrator.CloneManager.clone_projects",
+                "source_clone.clone_orchestrator.CloneManager.clone_projects",
                 _cloning_from(upstream),
             ),
             patch.object(MirrorManager, "_push_to_github", push),
@@ -296,7 +296,7 @@ class TestMirrorOverwrite:
 
         with (
             patch(
-                "gerrit_clone.clone_orchestrator.CloneManager.clone_projects",
+                "source_clone.clone_orchestrator.CloneManager.clone_projects",
                 _cloning_from(upstream),
             ),
             patch.object(MirrorManager, "_push_to_github", push),
@@ -365,19 +365,19 @@ def _mirror_command(tree: Path, selection: list[Project]) -> tuple[Any, int]:
 
     with (
         patch(
-            "gerrit_clone.cli_mirror_run.authenticate",
+            "source_clone.cli_mirror_run.authenticate",
             return_value=_github_api([]),
         ),
-        patch("gerrit_clone.cli_mirror_run.resolve_org", return_value="org"),
+        patch("source_clone.cli_mirror_run.resolve_org", return_value="org"),
         patch(
-            "gerrit_clone.cli_hooks.discover_projects",
+            "source_clone.cli_hooks.discover_projects",
             return_value=(selection, {}),
         ),
         patch(
-            "gerrit_clone.clone_orchestrator.CloneManager.clone_projects",
+            "source_clone.clone_orchestrator.CloneManager.clone_projects",
             return_value=[],
         ),
-        patch("gerrit_clone.content_intent_resolve.gathered_intent", counting),
+        patch("source_clone.content_intent_resolve.gathered_intent", counting),
     ):
         result = CliRunner().invoke(
             app,

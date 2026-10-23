@@ -18,18 +18,18 @@ import sys
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
-from gerrit_clone import rich_optional
+from source_clone import rich_optional
 
 if TYPE_CHECKING:
     from collections.abc import Generator
     from types import ModuleType
 
-_MODULE = "gerrit_clone.rich_optional"
+_MODULE = "source_clone.rich_optional"
 
 
 @contextmanager
 def rich_unavailable() -> Generator[ModuleType]:
-    """Re-import :mod:`gerrit_clone.rich_optional` with Rich blocked."""
+    """Re-import :mod:`source_clone.rich_optional` with Rich blocked."""
     real_import = builtins.__import__
 
     def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
@@ -60,13 +60,13 @@ class TestRichOptional:
     def test_importers_still_load_without_rich(self) -> None:
         """The real regression: a consumer doing a from-import."""
         with rich_unavailable():
-            saved = sys.modules.pop("gerrit_clone.progress_display", None)
+            saved = sys.modules.pop("source_clone.progress_display", None)
             try:
-                importlib.import_module("gerrit_clone.progress_display")
+                importlib.import_module("source_clone.progress_display")
             finally:
-                sys.modules.pop("gerrit_clone.progress_display", None)
+                sys.modules.pop("source_clone.progress_display", None)
                 if saved is not None:
-                    sys.modules["gerrit_clone.progress_display"] = saved
+                    sys.modules["source_clone.progress_display"] = saved
 
     def test_reports_available_when_rich_is_installed(self) -> None:
         assert rich_optional.RICH_AVAILABLE is True

@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from typer.testing import CliRunner
 
-from gerrit_clone.cli import app
+from source_clone.cli import app
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -12,14 +12,14 @@ from unittest.mock import Mock, patch
 import httpx
 import pytest
 
-from gerrit_clone.gerrit_api import (
+from source_clone.gerrit_api import (
     GerritAPIClient,
     GerritAPIError,
     GerritAuthenticationError,
     GerritConnectionError,
     GerritParseError,
 )
-from gerrit_clone.models import Config, ProjectState
+from source_clone.models import Config, ProjectState
 
 
 class TestGerritAPIError:

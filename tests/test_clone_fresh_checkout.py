@@ -24,15 +24,15 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
-from gerrit_clone import refresh_checkout_stage
-from gerrit_clone.cli import app
-from gerrit_clone.cli_clone_run import _delete_working_copy
-from gerrit_clone.content_filter import apply_content_filters
-from gerrit_clone.content_origin import NO_PUSH_URL
-from gerrit_clone.content_policy import stored_policy
-from gerrit_clone.content_spec import ContentFilterSpec
-from gerrit_clone.content_stage import SHALLOW_HISTORY_REFUSED
-from gerrit_clone.models import (
+from source_clone import refresh_checkout_stage
+from source_clone.cli import app
+from source_clone.cli_clone_run import _delete_working_copy
+from source_clone.content_filter import apply_content_filters
+from source_clone.content_origin import NO_PUSH_URL
+from source_clone.content_policy import stored_policy
+from source_clone.content_spec import ContentFilterSpec
+from source_clone.content_stage import SHALLOW_HISTORY_REFUSED
+from source_clone.models import (
     CloneResult,
     CloneStatus,
     Project,
@@ -40,14 +40,14 @@ from gerrit_clone.models import (
     RefreshResult,
     RefreshStatus,
 )
-from gerrit_clone.refresh_checkout_fresh import NO_UPSTREAM_REFUSAL
-from gerrit_clone.refresh_filtered import FILTERED_WORKING_COPY_REFUSAL
-from gerrit_clone.refresh_worker import RefreshWorker
+from source_clone.refresh_checkout_fresh import NO_UPSTREAM_REFUSAL
+from source_clone.refresh_filtered import FILTERED_WORKING_COPY_REFUSAL
+from source_clone.refresh_worker import RefreshWorker
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from gerrit_clone.models import Config
+    from source_clone.models import Config
 
 #: A GitLab token shape ``--redact-secrets`` finds, built at runtime so
 #: that no credential-shaped literal sits in the source for scanners.
@@ -135,11 +135,11 @@ def _clone(upstream: Path, tree: Path, *options: str, mirror: bool = False) -> A
     projects = [Project("proj", ProjectState.ACTIVE)]
     with (
         patch(
-            "gerrit_clone.clone_manager.discover_projects",
+            "source_clone.clone_manager.discover_projects",
             return_value=(projects, {"skipped": 0}),
         ),
         patch(
-            "gerrit_clone.clone_orchestrator.CloneManager.clone_projects",
+            "source_clone.clone_orchestrator.CloneManager.clone_projects",
             _cloning_from(upstream),
         ),
     ):
@@ -314,7 +314,7 @@ class TestFailureDeletes:
     def test_a_copy_that_cannot_be_removed(self, upstream: Path, tree: Path) -> None:
         """It may hold unfiltered history: the project fails, naming it."""
         with patch(
-            "gerrit_clone.refresh_filtered.shutil.rmtree",
+            "source_clone.refresh_filtered.shutil.rmtree",
             side_effect=OSError("busy"),
         ):
             result = _clone(upstream, tree, "--remove-files", "secret.txt")
@@ -484,10 +484,10 @@ class TestInterruptedDeletion:
                 RefreshWorker, "_filter_fresh_checkout", side_effect=KeyboardInterrupt
             ),
             patch(
-                "gerrit_clone.cli_clone_run._delete_working_copy",
+                "source_clone.cli_clone_run._delete_working_copy",
                 return_value="permission denied",
             ),
-            patch("gerrit_clone.cli_clone_run.logger") as logger,
+            patch("source_clone.cli_clone_run.logger") as logger,
         ):
             result = _clone(upstream, tree, "--remove-files", "secret.txt")
 

@@ -8,7 +8,7 @@
 ## Overview
 
 This document describes the implementation of `--mirror` mode as the default
-behavior for the gerrit-clone-action tool. The `--mirror` flag creates bare
+behavior for the source-clone-action tool. The `--mirror` flag creates bare
 Git repositories with complete metadata, including all branches, tags, refs,
 and notes.
 
@@ -19,13 +19,13 @@ and notes.
 ## Motivation
 
 We needed to ensure that by default, all content cloned by the
-gerrit-clone-action and gerrit-clone Python CLI tool contains complete
+source-clone-action and source-clone Python CLI tool contains complete
 metadata from remote repositories. We do this by making Git's `--mirror`
 option the default for all clone operations.
 
 ## Changes Made
 
-### 1. Core Model Changes (`src/gerrit_clone/models.py`)
+### 1. Core Model Changes (`src/source_clone/models.py`)
 
 **Added Field:**
 
@@ -41,7 +41,7 @@ option the default for all clone operations.
   `None` with a warning
 - These options are mutually exclusive according to Git's constraints
 
-### 2. Worker Module Changes (`src/gerrit_clone/worker.py`)
+### 2. Worker Module Changes (`src/source_clone/worker.py`)
 
 **Modified Method:** `_build_clone_command()`
 
@@ -51,7 +51,7 @@ option the default for all clone operations.
 - **Non-Mirror Mode:** Uses original behavior with `--no-hardlinks`,
   `--quiet`, optional `--depth`, and optional `--branch`
 
-### 3. GitHub Worker Changes (`src/gerrit_clone/github_worker.py`)
+### 3. GitHub Worker Changes (`src/source_clone/github_worker.py`)
 
 **Modified Functions:**
 
@@ -61,7 +61,7 @@ option the default for all clone operations.
 **Behavior:** Same branching logic as worker.py - mirror mode uses
 `--mirror`, non-mirror mode allows depth/branch options.
 
-### 4. CLI Changes (`src/gerrit_clone/cli.py`)
+### 4. CLI Changes (`src/source_clone/cli.py`)
 
 **Added Option to `clone` Command:**
 
@@ -109,7 +109,7 @@ mirror: bool = typer.Option(
 Note: The `mirror` command defaults to `True` directly since it focuses
 specifically on mirror operations.
 
-### 5. Configuration Management Changes (`src/gerrit_clone/config.py`)
+### 5. Configuration Management Changes (`src/source_clone/config.py`)
 
 **Added to `load_config()` signature:**
 
@@ -163,21 +163,21 @@ mirror:
 **Default (Mirror Mode - no flag specified):**
 
 ```bash
-gerrit-clone clone --host gerrit.example.org
+source-clone clone --host gerrit.example.org
 # Creates bare repos with all metadata (uses Config.mirror=True default)
 ```
 
 **Explicit Mirror Mode:**
 
 ```bash
-gerrit-clone clone --host gerrit.example.org --mirror
+source-clone clone --host gerrit.example.org --mirror
 # Explicitly enables mirror mode (overrides config file if present)
 ```
 
 **Non-Mirror Mode:**
 
 ```bash
-gerrit-clone clone --host gerrit.example.org --no-mirror
+source-clone clone --host gerrit.example.org --no-mirror
 # Creates standard repos with working directory (overrides default/config)
 ```
 
@@ -185,11 +185,11 @@ gerrit-clone clone --host gerrit.example.org --no-mirror
 
 ```bash
 # If config.yaml has: mirror: false
-gerrit-clone clone --host gerrit.example.org
+source-clone clone --host gerrit.example.org
 # Uses config file setting (non-mirror mode)
 
 # Override config file to use mirror mode
-gerrit-clone clone --host gerrit.example.org --mirror
+source-clone clone --host gerrit.example.org --mirror
 ```
 
 **With Environment Variable:**
@@ -197,11 +197,11 @@ gerrit-clone clone --host gerrit.example.org --mirror
 ```bash
 # Environment variable sets the default
 export GERRIT_MIRROR=false
-gerrit-clone clone --host gerrit.example.org
+source-clone clone --host gerrit.example.org
 # Uses environment setting (non-mirror mode)
 
 # CLI flag overrides environment
-gerrit-clone clone --host gerrit.example.org --mirror
+source-clone clone --host gerrit.example.org --mirror
 ```
 
 ### GitHub Actions Usage
@@ -209,7 +209,7 @@ gerrit-clone clone --host gerrit.example.org --mirror
 **Default (Mirror Mode - no input specified):**
 
 ```yaml
-- uses: lfreleng-actions/gerrit-clone-action@v1
+- uses: lfreleng-actions/source-clone-action@v1
   with:
     host: gerrit.example.org
     # No mirror input = uses Config.mirror=True default
@@ -218,7 +218,7 @@ gerrit-clone clone --host gerrit.example.org --mirror
 **Explicit Mirror Mode:**
 
 ```yaml
-- uses: lfreleng-actions/gerrit-clone-action@v1
+- uses: lfreleng-actions/source-clone-action@v1
   with:
     host: gerrit.example.org
     mirror: true
@@ -227,7 +227,7 @@ gerrit-clone clone --host gerrit.example.org --mirror
 **Non-Mirror Mode:**
 
 ```yaml
-- uses: lfreleng-actions/gerrit-clone-action@v1
+- uses: lfreleng-actions/source-clone-action@v1
   with:
     host: gerrit.example.org
     mirror: false
@@ -290,11 +290,11 @@ explicitly use `--no-mirror` or set it in their config file/environment.
 
 **Modified:**
 
-- `src/gerrit_clone/models.py`
-- `src/gerrit_clone/worker.py`
-- `src/gerrit_clone/github_worker.py`
-- `src/gerrit_clone/cli.py`
-- `src/gerrit_clone/config.py`
+- `src/source_clone/models.py`
+- `src/source_clone/worker.py`
+- `src/source_clone/github_worker.py`
+- `src/source_clone/cli.py`
+- `src/source_clone/config.py`
 - `action.yaml`
 - `README.md`
 - `tests/test_config.py`

@@ -6,6 +6,7 @@
 
 # Temporary and binary files
 gerrit-clone.log
+source-clone.log
 *~
 *.py[cod]
 *.so

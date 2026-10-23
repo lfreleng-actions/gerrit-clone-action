@@ -25,14 +25,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gerrit_clone import subprocess_tracking
-from gerrit_clone.concurrent_utils import interruptible_executor
-from gerrit_clone.process_groups import (
+from source_clone import subprocess_tracking
+from source_clone.concurrent_utils import interruptible_executor
+from source_clone.process_groups import (
     _TERMINATE_GRACE_SECONDS,
     _still_alive,
     terminate_all,
 )
-from gerrit_clone.subprocess_tracking import (
+from source_clone.subprocess_tracking import (
     ProcessAbandonedError,
     _terminating,
     _thread_state,
@@ -321,8 +321,8 @@ _SIGTERM_PARENT_SCRIPT = """
 import sys, threading, time
 from pathlib import Path
 
-from gerrit_clone.concurrent_utils import handle_sigterm_gracefully
-from gerrit_clone.subprocess_tracking import _tracked, run_tracked
+from source_clone.concurrent_utils import handle_sigterm_gracefully
+from source_clone.subprocess_tracking import _tracked, run_tracked
 
 pid_file, ready_file = Path(sys.argv[1]), Path(sys.argv[2])
 handle_sigterm_gracefully()
@@ -361,8 +361,8 @@ _SIGTERM_RACE_SCRIPT = """
 import sys, time
 from pathlib import Path
 
-import gerrit_clone.subprocess_tracking as st
-from gerrit_clone.concurrent_utils import handle_sigterm_gracefully
+import source_clone.subprocess_tracking as st
+from source_clone.concurrent_utils import handle_sigterm_gracefully
 
 pid_file, ready_file = Path(sys.argv[1]), Path(sys.argv[2])
 handle_sigterm_gracefully()
@@ -895,7 +895,7 @@ class TestAbandon:
             with contextlib.suppress(Exception):
                 run_tracked(_ignores_sigterm_command())
 
-        with patch("gerrit_clone.subprocess_tracking.process_group", return_value=None):
+        with patch("source_clone.subprocess_tracking.process_group", return_value=None):
             thread = threading.Thread(target=work)
             thread.start()
             assert started.wait(timeout=10)
@@ -960,11 +960,11 @@ class TestTerminateAll:
     ) -> Generator[None, None, None]:
         """Replace every probe and signal, with a short grace period."""
         with (
-            patch("gerrit_clone.process_groups._stop_group", side_effect=stop),
-            patch("gerrit_clone.process_groups._group_is_alive", side_effect=alive),
-            patch("gerrit_clone.process_groups._kill_group", side_effect=kill),
-            patch("gerrit_clone.process_groups._TERMINATE_GRACE_SECONDS", 0.2),
-            patch("gerrit_clone.process_groups._POLL_INTERVAL_SECONDS", 0.01),
+            patch("source_clone.process_groups._stop_group", side_effect=stop),
+            patch("source_clone.process_groups._group_is_alive", side_effect=alive),
+            patch("source_clone.process_groups._kill_group", side_effect=kill),
+            patch("source_clone.process_groups._TERMINATE_GRACE_SECONDS", 0.2),
+            patch("source_clone.process_groups._POLL_INTERVAL_SECONDS", 0.01),
         ):
             yield
 
@@ -1075,10 +1075,10 @@ class TestTerminateAll:
             (cast("subprocess.Popen[str]", MagicMock()), 606),
         ]
         with (
-            patch("gerrit_clone.process_groups._group_is_alive", side_effect=alive),
-            patch("gerrit_clone.process_groups.os.killpg", side_effect=killpg),
-            patch("gerrit_clone.process_groups._TERMINATE_GRACE_SECONDS", 0.2),
-            patch("gerrit_clone.process_groups._POLL_INTERVAL_SECONDS", 0.01),
+            patch("source_clone.process_groups._group_is_alive", side_effect=alive),
+            patch("source_clone.process_groups.os.killpg", side_effect=killpg),
+            patch("source_clone.process_groups._TERMINATE_GRACE_SECONDS", 0.2),
+            patch("source_clone.process_groups._POLL_INTERVAL_SECONDS", 0.01),
         ):
             terminate_all(groups)
 
@@ -1201,7 +1201,7 @@ class TestExecutorExit:
 
         begin = time.monotonic()
         elapsed: float | None = None
-        with patch("gerrit_clone.concurrent_utils.suppress_logging_after_interrupt"):
+        with patch("source_clone.concurrent_utils.suppress_logging_after_interrupt"):
             try:
                 with (
                     patch.object(ThreadPoolExecutor, "shutdown", shutdown),
@@ -1249,7 +1249,7 @@ class TestExecutorExit:
         # Patched: the real one silences the root logger for the rest of
         # the process, which would follow this test into every other.
         with (
-            patch("gerrit_clone.concurrent_utils.suppress_logging_after_interrupt"),
+            patch("source_clone.concurrent_utils.suppress_logging_after_interrupt"),
             pytest.raises(KeyboardInterrupt),
             interruptible_executor(max_workers=1, thread_name_prefix="test"),
         ):
@@ -1266,7 +1266,7 @@ class TestExecutorExit:
 
         begin = time.monotonic()
         elapsed: float | None = None
-        with patch("gerrit_clone.concurrent_utils.suppress_logging_after_interrupt"):
+        with patch("source_clone.concurrent_utils.suppress_logging_after_interrupt"):
             try:
                 with interruptible_executor(
                     max_workers=1, thread_name_prefix="test"

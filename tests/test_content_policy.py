@@ -11,10 +11,10 @@ from unittest.mock import patch
 
 import pytest
 
-from gerrit_clone import content_policy
-from gerrit_clone.content_filter import apply_content_filters
-from gerrit_clone.content_origin import NO_PUSH_URL, git_config
-from gerrit_clone.content_policy import (
+from source_clone import content_policy
+from source_clone.content_filter import apply_content_filters
+from source_clone.content_origin import NO_PUSH_URL, git_config
+from source_clone.content_policy import (
     FilterPolicy,
     PolicyReadError,
     PolicyRecordError,
@@ -23,10 +23,10 @@ from gerrit_clone.content_policy import (
     record_and_block,
     recorded_policy,
 )
-from gerrit_clone.content_spec import ContentFilterSpec
-from gerrit_clone.models import RefreshStatus
-from gerrit_clone.refresh_manager import RefreshManager
-from gerrit_clone.refresh_worker import RefreshWorker
+from source_clone.content_spec import ContentFilterSpec
+from source_clone.models import RefreshStatus
+from source_clone.refresh_manager import RefreshManager
+from source_clone.refresh_worker import RefreshWorker
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -392,7 +392,7 @@ class TestRecordAndBlock:
         before = (repo / "config").read_text()
 
         with (
-            patch("gerrit_clone.content_policy.push_urls", return_value=None),
+            patch("source_clone.content_policy.push_urls", return_value=None),
             pytest.raises(PolicyRecordError, match="push URLs"),
         ):
             record_and_block(repo, FilterPolicy.of(["secret.txt"], [], False))

@@ -9,8 +9,8 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from gerrit_clone.github_api import GitHubAPI
-from gerrit_clone.github_discovery import (
+from source_clone.github_api import GitHubAPI
+from source_clone.github_discovery import (
     _apply_filters,
     _convert_to_projects,
     _extract_org_from_host,
@@ -18,7 +18,7 @@ from gerrit_clone.github_discovery import (
     discover_github_repositories,
     parse_github_url,
 )
-from gerrit_clone.models import Config, Project, ProjectState, SourceType
+from source_clone.models import Config, Project, ProjectState, SourceType
 
 
 def _graphql_node(name: str, *, archived: bool) -> dict[str, object]:
@@ -321,7 +321,7 @@ class TestApplyFilters:
 class TestDiscoverGitHubRepositories:
     """Tests for discover_github_repositories function."""
 
-    @patch("gerrit_clone.github_discovery.GitHubAPI")
+    @patch("source_clone.github_discovery.GitHubAPI")
     def test_discovers_org_repos(self, mock_api_class: MagicMock) -> None:
         """Test discovery of organization repositories."""
         # Setup mock
@@ -370,7 +370,7 @@ class TestDiscoverGitHubRepositories:
         assert projects[0].source_type == SourceType.GITHUB
         assert projects[1].name == "repo2"
 
-    @patch("gerrit_clone.github_discovery.GitHubAPI")
+    @patch("source_clone.github_discovery.GitHubAPI")
     def test_applies_include_filter(self, mock_api_class: MagicMock) -> None:
         """Test that include_projects filter is applied."""
         # Setup mock
@@ -411,7 +411,7 @@ class TestDiscoverGitHubRepositories:
         assert len(projects) == 1
         assert projects[0].name == "repo1"
 
-    @patch("gerrit_clone.github_discovery.GitHubAPI")
+    @patch("source_clone.github_discovery.GitHubAPI")
     def test_lists_the_owner_named_in_the_host(self, mock_api_class: MagicMock) -> None:
         """Discovery lists the repositories of the login it was given."""
         mock_api = MagicMock()
@@ -453,7 +453,7 @@ class TestDiscoverGitHubRepositories:
             pytest.param(False, ["live", "old"], 0, id="include-archived"),
         ],
     )
-    @patch("gerrit_clone.github_discovery.GitHubAPI")
+    @patch("source_clone.github_discovery.GitHubAPI")
     def test_archived_flag_reaches_filter(
         self,
         mock_api_class: MagicMock,
@@ -521,7 +521,7 @@ class TestDiscoverGitHubRepositories:
         with pytest.raises(ValueError, match="Could not determine GitHub organization"):
             discover_github_repositories(config)
 
-    @patch("gerrit_clone.github_discovery.GitHubAPI")
+    @patch("source_clone.github_discovery.GitHubAPI")
     def test_uses_env_token_when_not_provided(self, mock_api_class: MagicMock) -> None:
         """Test that GITHUB_TOKEN env var is used when token not provided."""
         # Setup mock
@@ -543,7 +543,7 @@ class TestDiscoverGitHubRepositories:
         # Verify API was created (token handling is in GitHubAPI)
         mock_api_class.assert_called_once()
 
-    @patch("gerrit_clone.github_discovery.GitHubAPI")
+    @patch("source_clone.github_discovery.GitHubAPI")
     def test_gerrit_clone_token_precedence(self, mock_api_class: MagicMock) -> None:
         """Test that GERRIT_CLONE_TOKEN takes precedence over GITHUB_TOKEN."""
         # Setup mock

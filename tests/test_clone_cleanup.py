@@ -21,13 +21,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from gerrit_clone.cli import app
-from gerrit_clone.error_codes import DiscoveryError
+from source_clone.cli import app
+from source_clone.error_codes import DiscoveryError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
-    from gerrit_clone.models import Config
+    from source_clone.models import Config
 
 HOST = "gerrit.example.org"
 LOG_NAME = f"{HOST}.log"
@@ -40,7 +40,7 @@ WARNING_TEXT = "stubbed clone warning"
 def _close_file_handlers() -> Iterator[None]:
     """Release any log file a command left open on the app logger."""
     yield
-    app_logger = logging.getLogger("gerrit_clone")
+    app_logger = logging.getLogger("source_clone")
     for handler in app_logger.handlers[:]:
         if isinstance(handler, logging.FileHandler):
             handler.close()
@@ -65,19 +65,19 @@ def _batch(failed: int) -> MagicMock:
 
 def _succeed(_config: Config) -> MagicMock:
     """Log one warning, then report an empty successful run."""
-    logging.getLogger("gerrit_clone.clone").warning(WARNING_TEXT)
+    logging.getLogger("source_clone.clone").warning(WARNING_TEXT)
     return _batch(failed=0)
 
 
 def _fail_clone(_config: Config) -> MagicMock:
     """Log one warning, then report a run with a failed clone."""
-    logging.getLogger("gerrit_clone.clone").warning(WARNING_TEXT)
+    logging.getLogger("source_clone.clone").warning(WARNING_TEXT)
     return _batch(failed=1)
 
 
 def _fail_discovery(_config: Config) -> MagicMock:
     """Fail the way an early discovery error does, after logging it."""
-    logging.getLogger("gerrit_clone.discovery").error("discovery failed")
+    logging.getLogger("source_clone.discovery").error("discovery failed")
     raise DiscoveryError("Discovery failed")
 
 
@@ -91,7 +91,7 @@ def _clone(
     ``--cleanup`` is passed unless ``cleanup`` is False.
     """
     argv = ["clone", "--host", HOST, *(["--cleanup"] if cleanup else []), *args]
-    with patch("gerrit_clone.cli.clone_repositories", side_effect=stub):
+    with patch("source_clone.cli.clone_repositories", side_effect=stub):
         result = CliRunner().invoke(app, argv)
     return result.exit_code, result.output
 

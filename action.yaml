@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2025 Matthew Watkins <mwatkins@linuxfoundation.org>
 
-name: "🔄 Gerrit Clone Action"
+name: "🔄 Source Clone Action"
 description: >
-  Bulk clone repositories from Gerrit servers with multi-threading and
-  retry logic
+  Bulk clone repositories from Gerrit servers and GitHub organisations,
+  with multi-threading and retry logic
 author: "Matthew Watkins <mwatkins@linuxfoundation.org>"
 
 inputs:
@@ -234,7 +234,7 @@ inputs:
     default: "false"
   log-file:
     description: >-
-      Custom log file path (default: gerrit-clone.log in current directory)
+      Custom log file path (default: source-clone.log in current directory)
     required: false
   disable-log-file:
     description: "Disable creation of log file"
@@ -394,20 +394,20 @@ runs:
         INPUT_SSH_PRIVATE_KEY: ${{ inputs.ssh-private-key }}
         INPUT_PORT: ${{ inputs.port }}
 
-    - name: "Install and setup gerrit-clone CLI"
+    - name: "Install and setup source-clone CLI"
       shell: bash
       env:
         INPUT_BUILD_FROM_SOURCE: ${{ inputs.build-from-source }}
       # The only $GITHUB_PATH write below appends a path under the
-      # runner-provided $HOME ("$HOME/.local/bin") so the gerrit-clone
+      # runner-provided $HOME ("$HOME/.local/bin") so the source-clone
       # wrapper is on PATH for the subsequent clone step; the value is
       # not derived from any action input or other user-controllable
       # source.
       run: | # zizmor: ignore[github-env]
-        # Check if gerrit-clone is already installed (from workflow setup)
-        if command -v gerrit-clone &> /dev/null; then
-          echo "gerrit-clone CLI is already available"
-          gerrit-clone --version
+        # Check if source-clone is already installed (from workflow setup)
+        if command -v source-clone &> /dev/null; then
+          echo "source-clone CLI is already available"
+          source-clone --version
         else
           # Install uv if not available
           if ! command -v uv &> /dev/null; then
@@ -418,28 +418,28 @@ runs:
 
           if [ "${INPUT_BUILD_FROM_SOURCE}" = "true" ]; then
             # Build and install from the action's own source tree
-            echo "Building gerrit-clone from source..."
+            echo "Building source-clone from source..."
             echo "Source path: $GITHUB_ACTION_PATH"
             uv tool install "$GITHUB_ACTION_PATH"
           else
             # Install from PyPI using uvx (isolated environment)
-            echo "Installing gerrit-clone from PyPI..."
-            uvx gerrit-clone --help > /dev/null || {
-              echo "Failed to install gerrit-clone via uvx"
+            echo "Installing source-clone from PyPI..."
+            uvx source-clone --help > /dev/null || {
+              echo "Failed to install source-clone via uvx"
               exit 1
             }
 
-            # Create wrapper so gerrit-clone is available in PATH
+            # Create wrapper so source-clone is available in PATH
             mkdir -p "$HOME/.local/bin"
-            printf '#!/bin/bash\nexec uvx gerrit-clone "$@"\n' \
-              > "$HOME/.local/bin/gerrit-clone"
-            chmod +x "$HOME/.local/bin/gerrit-clone"
+            printf '#!/bin/bash\nexec uvx source-clone "$@"\n' \
+              > "$HOME/.local/bin/source-clone"
+            chmod +x "$HOME/.local/bin/source-clone"
             export PATH="$HOME/.local/bin:$PATH"
             echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           fi
 
           # Verify installation
-          gerrit-clone --version
+          source-clone --version
         fi
 
     - name: "Clone repositories"
@@ -571,9 +571,9 @@ runs:
           fi
         fi
 
-        # Build gerrit-clone command as a bash array
+        # Build source-clone command as a bash array
         # (avoids eval and quoting/injection issues)
-        cmd=(gerrit-clone clone)
+        cmd=(source-clone clone)
         cmd+=(--host "${INPUT_HOST}")
 
         # GitHub source options
@@ -843,7 +843,7 @@ runs:
           echo "success-rate=$rate" >> "$GITHUB_OUTPUT"
 
           # Add to job summary
-          echo "## Gerrit Clone Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Source Clone Results" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Total:** $total_count" >> \
             "$GITHUB_STEP_SUMMARY"
           echo "- **Succeeded:** $success_count" >> \
